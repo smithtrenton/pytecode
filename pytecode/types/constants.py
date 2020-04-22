@@ -2,7 +2,6 @@ from enum import Enum, IntFlag
 
 from . import attributes, constant_pool
 
-
 MAGIC = 0xCAFEBABE
 
 
