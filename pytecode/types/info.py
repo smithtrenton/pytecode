@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List
 
-from . import attributes, constants, constant_pool
+from . import attributes, constant_pool, constants
 
 
 @dataclass
@@ -23,7 +23,7 @@ class MethodInfo:
 
 
 @dataclass
-class ClassInfo:
+class ClassFile:
     magic: int
     minor_version: int
     major_version: int

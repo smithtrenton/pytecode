@@ -14,7 +14,7 @@ class AttributeInfo:
 @dataclass
 class UnimplementedAttr(AttributeInfo):
     info: bytes
-    attr_type: 'AttributeInfoType'
+    attr_type: "AttributeInfoType"
 
 
 @dataclass
@@ -156,13 +156,13 @@ class EnumConstantInfo:
 @dataclass
 class ArrayValueInfo:
     num_values: int
-    values: List['ElementValueInfo']
+    values: List["ElementValueInfo"]
 
 
 @dataclass
 class ElementValueInfo:
     tag: int
-    value: Union[int, EnumConstantInfo, 'AnnotationInfo', ArrayValueInfo]
+    value: Union[int, EnumConstantInfo, "AnnotationInfo", ArrayValueInfo]
 
 
 @dataclass
@@ -337,34 +337,52 @@ class NestMembersAttr(AttributeInfo):
 
 
 class AttributeInfoType(Enum):
-    CONSTANT_VALUE = 'ConstantValue', ConstantValueAttr
-    CODE = 'Code', CodeAttr
-    STACK_MAP_TABLE = 'StackMapTable', StackMapTableAttr
-    EXCEPTIONS = 'Exceptions', ExceptionsAttr
-    INNER_CLASSES = 'InnerClasses', InnerClassesAttr
-    ENCLOSING_METHOD = 'EnclosingMethod', EnclosingMethodAttr
-    SYNTHETIC = 'Synthetic', SyntheticAttr
-    SIGNATURE = 'Signature', SignatureAttr
-    SOURCE_FILE = 'SourceFile', SourceFileAttr
-    SOURCE_DEBUG_EXTENSION = 'SourceDebugExtension', SourceDebugExtensionAttr
-    LINE_NUMBER_TABLE = 'LineNumberTable', LineNumberTableAttr
-    LOCAL_VARIABLE_TABLE = 'LocalVariableTable', LocalVariableTableAttr
-    LOCAL_VARIABLE_TYPE_TABLE = 'LocalVariableTypeTable', LocalVariableTypeTableAttr
-    DEPRECATED = 'Deprecated', DeprecatedAttr
-    RUNTIME_VISIBLE_ANNOTATIONS = 'RuntimeVisibleAnnotations', RuntimeVisibleAnnotationsAttr
-    RUNTIME_INVISIBLE_ANNOTATIONS = 'RuntimeInvisibleAnnotations', RuntimeInvisibleAnnotationsAttr
-    RUNTIME_VISIBLE_PARAMETER_ANNOTATIONS = 'RuntimeVisibleParameterAnnotations', RuntimeVisibleParameterAnnotationsAttr
-    RUNTIME_INVISIBLE_PARAMETER_ANNOTATIONS = 'RuntimeInvisbleParameterAnnotations', RuntimeInvisbleParameterAnnotationsAttr
-    RUNTIME_VISIBLE_TYPE_ANNOTATIONS = 'RuntimeVisibleTypeAnnotations', RuntimeVisibleTypeAnnotationsAttr
-    RUNTIME_INVISIBLE_TYPE_ANNOTATIONS = 'RuntimeInvisibleTypeAnnotations', RuntimeInvisibleTypeAnnotationsAttr
-    ANNOTATION_DEFAULT = 'AnnotationDefault', AnnotationDefaultAttr
-    BOOTSTRAP_METHODS = 'BootstrapMethods', BootstrapMethodsAttr
-    METHOD_PARAMETERS = 'MethodParameters', MethodParametersAttr
-    MODULE = 'Module', ModuleAttr
-    MODULE_PACKAGES = 'ModulePackages', ModulePackagesAttr
-    MODULE_MAIN_CLASS = 'ModuleMainClass', ModuleMainClassAttr
-    NEST_HOST = 'NestHost', NestHostAttr
-    NEST_MEMBERS = 'NestMembers', NestMembersAttr
+    CONSTANT_VALUE = "ConstantValue", ConstantValueAttr
+    CODE = "Code", CodeAttr
+    STACK_MAP_TABLE = "StackMapTable", StackMapTableAttr
+    EXCEPTIONS = "Exceptions", ExceptionsAttr
+    INNER_CLASSES = "InnerClasses", InnerClassesAttr
+    ENCLOSING_METHOD = "EnclosingMethod", EnclosingMethodAttr
+    SYNTHETIC = "Synthetic", SyntheticAttr
+    SIGNATURE = "Signature", SignatureAttr
+    SOURCE_FILE = "SourceFile", SourceFileAttr
+    SOURCE_DEBUG_EXTENSION = "SourceDebugExtension", SourceDebugExtensionAttr
+    LINE_NUMBER_TABLE = "LineNumberTable", LineNumberTableAttr
+    LOCAL_VARIABLE_TABLE = "LocalVariableTable", LocalVariableTableAttr
+    LOCAL_VARIABLE_TYPE_TABLE = "LocalVariableTypeTable", LocalVariableTypeTableAttr
+    DEPRECATED = "Deprecated", DeprecatedAttr
+    RUNTIME_VISIBLE_ANNOTATIONS = (
+        "RuntimeVisibleAnnotations",
+        RuntimeVisibleAnnotationsAttr,
+    )
+    RUNTIME_INVISIBLE_ANNOTATIONS = (
+        "RuntimeInvisibleAnnotations",
+        RuntimeInvisibleAnnotationsAttr,
+    )
+    RUNTIME_VISIBLE_PARAMETER_ANNOTATIONS = (
+        "RuntimeVisibleParameterAnnotations",
+        RuntimeVisibleParameterAnnotationsAttr,
+    )
+    RUNTIME_INVISIBLE_PARAMETER_ANNOTATIONS = (
+        "RuntimeInvisbleParameterAnnotations",
+        RuntimeInvisbleParameterAnnotationsAttr,
+    )
+    RUNTIME_VISIBLE_TYPE_ANNOTATIONS = (
+        "RuntimeVisibleTypeAnnotations",
+        RuntimeVisibleTypeAnnotationsAttr,
+    )
+    RUNTIME_INVISIBLE_TYPE_ANNOTATIONS = (
+        "RuntimeInvisibleTypeAnnotations",
+        RuntimeInvisibleTypeAnnotationsAttr,
+    )
+    ANNOTATION_DEFAULT = "AnnotationDefault", AnnotationDefaultAttr
+    BOOTSTRAP_METHODS = "BootstrapMethods", BootstrapMethodsAttr
+    METHOD_PARAMETERS = "MethodParameters", MethodParametersAttr
+    MODULE = "Module", ModuleAttr
+    MODULE_PACKAGES = "ModulePackages", ModulePackagesAttr
+    MODULE_MAIN_CLASS = "ModuleMainClass", ModuleMainClassAttr
+    NEST_HOST = "NestHost", NestHostAttr
+    NEST_MEMBERS = "NestMembers", NestMembersAttr
 
     def __new__(cls, name, attr_class):
         obj = object.__new__(cls)

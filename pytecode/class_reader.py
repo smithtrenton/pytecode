@@ -1,23 +1,23 @@
 from functools import partial
 from struct import unpack_from
 
-from .types import attributes, constants, constant_pool, info
+from .types import attributes, constant_pool, constants, info
 
 
 def _read_u4(_bytes, offset=0):
-    return unpack_from('>I', _bytes, offset)[0]
+    return unpack_from(">I", _bytes, offset)[0]
 
 
 def _read_u2(_bytes, offset=0):
-    return unpack_from('>H', _bytes, offset)[0]
+    return unpack_from(">H", _bytes, offset)[0]
 
 
 def _read_u1(_bytes, offset=0):
-    return unpack_from('>B', _bytes, offset)[0]
+    return unpack_from(">B", _bytes, offset)[0]
 
 
 def _read_bytes(_bytes, length, offset=0):
-    return unpack_from('>%ds' % length, _bytes, offset)[0]
+    return unpack_from(">%ds" % length, _bytes, offset)[0]
 
 
 class MalformedClassException(Exception):
@@ -34,7 +34,7 @@ class ClassReader:
 
     @classmethod
     def from_file(cls, path):
-        with open(path, 'rb') as f:
+        with open(path, "rb") as f:
             file_bytes = f.read()
         return cls(path, file_bytes)
 
@@ -63,24 +63,26 @@ class ClassReader:
         cp_type = constant_pool.ConstantPoolInfoType(tag)
         cp_class = partial(cp_type.cp_class, index, offset, tag)
 
-        if cp_type in (constant_pool.ConstantPoolInfoType.CLASS,
-                       constant_pool.ConstantPoolInfoType.STRING,
-                       constant_pool.ConstantPoolInfoType.METHOD_TYPE,
-                       constant_pool.ConstantPoolInfoType.MODULE,
-                       constant_pool.ConstantPoolInfoType.PACKAGE):
+        if cp_type in (
+            constant_pool.ConstantPoolInfoType.CLASS,
+            constant_pool.ConstantPoolInfoType.STRING,
+            constant_pool.ConstantPoolInfoType.METHOD_TYPE,
+            constant_pool.ConstantPoolInfoType.MODULE,
+            constant_pool.ConstantPoolInfoType.PACKAGE,
+        ):
             cp_info = cp_class(self._read_u2())
-        elif cp_type in (constant_pool.ConstantPoolInfoType.FIELD_REF,
-                         constant_pool.ConstantPoolInfoType.METHOD_REF,
-                         constant_pool.ConstantPoolInfoType.INTERFACE_METHOD_REF,
-                         constant_pool.ConstantPoolInfoType.NAME_AND_TYPE,
-                         constant_pool.ConstantPoolInfoType.DYNAMIC,
-                         constant_pool.ConstantPoolInfoType.INVOKE_DYNAMIC):
+        elif cp_type in (
+            constant_pool.ConstantPoolInfoType.FIELD_REF,
+            constant_pool.ConstantPoolInfoType.METHOD_REF,
+            constant_pool.ConstantPoolInfoType.INTERFACE_METHOD_REF,
+            constant_pool.ConstantPoolInfoType.NAME_AND_TYPE,
+            constant_pool.ConstantPoolInfoType.DYNAMIC,
+            constant_pool.ConstantPoolInfoType.INVOKE_DYNAMIC,
+        ):
             cp_info = cp_class(self._read_u2(), self._read_u2())
-        elif cp_type in (constant_pool.ConstantPoolInfoType.INTEGER,
-                         constant_pool.ConstantPoolInfoType.FLOAT):
+        elif cp_type in (constant_pool.ConstantPoolInfoType.INTEGER, constant_pool.ConstantPoolInfoType.FLOAT,):
             cp_info = cp_class(self._read_u4())
-        elif cp_type in (constant_pool.ConstantPoolInfoType.LONG,
-                         constant_pool.ConstantPoolInfoType.DOUBLE):
+        elif cp_type in (constant_pool.ConstantPoolInfoType.LONG, constant_pool.ConstantPoolInfoType.DOUBLE,):
             cp_info = cp_class(self._read_u4(), self._read_u4())
             index_extra = 1
         elif cp_type is constant_pool.ConstantPoolInfoType.UTF8:
@@ -90,7 +92,7 @@ class ClassReader:
         elif cp_type is constant_pool.ConstantPoolInfoType.METHOD_HANDLE:
             cp_info = cp_class(self._read_u1(), self._read_u2())
         else:
-            raise ValueError('Unknown ConstantPoolInfoType: %s' % cp_type)
+            raise ValueError("Unknown ConstantPoolInfoType: %s" % cp_type)
         return cp_info, index_extra
 
     def _read_attribute(self):
@@ -98,17 +100,19 @@ class ClassReader:
 
         name_cp = self.constant_pool[name_index]
         if not isinstance(name_cp, constant_pool.Utf8Info):
-            raise ValueError('name_index(%d) should be Utf8Info, not %s' % (name_index, type(name_cp)))
+            raise ValueError("name_index(%d) should be Utf8Info, not %s" % (name_index, type(name_cp)))
 
-        name = name_cp.str_bytes.decode('utf8')
+        name = name_cp.str_bytes.decode("utf8")
         attr_type = attributes.AttributeInfoType(name)
         attr_class = partial(attr_type.attr_class, name_index, length)
 
-        if attr_type in (attributes.AttributeInfoType.CONSTANT_VALUE,
-                         attributes.AttributeInfoType.SIGNATURE,
-                         attributes.AttributeInfoType.SOURCE_FILE,
-                         attributes.AttributeInfoType.MODULE_MAIN_CLASS,
-                         attributes.AttributeInfoType.NEST_HOST):
+        if attr_type in (
+            attributes.AttributeInfoType.CONSTANT_VALUE,
+            attributes.AttributeInfoType.SIGNATURE,
+            attributes.AttributeInfoType.SOURCE_FILE,
+            attributes.AttributeInfoType.MODULE_MAIN_CLASS,
+            attributes.AttributeInfoType.NEST_HOST,
+        ):
             return attr_class(self._read_u2())
 
         elif attr_type is attributes.AttributeInfoType.CODE:
@@ -118,12 +122,23 @@ class ClassReader:
             exception_table_length = self._read_u2()
             exception_table = []
             for _ in range(exception_table_length):
-                exception_table.append(attributes.ExceptionInfo(self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2()))
+                exception_table.append(
+                    attributes.ExceptionInfo(self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(),)
+                )
             attributes_count = self._read_u2()
             attributes_list = []
             for _ in range(attributes_count):
                 attributes_list.append(self._read_attribute())
-            return attr_class(max_stack, max_locals, code_length, code, exception_table_length, exception_table, attributes_count, attributes_list)
+            return attr_class(
+                max_stack,
+                max_locals,
+                code_length,
+                code,
+                exception_table_length,
+                exception_table,
+                attributes_count,
+                attributes_list,
+            )
 
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
             number_of_exceptions = self._read_u2()
@@ -136,14 +151,20 @@ class ClassReader:
             number_of_classes = self._read_u2()
             classes = []
             for _ in range(number_of_classes):
-                classes.append(attributes.InnerClassInfo(self._read_u2(), self._read_u2(), self._read_u2(), constants.NestedClassAccessFlag(self._read_u2())))
+                classes.append(
+                    attributes.InnerClassInfo(
+                        self._read_u2(),
+                        self._read_u2(),
+                        self._read_u2(),
+                        constants.NestedClassAccessFlag(self._read_u2()),
+                    )
+                )
             return attr_class(number_of_classes, classes)
 
         elif attr_type is attributes.AttributeInfoType.ENCLOSING_METHOD:
             return attr_class(self._read_u2(), self._read_u2())
 
-        elif attr_type in (attributes.AttributeInfoType.SYNTHETIC,
-                           attributes.AttributeInfoType.DEPRECATED):
+        elif attr_type in (attributes.AttributeInfoType.SYNTHETIC, attributes.AttributeInfoType.DEPRECATED,):
             return attr_class()
 
         elif attr_type is attributes.AttributeInfoType.SOURCE_DEBUG_EXTENSION:
@@ -160,14 +181,22 @@ class ClassReader:
             local_variable_table_length = self._read_u2()
             local_variable_table = []
             for _ in range(local_variable_table_length):
-                local_variable_table.append(attributes.LocalVariableInfo(self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2()))
+                local_variable_table.append(
+                    attributes.LocalVariableInfo(
+                        self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(),
+                    )
+                )
             return attr_class(local_variable_table_length, local_variable_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TYPE_TABLE:
             local_variable_type_table_length = self._read_u2()
             local_variable_type_table = []
             for _ in range(local_variable_type_table_length):
-                local_variable_type_table.append(attributes.LocalVariableTypeInfo(self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2()))
+                local_variable_type_table.append(
+                    attributes.LocalVariableTypeInfo(
+                        self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(), self._read_u2(),
+                    )
+                )
             return attr_class(local_variable_type_table_length, local_variable_type_table)
 
         elif attr_type is attributes.AttributeInfoType.BOOTSTRAP_METHODS:
@@ -179,14 +208,18 @@ class ClassReader:
                 bootstrap_arguments = []
                 for __ in range(num_bootstrap_arguments):
                     bootstrap_arguments.append(self._read_u2())
-                bootstrap_methods.append(attributes.BootstrapMethod(bootstrap_method_ref, num_bootstrap_arguments, bootstrap_arguments))
+                bootstrap_methods.append(
+                    attributes.BootstrapMethod(bootstrap_method_ref, num_bootstrap_arguments, bootstrap_arguments,)
+                )
             return attr_class(num_bootstrap_methods, bootstrap_methods)
 
         elif attr_type is attributes.AttributeInfoType.METHOD_PARAMETERS:
             parameters_count = self._read_u1()
             parameters = []
             for _ in range(parameters_count):
-                parameters.append(attributes.MethodParameter(self._read_u2(), constants.MethodParameterAccessFlag(self._read_u2())))
+                parameters.append(
+                    attributes.MethodParameter(self._read_u2(), constants.MethodParameterAccessFlag(self._read_u2()),)
+                )
             return attr_class(parameters_count, parameters)
 
         elif attr_type is attributes.AttributeInfoType.MODULE:
@@ -197,7 +230,11 @@ class ClassReader:
             requires_count = self._read_u2()
             requires = []
             for _ in range(requires_count):
-                requires.append(attributes.RequiresInfo(self._read_u2(), constants.ModuleRequiresAccessFlag(self._read_u2()), self._read_u2()))
+                requires.append(
+                    attributes.RequiresInfo(
+                        self._read_u2(), constants.ModuleRequiresAccessFlag(self._read_u2()), self._read_u2(),
+                    )
+                )
 
             exports_count = self._read_u2()
             exports = []
@@ -236,8 +273,21 @@ class ClassReader:
                     provides_with_index.append(self._read_u2())
                 provides.appends(attributes.ProvidesInfo(provides_index, provides_with_count, provides))
 
-            return attr_class(module_name_index, module_flags, module_version_index, requires_count, requires,
-                              exports_count, exports, opens_count, opens, uses_count, uses, provides_count, provides)
+            return attr_class(
+                module_name_index,
+                module_flags,
+                module_version_index,
+                requires_count,
+                requires,
+                exports_count,
+                exports,
+                opens_count,
+                opens,
+                uses_count,
+                uses,
+                provides_count,
+                provides,
+            )
 
         elif attr_type is attributes.AttributeInfoType.MODULE_PACKAGES:
             package_count = self._read_u2()
@@ -279,11 +329,11 @@ class ClassReader:
         self.offset = 0
         magic = self._read_u4()
         if magic != constants.MAGIC:
-            raise MalformedClassException('Invalid magic number %d' % magic)
+            raise MalformedClassException("Invalid magic number %d" % magic)
 
         minor, major = self._read_u2(), self._read_u2()
         if major >= 56 and minor not in (0, 65535):
-            raise MalformedClassException('Invalid version %d/%d' % (major, minor))
+            raise MalformedClassException("Invalid version %d/%d" % (major, minor))
 
         cp_count = self._read_u2()
 
@@ -291,7 +341,7 @@ class ClassReader:
         while index < cp_count:
             cp_info, index_extra = self._read_constant_pool_index(index)
             self.constant_pool[index] = cp_info
-            index += (1 + index_extra)
+            index += 1 + index_extra
 
         access_flags = constants.ClassAccessFlag(self._read_u2())
         this_class = self._read_u2()
@@ -317,6 +367,21 @@ class ClassReader:
         for i in range(attributes_count):
             attributes.append(self._read_attribute())
 
-        self.class_info = info.ClassInfo(magic, minor, major, cp_count, self.constant_pool, access_flags, this_class, super_class,
-                              interfaces_count, interfaces, fields_count, fields, methods_count, methods,
-                              attributes_count, attributes)
+        self.class_info = info.ClassFile(
+            magic,
+            minor,
+            major,
+            cp_count,
+            self.constant_pool,
+            access_flags,
+            this_class,
+            super_class,
+            interfaces_count,
+            interfaces,
+            fields_count,
+            fields,
+            methods_count,
+            methods,
+            attributes_count,
+            attributes,
+        )
