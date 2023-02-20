@@ -7,7 +7,7 @@ from .utils import BytesReader
 class MalformedClassException(Exception):
     pass
 
-
+# TODO: Rework the reader to use dataclass annotations for byte reading instead of manual
 class ClassReader(BytesReader):
     def __init__(self, file_name, _bytes):
         super().__init__(_bytes)

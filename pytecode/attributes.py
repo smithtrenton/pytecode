@@ -208,17 +208,87 @@ class RuntimeInvisbleParameterAnnotationsAttr(AttributeInfo):
     parameter_annotations: List[ParameterAnnotation]
 
 
-# TODO: Finish this
 @dataclass
-class TypePath:
+class TargetInfo:
     pass
 
 
-# TODO: Finish this
+@dataclass
+class TypeParameterTarget(TargetInfo):
+    type_parameter_index: int
+
+
+@dataclass
+class SupertypeTarget(TargetInfo):
+    supertype_index: int
+
+
+@dataclass
+class TypeParameterBoundTarget(TargetInfo):
+    type_parameter_index: int
+    bound_index: int
+
+
+@dataclass
+class EmptyTarget(TargetInfo):
+    pass
+
+
+@dataclass
+class FormalParameterTarget(TargetInfo):
+    formal_parameter_index: int
+
+
+@dataclass
+class ThrowsTarget(TargetInfo):
+    throws_type_index: int
+
+
+@dataclass
+class TableInfo:
+    start_pc: int
+    length: int
+    index: int
+
+
+@dataclass
+class Localvar_Target(TargetInfo):
+    table_length: int
+    table: List[TableInfo]
+
+
+@dataclass
+class CatchTarget(TargetInfo):
+    exception_table_index: int
+
+
+@dataclass
+class OffsetTarget(TargetInfo):
+    offset: int
+
+
+@dataclass
+class TypeArgumentTarget(TargetInfo):
+    offset: int
+    type_argument_index: int
+
+
+@dataclass
+class PathInfo:
+    type_path_kind: constants.TypePathKind
+    type_argument_index: int
+
+
+@dataclass
+class TypePath:
+    path_length: int
+    path: List[PathInfo]
+
+
 @dataclass
 class TypeAnnotation:
-    target_type: int
-    target_info: Any  # https://docs.oracle.com/javase/specs/jvms/se14/html/jvms-4.html#jvms-4.7.20.1
+    target_type: constants.TargetType
+    target_info: TargetInfo
     target_path: TypePath
     type_index: int
     num_element_value_pairs: int
@@ -226,15 +296,18 @@ class TypeAnnotation:
 
 
 @dataclass
-class RuntimeVisibleTypeAnnotationsAttr(AttributeInfo):
+class TypeAnnotationsAttr(AttributeInfo):
     num_annotations: int
     annotations: List[TypeAnnotation]
 
 
 @dataclass
-class RuntimeInvisibleTypeAnnotationsAttr(AttributeInfo):
-    num_annotations: int
-    annotations: List[TypeAnnotation]
+class RuntimeVisibleTypeAnnotationsAttr(TypeAnnotationsAttr):
+    pass
+
+@dataclass
+class RuntimeInvisibleTypeAnnotationsAttr(TypeAnnotationsAttr):
+    pass
 
 
 @dataclass

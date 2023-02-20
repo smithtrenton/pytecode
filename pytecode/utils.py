@@ -44,7 +44,7 @@ class Bytes(BytesType):
         self.size = size
 
     def read_from_bytes(self, _bytes, offset):
-        return _read_bytes(_bytes, self.size, offset=offset), size
+        return _read_bytes(_bytes, self.size, offset=offset), self.size
 
 
 class BytesReader:
@@ -52,11 +52,11 @@ class BytesReader:
         self.bytes = _bytes
         self.offset = offset
 
-    def rewind(self, length=None):
-        if length is None:
+    def rewind(self, distance=None):
+        if distance is None:
             self.offset = 0
         else:
-            self.offset = max(self.offset - length, 0)
+            self.offset = max(self.offset - distance, 0)
 
     def read_u1(self):
         res = _read_u1(self.bytes, self.offset)
@@ -73,7 +73,7 @@ class BytesReader:
         self.offset += 4
         return res
 
-    def read_bytes(self, length):
-        res = _read_bytes(self.bytes, length, self.offset)
-        self.offset += length
+    def read_bytes(self, size):
+        res = _read_bytes(self.bytes, size, self.offset)
+        self.offset += size
         return res
