@@ -136,8 +136,19 @@ class TargetInfoType(Enum):
     OFFSET = (TargetType.TYPE_INSTANCEOF, TargetType.TYPE_NEW, TargetType.TYPE_METHOD_NEW, TargetType.TYPE_METHOD_IDENTIFIER)
     TYPE_ARGUMENT = (TargetType.TYPE_CAST, TargetType.TYPE_GENERIC_CONSTRUCTOR, TargetType.TYPE_GENERIC_METHOD, TargetType.TYPE_GENERIC_CONSTRUCTOR_NEW, TargetType.TYPE_GENERIC_METHOD_IDENTIFIER)
 
-class TypePathKind(Enum):
+class TypePathKind(IntEnum):
     ARRAY_TYPE = 0
     NESTED_TYPE = 1
     WILDCARD_TYPE = 2
     PARAMETERIZED_TYPE = 3
+
+class VerificationType(IntEnum):
+    TOP = 0
+    INTEGER = 1
+    FLOAT = 2
+    DOUBLE = 3
+    LONG = 4
+    NULL = 5
+    UNINITIALIZED_THIS = 6
+    OBJECT = 7
+    UNINITIALIZED = 8

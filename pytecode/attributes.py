@@ -44,53 +44,51 @@ class CodeAttr(AttributeInfo):
 
 @dataclass
 class VerificationTypeInfo:
-    tag: int
+    tag: constants.VerificationType
 
 
 @dataclass
 class TopVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class IntegerVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class FloatVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class DoubleVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class LongVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class NullVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class UninitializedThisVariableInfo(VerificationTypeInfo):
-    tag: int
+    pass
 
 
 @dataclass
 class ObjectVariableInfo(VerificationTypeInfo):
-    tag: int
     cpool_index: int
 
 
 @dataclass
 class UninitializedVariableInfo(VerificationTypeInfo):
-    tag: int
     offset: int
 
 
@@ -578,6 +576,8 @@ class AttributeInfoType(Enum):
     MODULE_MAIN_CLASS = "ModuleMainClass", ModuleMainClassAttr
     NEST_HOST = "NestHost", NestHostAttr
     NEST_MEMBERS = "NestMembers", NestMembersAttr
+    RECORD = "Record", RecordAttr
+    PERMITTED_SUBCLASSES = "PermittedSubclasses", PermittedSubclassesAttr
 
     def __new__(cls, name, attr_class):
         obj = object.__new__(cls)
