@@ -103,6 +103,12 @@ class ClassReader(BytesReader):
                 attributes_list,
             )
 
+        elif attr_type is attributes.AttributeInfoType.STACK_MAP_TABLE:
+            number_of_entries = self.read_u2()
+            entries = []
+            for _ in range(number_of_entries):
+                entries.append()
+
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
             number_of_exceptions = self.read_u2()
             exception_index_table = []
@@ -128,7 +134,7 @@ class ClassReader(BytesReader):
             return attr_class()
 
         elif attr_type is attributes.AttributeInfoType.SOURCE_DEBUG_EXTENSION:
-            return attr_class(self.read_bytes(length))
+            return attr_class(self.read_bytes(length).decode('utf-8'))
 
         elif attr_type is attributes.AttributeInfoType.LINE_NUMBER_TABLE:
             line_number_table_length = self.read_u2()

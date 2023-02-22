@@ -42,10 +42,102 @@ class CodeAttr(AttributeInfo):
     attributes: List[AttributeInfo]
 
 
-# TODO: Finish this
+@dataclass
+class VerificationTypeInfo:
+    tag: int
+
+
+@dataclass
+class TopVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class IntegerVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class FloatVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class DoubleVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class LongVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class NullVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class UninitializedThisVariableInfo(VerificationTypeInfo):
+    tag: int
+
+
+@dataclass
+class ObjectVariableInfo(VerificationTypeInfo):
+    tag: int
+    cpool_index: int
+
+
+@dataclass
+class UninitializedVariableInfo(VerificationTypeInfo):
+    tag: int
+    offset: int
+
+
 @dataclass
 class StackMapFrameInfo:
+    frame_type: int
+
+
+@dataclass
+class SameFrameInfo(StackMapFrameInfo):
     pass
+
+
+@dataclass
+class SameLocals1StackItemFrameInfo(StackMapFrameInfo):
+    stack: VerificationTypeInfo
+
+
+@dataclass
+class SameLocals1StackItemFrameExtendedInfo(StackMapFrameInfo):
+    offset_delta: int
+    stack: VerificationTypeInfo
+
+
+@dataclass
+class ChopFrameInfo(StackMapFrameInfo):
+    offset_delta: int
+
+
+@dataclass
+class SameFrameExtendedInfo(StackMapFrameInfo):
+    offset_delta: int
+
+
+@dataclass
+class AppendFrameInfo(StackMapFrameInfo):
+    offset_delta: int
+    locals: List[VerificationTypeInfo]
+
+
+@dataclass
+class FullFrameInfo(StackMapFrameInfo):
+    offset_delta: int
+    number_of_locals: int
+    locals: List[VerificationTypeInfo]
+    number_of_stack_items: int
+    stack: list[VerificationTypeInfo]
 
 
 @dataclass
@@ -97,7 +189,7 @@ class SourceFileAttr(AttributeInfo):
 
 @dataclass
 class SourceDebugExtensionAttr(AttributeInfo):
-    debug_extension: bytes
+    debug_extension: str
 
 
 @dataclass
@@ -148,9 +240,19 @@ class DeprecatedAttr(AttributeInfo):
 
 
 @dataclass
-class EnumConstantInfo:
+class ConstValueInfo:
+    const_value_index: int
+
+
+@dataclass
+class EnumConstantValueInfo:
     type_name_index: int
     const_name_index: int
+
+
+@dataclass
+class ClassInfoValueInfo:
+    class_info_index: int
 
 
 @dataclass
@@ -162,7 +264,7 @@ class ArrayValueInfo:
 @dataclass
 class ElementValueInfo:
     tag: int
-    value: Union[int, EnumConstantInfo, "AnnotationInfo", ArrayValueInfo]
+    value: Union[ConstValueInfo, EnumConstantValueInfo, ClassInfoValueInfo, "AnnotationInfo", ArrayValueInfo]
 
 
 @dataclass
@@ -191,7 +293,7 @@ class RuntimeInvisibleAnnotationsAttr(AttributeInfo):
 
 
 @dataclass
-class ParameterAnnotation:
+class ParameterAnnotationInfo:
     num_annotations: int
     annotations: List[AnnotationInfo]
 
@@ -199,13 +301,13 @@ class ParameterAnnotation:
 @dataclass
 class RuntimeVisibleParameterAnnotationsAttr(AttributeInfo):
     num_parameters: int
-    parameter_annotations: List[ParameterAnnotation]
+    parameter_annotations: List[ParameterAnnotationInfo]
 
 
 @dataclass
 class RuntimeInvisbleParameterAnnotationsAttr(AttributeInfo):
     num_parameters: int
-    parameter_annotations: List[ParameterAnnotation]
+    parameter_annotations: List[ParameterAnnotationInfo]
 
 
 @dataclass
@@ -214,33 +316,33 @@ class TargetInfo:
 
 
 @dataclass
-class TypeParameterTarget(TargetInfo):
+class TypeParameterTargetInfo(TargetInfo):
     type_parameter_index: int
 
 
 @dataclass
-class SupertypeTarget(TargetInfo):
+class SupertypeTargetInfo(TargetInfo):
     supertype_index: int
 
 
 @dataclass
-class TypeParameterBoundTarget(TargetInfo):
+class TypeParameterBoundTargetInfo(TargetInfo):
     type_parameter_index: int
     bound_index: int
 
 
 @dataclass
-class EmptyTarget(TargetInfo):
+class EmptyTargetInfo(TargetInfo):
     pass
 
 
 @dataclass
-class FormalParameterTarget(TargetInfo):
+class FormalParameterTargetInfo(TargetInfo):
     formal_parameter_index: int
 
 
 @dataclass
-class ThrowsTarget(TargetInfo):
+class ThrowsTargetInfo(TargetInfo):
     throws_type_index: int
 
 
@@ -252,23 +354,23 @@ class TableInfo:
 
 
 @dataclass
-class Localvar_Target(TargetInfo):
+class LocalvarTargetInfo(TargetInfo):
     table_length: int
     table: List[TableInfo]
 
 
 @dataclass
-class CatchTarget(TargetInfo):
+class CatchTargetInfo(TargetInfo):
     exception_table_index: int
 
 
 @dataclass
-class OffsetTarget(TargetInfo):
+class OffsetTargetInfo(TargetInfo):
     offset: int
 
 
 @dataclass
-class TypeArgumentTarget(TargetInfo):
+class TypeArgumentTargetInfo(TargetInfo):
     offset: int
     type_argument_index: int
 
@@ -280,33 +382,33 @@ class PathInfo:
 
 
 @dataclass
-class TypePath:
+class TypePathInfo:
     path_length: int
     path: List[PathInfo]
 
 
 @dataclass
-class TypeAnnotation:
+class TypeAnnotationInfo:
     target_type: constants.TargetType
     target_info: TargetInfo
-    target_path: TypePath
+    target_path: TypePathInfo
     type_index: int
     num_element_value_pairs: int
     element_value_pairs: List[ElementValuePairInfo]
 
 
 @dataclass
-class TypeAnnotationsAttr(AttributeInfo):
+class RuntimeTypeAnnotationsAttr(AttributeInfo):
     num_annotations: int
-    annotations: List[TypeAnnotation]
+    annotations: List[TypeAnnotationInfo]
 
 
 @dataclass
-class RuntimeVisibleTypeAnnotationsAttr(TypeAnnotationsAttr):
+class RuntimeVisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):
     pass
 
 @dataclass
-class RuntimeInvisibleTypeAnnotationsAttr(TypeAnnotationsAttr):
+class RuntimeInvisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):
     pass
 
 
@@ -316,7 +418,7 @@ class AnnotationDefaultAttr(AttributeInfo):
 
 
 @dataclass
-class BootstrapMethod:
+class BootstrapMethodInfo:
     bootstrap_method_ref: int
     num_boostrap_arguments: int
     boostrap_arguments: List[int]
@@ -325,11 +427,11 @@ class BootstrapMethod:
 @dataclass
 class BootstrapMethodsAttr(AttributeInfo):
     num_bootstrap_methods: int
-    bootstrap_methods: List[BootstrapMethod]
+    bootstrap_methods: List[BootstrapMethodInfo]
 
 
 @dataclass
-class MethodParameter:
+class MethodParameterInfo:
     name_index: int
     access_flags: constants.MethodParameterAccessFlag
 
@@ -337,7 +439,7 @@ class MethodParameter:
 @dataclass
 class MethodParametersAttr(AttributeInfo):
     parameters_count: int
-    parameters: List[MethodParameter]
+    parameters: List[MethodParameterInfo]
 
 
 @dataclass
@@ -390,7 +492,7 @@ class ModuleAttr(AttributeInfo):
 @dataclass
 class ModulePackagesAttr(AttributeInfo):
     package_count: int
-    package_indices: List[int]
+    package_index: List[int]
 
 
 @dataclass
@@ -405,6 +507,26 @@ class NestHostAttr(AttributeInfo):
 
 @dataclass
 class NestMembersAttr(AttributeInfo):
+    number_of_classes: int
+    classes: List[int]
+
+
+@dataclass
+class RecordComponentInfo:
+    name_index: int
+    descriptor_index: int
+    attributes_count: int
+    attributes: List[AttributeInfo]
+
+
+@dataclass
+class RecordAttr(AttributeInfo):
+    components_count: int
+    components: List[RecordComponentInfo]
+
+
+@dataclass
+class PermittedSubclassesAttr(AttributeInfo):
     number_of_classes: int
     classes: List[int]
 
