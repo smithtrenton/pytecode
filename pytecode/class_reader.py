@@ -9,17 +9,20 @@ class MalformedClassException(Exception):
 
 # TODO: Rework the reader to use dataclass annotations for byte reading instead of manual
 class ClassReader(BytesReader):
-    def __init__(self, file_name, _bytes):
+    def __init__(self, _bytes):
         super().__init__(_bytes)
-        self.file_name = file_name
         self.constant_pool = None
         self.read_class()
 
     @classmethod
     def from_file(cls, path):
         with open(path, "rb") as f:
-            file_bytes = f.read()
-        return cls(path, file_bytes)
+            _bytes = f.read()
+        return cls(_bytes)
+
+    @classmethod
+    def from_bytes(cls, _bytes):
+        return cls(_bytes)
 
     def read_constant_pool_index(self, index):
         index_extra, offset, tag = 0, self.offset, self.read_u1()
@@ -81,7 +84,7 @@ class ClassReader(BytesReader):
                 return attributes.UninitializedVariableInfo(tag, self.read_u2())
 
     def read_element_value_info(self):
-        tag = self.read_u1().decode('ascii')
+        tag = self.read_u1().to_bytes(1, 'big').decode('ascii')
 
         match tag:
             case x if x in ('B', 'C', 'D' 'F', 'I', 'J', 'S', 'Z', 's'):
@@ -184,7 +187,7 @@ class ClassReader(BytesReader):
                 attributes_list,
             )
 
-        elif attr_type is attributes.AttributeInfoType.STACK_MAP_TABLE:
+        elif attr_type in (attributes.AttributeInfoType.STACK_MAP_TABLE,):
             number_of_entries = self.read_u2()
             entries = []
             for _ in range(number_of_entries):

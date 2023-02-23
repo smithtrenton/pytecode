@@ -533,6 +533,7 @@ class AttributeInfoType(Enum):
     CONSTANT_VALUE = "ConstantValue", ConstantValueAttr
     CODE = "Code", CodeAttr
     STACK_MAP_TABLE = "StackMapTable", StackMapTableAttr
+    STACK_MAP = "StackMap", StackMapTableAttr
     EXCEPTIONS = "Exceptions", ExceptionsAttr
     INNER_CLASSES = "InnerClasses", InnerClassesAttr
     ENCLOSING_METHOD = "EnclosingMethod", EnclosingMethodAttr
@@ -579,8 +580,16 @@ class AttributeInfoType(Enum):
     RECORD = "Record", RecordAttr
     PERMITTED_SUBCLASSES = "PermittedSubclasses", PermittedSubclassesAttr
 
+    UNIMPLEMENTED = "", UnimplementedAttr
+
     def __new__(cls, name, attr_class):
         obj = object.__new__(cls)
         obj._value_ = name
         obj.attr_class = attr_class
+        return obj
+
+    @classmethod
+    def _missing_(cls, value):
+        obj = cls.UNIMPLEMENTED
+        obj._value_ = value
         return obj
