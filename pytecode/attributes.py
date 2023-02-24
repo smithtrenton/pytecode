@@ -533,7 +533,6 @@ class AttributeInfoType(Enum):
     CONSTANT_VALUE = "ConstantValue", ConstantValueAttr
     CODE = "Code", CodeAttr
     STACK_MAP_TABLE = "StackMapTable", StackMapTableAttr
-    STACK_MAP = "StackMap", StackMapTableAttr
     EXCEPTIONS = "Exceptions", ExceptionsAttr
     INNER_CLASSES = "InnerClasses", InnerClassesAttr
     ENCLOSING_METHOD = "EnclosingMethod", EnclosingMethodAttr

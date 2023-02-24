@@ -374,7 +374,7 @@ class ClassReader(BytesReader):
             classes = [self.read_u2() for _ in range(number_of_classes)]
             return attr_class(number_of_classes, classes)
 
-        return attributes.UnimplementedAttr(name_index, length, self.read_bytes(length), attr_type)
+        return attr_class(self.read_bytes(length), attr_type)
 
     def read_field(self):
         access_flags = constants.FieldAccessFlag(self.read_u2())
