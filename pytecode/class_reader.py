@@ -1,7 +1,7 @@
 from functools import partial
 
 from . import attributes, constant_pool, constants, info
-from .utils import BytesReader
+from .bytes_utils import BytesReader
 
 
 class MalformedClassException(Exception):
