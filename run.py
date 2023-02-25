@@ -28,20 +28,20 @@ print(f'Parse time: {end - start}s')
 print(f'\tclasses: {len(classes)}')
 print(f'\tother_files: {len(other_files)}')
 
-start = time.time()
+# start = time.time()
 
-for c in classes:
-    fn = os.path.join(output_dir, c[0].filename) + '.output'
-    os.makedirs(os.path.dirname(fn), exist_ok=True)
-    with open(fn, 'w') as f:
-        pprint(c[1].class_info, f)
+# for c in classes:
+#     fn = os.path.join(output_dir, c[0].filename) + '.output'
+#     os.makedirs(os.path.dirname(fn), exist_ok=True)
+#     with open(fn, 'w') as f:
+#         pprint(c[1].class_info, f)
 
-for of in other_files:
-    fn = os.path.join(output_dir, of.filename)
-    os.makedirs(os.path.dirname(fn), exist_ok=True)
-    with open(fn, 'wb') as f:
-        f.write(of.bytes)
+# for of in other_files:
+#     fn = os.path.join(output_dir, of.filename)
+#     os.makedirs(os.path.dirname(fn), exist_ok=True)
+#     with open(fn, 'wb') as f:
+#         f.write(of.bytes)
 
-end = time.time()
-print(f'Write time: {end - start}s')
-print(f'\tdir: {output_dir}')
+# end = time.time()
+# print(f'Write time: {end - start}s')
+# print(f'\tdir: {output_dir}')

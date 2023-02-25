@@ -1,7 +1,8 @@
 from functools import partial
 
-from . import attributes, constant_pool, constants, info
+from . import attributes, constant_pool, constants, info, instructions
 from .bytes_utils import BytesReader
+
 
 
 class MalformedClassException(Exception):
@@ -9,20 +10,20 @@ class MalformedClassException(Exception):
 
 # TODO: Rework the reader to use dataclass annotations for byte reading instead of manual
 class ClassReader(BytesReader):
-    def __init__(self, _bytes):
-        super().__init__(_bytes)
+    def __init__(self, bytes_or_bytearray):
+        super().__init__(bytes_or_bytearray)
         self.constant_pool = None
         self.read_class()
 
     @classmethod
     def from_file(cls, path):
         with open(path, "rb") as f:
-            _bytes = f.read()
-        return cls(_bytes)
+            file_bytes = f.read()
+        return cls(file_bytes)
 
     @classmethod
-    def from_bytes(cls, _bytes):
-        return cls(_bytes)
+    def from_bytes(cls, bytes_or_bytearray):
+        return cls(bytes_or_bytearray)
 
     def read_constant_pool_index(self, index):
         index_extra, offset, tag = 0, self.offset, self.read_u1()
@@ -60,6 +61,80 @@ class ClassReader(BytesReader):
         else:
             raise ValueError("Unknown ConstantPoolInfoType: %s" % cp_type)
         return cp_info, index_extra
+
+    def read_align_bytes(self, current_offset):
+        align_bytes = (4 - current_offset % 4) % 4
+        return self.read_bytes(align_bytes)
+
+    def read_instruction(self, current_offset):
+        opcode = self.read_u1()
+        inst_type = instructions.InsnInfoType(opcode)
+        inst_info = partial(inst_type.instinfo, inst_type, current_offset)
+        if inst_type.instinfo is instructions.LocalIndex:
+            index = self.read_u1()
+            return inst_info(index)
+        elif inst_type.instinfo is instructions.ConstPoolIndex:
+            index = self.read_u2()
+            return inst_info(index)
+        elif inst_type.instinfo is instructions.ByteValue:
+            value = self.read_i1()
+            return inst_info(value)
+        elif inst_type.instinfo is instructions.ShortValue:
+            value = self.read_i2()
+            return inst_info(value)
+        elif inst_type.instinfo is instructions.Branch:
+            offset = self.read_i2()
+            return inst_info(offset)
+        elif inst_type.instinfo is instructions.BranchW:
+            offset = self.read_i4()
+            return inst_info(offset)
+        elif inst_type.instinfo is instructions.IInc:
+            index, value = self.read_u1(), self.read_i1()
+            return inst_info(index, value)
+        elif inst_type.instinfo is instructions.InvokeDynamic:
+            index, unused = self.read_u2(), self.read_bytes(2)
+            return inst_info(index, unused)
+        elif inst_type.instinfo is instructions.InvokeInterface:
+            index, count, unused = self.read_u2(), self.read_u1(), self.read_bytes(1)
+            return inst_info(index, count, unused)
+        elif inst_type.instinfo is instructions.MultiANewArray:
+            index, dimensions = self.read_u2(), self.read_u1()
+            return inst_info(index, dimensions)
+        elif inst_type.instinfo is instructions.NewArray:
+            atype = instructions.ArrayType(self.read_u1())
+            return inst_info(atype)
+        elif inst_type.instinfo is instructions.LookupSwitch:
+            self.read_align_bytes(current_offset + 1)
+            default, npairs = self.read_i4(), self.read_u4()
+            pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_u4()) for _ in range(npairs)]
+            return inst_info(default, npairs, pairs)
+        elif inst_type.instinfo is instructions.TableSwitch:
+            self.read_align_bytes(current_offset + 1)
+            default, low, high = self.read_i4(), self.read_i4(), self.read_i4()
+            offsets = [self.read_i4() for _ in range(high - low + 1)]
+            return inst_info(default, low, high, offsets)
+        elif inst_type is instructions.InsnInfoType.WIDE:
+            wide_opcode = self.read_u1()
+            wide_inst_type = instructions.InsnInfoType(opcode + wide_opcode)
+            wide_inst_info = partial(wide_inst_type.instinfo, wide_inst_type, current_offset)
+            if wide_inst_type.instinfo is instructions.LocalIndexW:
+                index = self.read_u2()
+                return wide_inst_info(index)
+            elif wide_inst_type.instinfo is instructions.IIncW:
+                index, value = self.read_u2(), self.read_i2()
+                return wide_inst_info(index, value)
+        elif inst_type.instinfo is instructions.InsnInfo:
+            return inst_info()
+
+        raise Exception(f'Invalid InstInfoType: {inst_type.name} {inst_type.instinfo}')
+
+    def read_code_bytes(self, length):
+        start_offset = self.offset
+        results = []
+        while (current_offset := self.offset - start_offset) < length:
+            insn = self.read_instruction(current_offset)
+            results.append(insn)
+        return results
 
     def read_verification_type_info(self):
         tag = self.read_u1()
@@ -171,7 +246,7 @@ class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.CODE:
             max_stack, max_locals = self.read_u2(), self.read_u2()
             code_length = self.read_u4()
-            code = self.read_bytes(code_length)
+            code = self.read_code_bytes(code_length)
             exception_table_length = self.read_u2()
             exception_table = [attributes.ExceptionInfo(self.read_u2(), self.read_u2(), self.read_u2(), self.read_u2()) for _ in range(exception_table_length)]
             attributes_count = self.read_u2()
@@ -396,7 +471,7 @@ class ClassReader(BytesReader):
         self.rewind()
         magic = self.read_u4()
         if magic != constants.MAGIC:
-            raise MalformedClassException("Invalid magic number %d" % magic)
+            raise MalformedClassException(f"Invalid magic number 0x{magic:x}, requires 0x{constants.MAGIC:x}")
 
         minor, major = self.read_u2(), self.read_u2()
         if major >= 56 and minor not in (0, 65535):

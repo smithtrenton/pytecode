@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List, Union
+from typing import List, Union
 
-from . import constants
+from . import constants, instructions
 
 
 @dataclass
@@ -35,7 +35,7 @@ class CodeAttr(AttributeInfo):
     max_stacks: int
     max_locals: int
     code_length: int
-    code: bytes
+    code: List[instructions.InsnInfo]
     exception_table_length: int
     exception_table: List[ExceptionInfo]
     attributes_count: int
