@@ -66,10 +66,10 @@ class ClassReader(BytesReader):
         align_bytes = (4 - current_offset % 4) % 4
         return self.read_bytes(align_bytes)
 
-    def read_instruction(self, current_offset):
+    def read_instruction(self, current_method_offset):
         opcode = self.read_u1()
         inst_type = instructions.InsnInfoType(opcode)
-        inst_info = partial(inst_type.instinfo, inst_type, current_offset)
+        inst_info = partial(inst_type.instinfo, inst_type, current_method_offset)
         if inst_type.instinfo is instructions.LocalIndex:
             index = self.read_u1()
             return inst_info(index)
@@ -104,19 +104,19 @@ class ClassReader(BytesReader):
             atype = instructions.ArrayType(self.read_u1())
             return inst_info(atype)
         elif inst_type.instinfo is instructions.LookupSwitch:
-            self.read_align_bytes(current_offset + 1)
+            self.read_align_bytes(current_method_offset + 1)
             default, npairs = self.read_i4(), self.read_u4()
             pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_u4()) for _ in range(npairs)]
             return inst_info(default, npairs, pairs)
         elif inst_type.instinfo is instructions.TableSwitch:
-            self.read_align_bytes(current_offset + 1)
+            self.read_align_bytes(current_method_offset + 1)
             default, low, high = self.read_i4(), self.read_i4(), self.read_i4()
             offsets = [self.read_i4() for _ in range(high - low + 1)]
             return inst_info(default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = self.read_u1()
             wide_inst_type = instructions.InsnInfoType(opcode + wide_opcode)
-            wide_inst_info = partial(wide_inst_type.instinfo, wide_inst_type, current_offset)
+            wide_inst_info = partial(wide_inst_type.instinfo, wide_inst_type, current_method_offset)
             if wide_inst_type.instinfo is instructions.LocalIndexW:
                 index = self.read_u2()
                 return wide_inst_info(index)
@@ -128,11 +128,11 @@ class ClassReader(BytesReader):
 
         raise Exception(f'Invalid InstInfoType: {inst_type.name} {inst_type.instinfo}')
 
-    def read_code_bytes(self, length):
-        start_offset = self.offset
+    def read_code_bytes(self, code_length):
+        start_method_offset = self.offset
         results = []
-        while (current_offset := self.offset - start_offset) < length:
-            insn = self.read_instruction(current_offset)
+        while (current_method_offset := self.offset - start_method_offset) < code_length:
+            insn = self.read_instruction(current_method_offset)
             results.append(insn)
         return results
 
