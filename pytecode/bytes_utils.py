@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from struct import unpack_from, Struct
-
+from struct import Struct, unpack_from
 
 BE_U1 = Struct(">B")
 BE_I1 = Struct(">b")

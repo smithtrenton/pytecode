@@ -1,3 +1,5 @@
 beautifulsoup4
+black
 IPython
+isort
 requests

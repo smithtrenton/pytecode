@@ -262,7 +262,13 @@ class ArrayValueInfo:
 @dataclass
 class ElementValueInfo:
     tag: int
-    value: Union[ConstValueInfo, EnumConstantValueInfo, ClassInfoValueInfo, "AnnotationInfo", ArrayValueInfo]
+    value: Union[
+        ConstValueInfo,
+        EnumConstantValueInfo,
+        ClassInfoValueInfo,
+        "AnnotationInfo",
+        ArrayValueInfo,
+    ]
 
 
 @dataclass
@@ -404,6 +410,7 @@ class RuntimeTypeAnnotationsAttr(AttributeInfo):
 @dataclass
 class RuntimeVisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):
     pass
+
 
 @dataclass
 class RuntimeInvisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):

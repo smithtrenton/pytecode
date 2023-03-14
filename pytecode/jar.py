@@ -18,18 +18,18 @@ class JarFile:
         self.read()
 
     def read(self):
-        with zipfile.ZipFile(self.filename, 'r') as jar:
+        with zipfile.ZipFile(self.filename, "r") as jar:
             self.infolist = jar.infolist()
             self.files = {}
             for info in self.infolist:
-                fn = os.path.join(*info.filename.split('/'))
+                fn = os.path.join(*info.filename.split("/"))
                 self.files[fn] = JarInfo(fn, info, jar.read(info.filename))
 
     def parse_classes(self):
         classes = []
         other_files = []
         for fn, jarInfo in self.files.items():
-            if fn.endswith('.class'):
+            if fn.endswith(".class"):
                 classes.append((jarInfo, ClassReader.from_bytes(jarInfo.bytes)))
             else:
                 other_files.append(jarInfo)
