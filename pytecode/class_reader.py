@@ -112,7 +112,10 @@ class ClassReader(BytesReader):
         elif inst_type.instinfo is instructions.LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, npairs = self.read_i4(), self.read_u4()
-            pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_u4()) for _ in range(npairs)]
+            pairs = [
+                instructions.MatchOffsetPair(self.read_i4(), self.read_u4())
+                for _ in range(npairs)
+            ]
             return inst_info(default, npairs, pairs)
         elif inst_type.instinfo is instructions.TableSwitch:
             self.read_align_bytes(current_method_offset + 1)
@@ -122,7 +125,9 @@ class ClassReader(BytesReader):
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = self.read_u1()
             wide_inst_type = instructions.InsnInfoType(opcode + wide_opcode)
-            wide_inst_info = partial(wide_inst_type.instinfo, wide_inst_type, current_method_offset)
+            wide_inst_info = partial(
+                wide_inst_type.instinfo, wide_inst_type, current_method_offset
+            )
             if wide_inst_type.instinfo is instructions.LocalIndexW:
                 index = self.read_u2()
                 return wide_inst_info(index)
@@ -137,7 +142,9 @@ class ClassReader(BytesReader):
     def read_code_bytes(self, code_length):
         start_method_offset = self.offset
         results = []
-        while (current_method_offset := self.offset - start_method_offset) < code_length:
+        while (
+            current_method_offset := self.offset - start_method_offset
+        ) < code_length:
             insn = self.read_instruction(current_method_offset)
             results.append(insn)
         return results
@@ -169,29 +176,39 @@ class ClassReader(BytesReader):
 
         match tag:
             case x if x in ("B", "C", "D" "F", "I", "J", "S", "Z", "s"):
-                return attributes.ElementValueInfo(tag, attributes.ConstValueInfo(self.read_u2()))
+                return attributes.ElementValueInfo(
+                    tag, attributes.ConstValueInfo(self.read_u2())
+                )
             case "e":
                 return attributes.ElementValueInfo(
                     tag,
                     attributes.EnumConstantValueInfo(self.read_u2(), self.read_u2()),
                 )
             case "c":
-                return attributes.ElementValueInfo(tag, attributes.ClassInfoValueInfo(self.read_u2()))
+                return attributes.ElementValueInfo(
+                    tag, attributes.ClassInfoValueInfo(self.read_u2())
+                )
             case "@":
                 return attributes.ElementValueInfo(tag, self.read_annotation_info())
             case "[":
                 num_values = self.read_u2()
                 values = [self.read_element_value_info() for _ in range(num_values)]
-                return attributes.ElementValueInfo(tag, attributes.ArrayValueInfo(num_values, values))
+                return attributes.ElementValueInfo(
+                    tag, attributes.ArrayValueInfo(num_values, values)
+                )
 
     def read_annotation_info(self):
         type_index = self.read_u2()
         num_element_value_pairs = self.read_u2()
         element_value_pairs = [
-            attributes.ElementValuePairInfo(self.read_u2(), self.read_element_value_info())
+            attributes.ElementValuePairInfo(
+                self.read_u2(), self.read_element_value_info()
+            )
             for _ in range(num_element_value_pairs)
         ]
-        return attributes.AnnotationInfo(type_index, num_element_value_pairs, element_value_pairs)
+        return attributes.AnnotationInfo(
+            type_index, num_element_value_pairs, element_value_pairs
+        )
 
     def read_target_info(self, target_type):
         match target_type:
@@ -200,7 +217,9 @@ class ClassReader(BytesReader):
             case x if x in constants.TargetInfoType.SUPERTYPE:
                 return attributes.SupertypeTargetInfo(self.read_u2())
             case x if x in constants.TargetInfoType.TYPE_PARAMETER_BOUND:
-                return attributes.TypeParameterBoundTargetInfo(self.read_u1(), self.read_u1())
+                return attributes.TypeParameterBoundTargetInfo(
+                    self.read_u1(), self.read_u1()
+                )
             case x if x in constants.TargetInfoType.EMPTY:
                 return attributes.EmptyTargetInfo()
             case x if x in constants.TargetInfoType.FORMAL_PARAMETER:
@@ -210,7 +229,8 @@ class ClassReader(BytesReader):
             case x if x in constants.TargetInfoType.LOCALVAR:
                 table_length = self.read_u2()
                 table = [
-                    attributes.TableInfo(self.read_u2(), self.read_u2(), self.read_u2()) for _ in range(table_length)
+                    attributes.TableInfo(self.read_u2(), self.read_u2(), self.read_u2())
+                    for _ in range(table_length)
                 ]
                 return attributes.LocalvarTargetInfo(table_length, table)
             case x if x in constants.TargetInfoType.CATCH:
@@ -222,7 +242,10 @@ class ClassReader(BytesReader):
 
     def read_target_path(self):
         path_length = self.read_u1()
-        path = [attributes.PathInfo(self.read_u1(), self.read_u1()) for _ in range(path_length)]
+        path = [
+            attributes.PathInfo(self.read_u1(), self.read_u1())
+            for _ in range(path_length)
+        ]
         return attributes.TypePathInfo(path_length, path)
 
     def read_type_annotation_info(self):
@@ -232,7 +255,9 @@ class ClassReader(BytesReader):
         type_index = self.read_u2()
         num_element_value_pairs = self.read_u2()
         element_value_pairs = [
-            attributes.ElementValuePairInfo(self.read_u2(), self.read_element_value_info())
+            attributes.ElementValuePairInfo(
+                self.read_u2(), self.read_element_value_info()
+            )
             for _ in range(num_element_value_pairs)
         ]
         return attributes.TypeAnnotationInfo(
@@ -249,7 +274,10 @@ class ClassReader(BytesReader):
 
         name_cp = self.constant_pool[name_index]
         if not isinstance(name_cp, constant_pool.Utf8Info):
-            raise ValueError("name_index(%d) should be Utf8Info, not %s" % (name_index, type(name_cp)))
+            raise ValueError(
+                "name_index(%d) should be Utf8Info, not %s"
+                % (name_index, type(name_cp))
+            )
 
         name = name_cp.str_bytes.decode("utf8")
         attr_type = attributes.AttributeInfoType(name)
@@ -276,7 +304,9 @@ class ClassReader(BytesReader):
             code = self.read_code_bytes(code_length)
             exception_table_length = self.read_u2()
             exception_table = [
-                attributes.ExceptionInfo(self.read_u2(), self.read_u2(), self.read_u2(), self.read_u2())
+                attributes.ExceptionInfo(
+                    self.read_u2(), self.read_u2(), self.read_u2(), self.read_u2()
+                )
                 for _ in range(exception_table_length)
             ]
             attributes_count = self.read_u2()
@@ -303,7 +333,9 @@ class ClassReader(BytesReader):
                         entries.append(attributes.SameFrameInfo(frame_type))
                     case x if x in range(64, 128):
                         entries.append(
-                            attributes.SameLocals1StackItemFrameInfo(frame_type, self.read_verification_type_info())
+                            attributes.SameLocals1StackItemFrameInfo(
+                                frame_type, self.read_verification_type_info()
+                            )
                         )
                     case 247:
                         entries.append(
@@ -314,19 +346,36 @@ class ClassReader(BytesReader):
                             )
                         )
                     case x if x in range(248, 251):
-                        entries.append(attributes.ChopFrameInfo(frame_type, self.read_u2()))
+                        entries.append(
+                            attributes.ChopFrameInfo(frame_type, self.read_u2())
+                        )
                     case 251:
-                        entries.append(attributes.SameFrameExtendedInfo(frame_type, self.read_u2()))
+                        entries.append(
+                            attributes.SameFrameExtendedInfo(frame_type, self.read_u2())
+                        )
                     case x if x in range(252, 255):
                         offset_delta = self.read_u2()
-                        verification_type_infos = [self.read_verification_type_info() for __ in range(frame_type - 251)]
-                        entries.append(attributes.AppendFrameInfo(frame_type, offset_delta, verification_type_infos))
+                        verification_type_infos = [
+                            self.read_verification_type_info()
+                            for __ in range(frame_type - 251)
+                        ]
+                        entries.append(
+                            attributes.AppendFrameInfo(
+                                frame_type, offset_delta, verification_type_infos
+                            )
+                        )
                     case 255:
                         offset_delta = self.read_u2()
                         number_of_locals = self.read_u2()
-                        locals = [self.read_verification_type_info() for __ in range(number_of_locals)]
+                        locals = [
+                            self.read_verification_type_info()
+                            for __ in range(number_of_locals)
+                        ]
                         number_of_stack_items = self.read_u2()
-                        stack = [self.read_verification_type_info() for __ in range(number_of_stack_items)]
+                        stack = [
+                            self.read_verification_type_info()
+                            for __ in range(number_of_stack_items)
+                        ]
                         entries.append(
                             attributes.FullFrameInfo(
                                 frame_type,
@@ -342,7 +391,9 @@ class ClassReader(BytesReader):
 
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
             number_of_exceptions = self.read_u2()
-            exception_index_table = [self.read_u2() for _ in range(number_of_exceptions)]
+            exception_index_table = [
+                self.read_u2() for _ in range(number_of_exceptions)
+            ]
             return attr_class(number_of_exceptions, exception_index_table)
 
         elif attr_type is attributes.AttributeInfoType.INNER_CLASSES:
@@ -367,7 +418,8 @@ class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.LINE_NUMBER_TABLE:
             line_number_table_length = self.read_u2()
             line_number_table = [
-                attributes.LineNumberInfo(self.read_u2(), self.read_u2()) for _ in range(line_number_table_length)
+                attributes.LineNumberInfo(self.read_u2(), self.read_u2())
+                for _ in range(line_number_table_length)
             ]
             return attr_class(line_number_table_length, line_number_table)
 
@@ -397,7 +449,9 @@ class ClassReader(BytesReader):
                 )
                 for _ in range(local_variable_type_table_length)
             ]
-            return attr_class(local_variable_type_table_length, local_variable_type_table)
+            return attr_class(
+                local_variable_type_table_length, local_variable_type_table
+            )
 
         elif attr_type in (
             attributes.AttributeInfoType.RUNTIME_VISIBLE_ANNOTATIONS,
@@ -415,8 +469,12 @@ class ClassReader(BytesReader):
             parameter_annotations = []
             for _ in range(num_parameters):
                 num_annotations = self.read_u2()
-                annotations = [self.read_annotation_info() for _ in range(num_annotations)]
-                parameter_annotations.append(attributes.ParameterAnnotationInfo(num_annotations, annotations))
+                annotations = [
+                    self.read_annotation_info() for _ in range(num_annotations)
+                ]
+                parameter_annotations.append(
+                    attributes.ParameterAnnotationInfo(num_annotations, annotations)
+                )
             return attr_class(num_annotations, annotations)
 
         elif attr_type in (
@@ -424,11 +482,15 @@ class ClassReader(BytesReader):
             attributes.AttributeInfoType.RUNTIME_INVISIBLE_TYPE_ANNOTATIONS,
         ):
             num_annotations = self.read_u2()
-            annotations = [self.read_type_annotation_info() for _ in range(num_annotations)]
+            annotations = [
+                self.read_type_annotation_info() for _ in range(num_annotations)
+            ]
             return attr_class(num_annotations, annotations)
 
         elif attr_type is attributes.AttributeInfoType.ANNOTATION_DEFAULT:
-            return attr_class(self.read_u2(), self.read_u4(), self.read_element_value_info())
+            return attr_class(
+                self.read_u2(), self.read_u4(), self.read_element_value_info()
+            )
 
         elif attr_type is attributes.AttributeInfoType.BOOTSTRAP_METHODS:
             num_bootstrap_methods = self.read_u2()
@@ -436,7 +498,9 @@ class ClassReader(BytesReader):
             for _ in range(num_bootstrap_methods):
                 bootstrap_method_ref = self.read_u2()
                 num_bootstrap_arguments = self.read_u2()
-                bootstrap_arguments = [self.read_u2() for __ in range(num_bootstrap_arguments)]
+                bootstrap_arguments = [
+                    self.read_u2() for __ in range(num_bootstrap_arguments)
+                ]
                 bootstrap_methods.append(
                     attributes.BootstrapMethodInfo(
                         bootstrap_method_ref,
@@ -449,7 +513,9 @@ class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.METHOD_PARAMETERS:
             parameters_count = self.read_u1()
             parameters = [
-                attributes.MethodParameterInfo(self.read_u2(), constants.MethodParameterAccessFlag(self.read_u2()))
+                attributes.MethodParameterInfo(
+                    self.read_u2(), constants.MethodParameterAccessFlag(self.read_u2())
+                )
                 for _ in range(parameters_count)
             ]
             return attr_class(parameters_count, parameters)
@@ -476,7 +542,11 @@ class ClassReader(BytesReader):
                 exports_flags = constants.ModuleExportsAccessFlag(self.read_u2())
                 exports_to_count = self.read_u2()
                 exports_to_index = [self.read_u2() for __ in range(exports_to_count)]
-                exports.append(attributes.ExportInfo(exports_index, exports_flags, exports_to_count, exports_to_index))
+                exports.append(
+                    attributes.ExportInfo(
+                        exports_index, exports_flags, exports_to_count, exports_to_index
+                    )
+                )
 
             opens_count = self.read_u2()
             opens = []
@@ -485,7 +555,11 @@ class ClassReader(BytesReader):
                 opens_flags = constants.ModuleOpensAccessFlag(self.read_u2())
                 opens_to_count = self.read_u2()
                 opens_to_index = [self.read_u2() for __ in range(opens_to_count)]
-                opens.append(attributes.OpensInfo(opens_index, opens_flags, opens_to_count, opens_to_index))
+                opens.append(
+                    attributes.OpensInfo(
+                        opens_index, opens_flags, opens_to_count, opens_to_index
+                    )
+                )
 
             uses_count = self.read_u2()
             uses = [self.read_u2() for _ in range(uses_count)]
@@ -495,8 +569,14 @@ class ClassReader(BytesReader):
             for _ in range(provides_count):
                 provides_index = self.read_u2()
                 provides_with_count = self.read_u2()
-                provides_with_index = [self.read_u2() for __ in range(provides_with_count)]
-                provides.appends(attributes.ProvidesInfo(provides_index, provides_with_count, provides))
+                provides_with_index = [
+                    self.read_u2() for __ in range(provides_with_count)
+                ]
+                provides.appends(
+                    attributes.ProvidesInfo(
+                        provides_index, provides_with_count, provides
+                    )
+                )
 
             return attr_class(
                 module_name_index,
@@ -533,7 +613,9 @@ class ClassReader(BytesReader):
                 attributes_count = self.read_u2()
                 _attributes = [self.read_attribute() for _ in range(attributes_count)]
                 components.append(
-                    attributes.RecordComponentInfo(name_index, descriptor_index, attributes_count, _attributes)
+                    attributes.RecordComponentInfo(
+                        name_index, descriptor_index, attributes_count, _attributes
+                    )
                 )
             return attr_class(components_count, components)
 
@@ -550,7 +632,9 @@ class ClassReader(BytesReader):
         descriptor_index = self.read_u2()
         attributes_count = self.read_u2()
         attributes = [self.read_attribute() for _ in range(attributes_count)]
-        return info.FieldInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
+        return info.FieldInfo(
+            access_flags, name_index, descriptor_index, attributes_count, attributes
+        )
 
     def read_method(self):
         access_flags = constants.MethodAccessFlag(self.read_u2())
@@ -558,13 +642,17 @@ class ClassReader(BytesReader):
         descriptor_index = self.read_u2()
         attributes_count = self.read_u2()
         attributes = [self.read_attribute() for _ in range(attributes_count)]
-        return info.MethodInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
+        return info.MethodInfo(
+            access_flags, name_index, descriptor_index, attributes_count, attributes
+        )
 
     def read_class(self):
         self.rewind()
         magic = self.read_u4()
         if magic != constants.MAGIC:
-            raise MalformedClassException(f"Invalid magic number 0x{magic:x}, requires 0x{constants.MAGIC:x}")
+            raise MalformedClassException(
+                f"Invalid magic number 0x{magic:x}, requires 0x{constants.MAGIC:x}"
+            )
 
         minor, major = self.read_u2(), self.read_u2()
         if major >= 56 and minor not in (0, 65535):
