@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import List
 
 
 @dataclass
 class InsnInfo:
-    type: "InsnInfoType"
+    type: InsnInfoType
     bytecode_offset: int
 
 
@@ -71,7 +70,7 @@ class InvokeInterface(InsnInfo):
 
 @dataclass
 class NewArray(InsnInfo):
-    atype: "ArrayType"
+    atype: ArrayType
 
 
 @dataclass
@@ -90,7 +89,7 @@ class MatchOffsetPair:
 class LookupSwitch(InsnInfo):
     default: int
     npairs: int
-    pairs: List[MatchOffsetPair]
+    pairs: list[MatchOffsetPair]
 
 
 @dataclass
@@ -98,7 +97,7 @@ class TableSwitch(InsnInfo):
     default: int
     low: int
     high: int
-    offsets: List[int]
+    offsets: list[int]
 
 
 class InsnInfoType(IntEnum):

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Union
 
 from . import constants, instructions
 
@@ -14,7 +13,7 @@ class AttributeInfo:
 @dataclass
 class UnimplementedAttr(AttributeInfo):
     info: bytes
-    attr_type: "AttributeInfoType"
+    attr_type: AttributeInfoType
 
 
 @dataclass
@@ -35,11 +34,11 @@ class CodeAttr(AttributeInfo):
     max_stacks: int
     max_locals: int
     code_length: int
-    code: List[instructions.InsnInfo]
+    code: list[instructions.InsnInfo]
     exception_table_length: int
-    exception_table: List[ExceptionInfo]
+    exception_table: list[ExceptionInfo]
     attributes_count: int
-    attributes: List[AttributeInfo]
+    attributes: list[AttributeInfo]
 
 
 @dataclass
@@ -126,14 +125,14 @@ class SameFrameExtendedInfo(StackMapFrameInfo):
 @dataclass
 class AppendFrameInfo(StackMapFrameInfo):
     offset_delta: int
-    locals: List[VerificationTypeInfo]
+    locals: list[VerificationTypeInfo]
 
 
 @dataclass
 class FullFrameInfo(StackMapFrameInfo):
     offset_delta: int
     number_of_locals: int
-    locals: List[VerificationTypeInfo]
+    locals: list[VerificationTypeInfo]
     number_of_stack_items: int
     stack: list[VerificationTypeInfo]
 
@@ -141,13 +140,13 @@ class FullFrameInfo(StackMapFrameInfo):
 @dataclass
 class StackMapTableAttr(AttributeInfo):
     number_of_entries: int
-    entries: List[StackMapFrameInfo]
+    entries: list[StackMapFrameInfo]
 
 
 @dataclass
 class ExceptionsAttr(AttributeInfo):
     number_of_exceptions: int
-    exception_index_table: List[int]
+    exception_index_table: list[int]
 
 
 @dataclass
@@ -161,7 +160,7 @@ class InnerClassInfo:
 @dataclass
 class InnerClassesAttr(AttributeInfo):
     number_of_classes: int
-    classes: List[InnerClassInfo]
+    classes: list[InnerClassInfo]
 
 
 @dataclass
@@ -199,7 +198,7 @@ class LineNumberInfo:
 @dataclass
 class LineNumberTableAttr(AttributeInfo):
     line_number_table_length: int
-    line_number_table: List[LineNumberInfo]
+    line_number_table: list[LineNumberInfo]
 
 
 @dataclass
@@ -214,7 +213,7 @@ class LocalVariableInfo:
 @dataclass
 class LocalVariableTableAttr(AttributeInfo):
     local_variable_table_length: int
-    local_variable_table: List[LocalVariableInfo]
+    local_variable_table: list[LocalVariableInfo]
 
 
 @dataclass
@@ -229,7 +228,7 @@ class LocalVariableTypeInfo:
 @dataclass
 class LocalVariableTypeTableAttr(AttributeInfo):
     local_variable_type_table_length: int
-    local_variable_type_table: List[LocalVariableTypeInfo]
+    local_variable_type_table: list[LocalVariableTypeInfo]
 
 
 @dataclass
@@ -256,19 +255,13 @@ class ClassInfoValueInfo:
 @dataclass
 class ArrayValueInfo:
     num_values: int
-    values: List["ElementValueInfo"]
+    values: list[ElementValueInfo]
 
 
 @dataclass
 class ElementValueInfo:
     tag: int
-    value: Union[
-        ConstValueInfo,
-        EnumConstantValueInfo,
-        ClassInfoValueInfo,
-        "AnnotationInfo",
-        ArrayValueInfo,
-    ]
+    value: ConstValueInfo | EnumConstantValueInfo | ClassInfoValueInfo | AnnotationInfo | ArrayValueInfo
 
 
 @dataclass
@@ -281,37 +274,37 @@ class ElementValuePairInfo:
 class AnnotationInfo:
     type_index: int
     num_element_value_pairs: int
-    element_value_pairs: List[ElementValuePairInfo]
+    element_value_pairs: list[ElementValuePairInfo]
 
 
 @dataclass
 class RuntimeVisibleAnnotationsAttr(AttributeInfo):
     num_annotations: int
-    annotations: List[AnnotationInfo]
+    annotations: list[AnnotationInfo]
 
 
 @dataclass
 class RuntimeInvisibleAnnotationsAttr(AttributeInfo):
     num_annotations: int
-    annotations: List[AnnotationInfo]
+    annotations: list[AnnotationInfo]
 
 
 @dataclass
 class ParameterAnnotationInfo:
     num_annotations: int
-    annotations: List[AnnotationInfo]
+    annotations: list[AnnotationInfo]
 
 
 @dataclass
 class RuntimeVisibleParameterAnnotationsAttr(AttributeInfo):
     num_parameters: int
-    parameter_annotations: List[ParameterAnnotationInfo]
+    parameter_annotations: list[ParameterAnnotationInfo]
 
 
 @dataclass
 class RuntimeInvisbleParameterAnnotationsAttr(AttributeInfo):
     num_parameters: int
-    parameter_annotations: List[ParameterAnnotationInfo]
+    parameter_annotations: list[ParameterAnnotationInfo]
 
 
 @dataclass
@@ -360,7 +353,7 @@ class TableInfo:
 @dataclass
 class LocalvarTargetInfo(TargetInfo):
     table_length: int
-    table: List[TableInfo]
+    table: list[TableInfo]
 
 
 @dataclass
@@ -388,7 +381,7 @@ class PathInfo:
 @dataclass
 class TypePathInfo:
     path_length: int
-    path: List[PathInfo]
+    path: list[PathInfo]
 
 
 @dataclass
@@ -398,13 +391,13 @@ class TypeAnnotationInfo:
     target_path: TypePathInfo
     type_index: int
     num_element_value_pairs: int
-    element_value_pairs: List[ElementValuePairInfo]
+    element_value_pairs: list[ElementValuePairInfo]
 
 
 @dataclass
 class RuntimeTypeAnnotationsAttr(AttributeInfo):
     num_annotations: int
-    annotations: List[TypeAnnotationInfo]
+    annotations: list[TypeAnnotationInfo]
 
 
 @dataclass
@@ -426,13 +419,13 @@ class AnnotationDefaultAttr(AttributeInfo):
 class BootstrapMethodInfo:
     bootstrap_method_ref: int
     num_boostrap_arguments: int
-    boostrap_arguments: List[int]
+    boostrap_arguments: list[int]
 
 
 @dataclass
 class BootstrapMethodsAttr(AttributeInfo):
     num_bootstrap_methods: int
-    bootstrap_methods: List[BootstrapMethodInfo]
+    bootstrap_methods: list[BootstrapMethodInfo]
 
 
 @dataclass
@@ -444,7 +437,7 @@ class MethodParameterInfo:
 @dataclass
 class MethodParametersAttr(AttributeInfo):
     parameters_count: int
-    parameters: List[MethodParameterInfo]
+    parameters: list[MethodParameterInfo]
 
 
 @dataclass
@@ -459,7 +452,7 @@ class ExportInfo:
     exports_index: int
     exports_flags: constants.ModuleExportsAccessFlag
     exports_to_count: int
-    exports_to_index: List[int]
+    exports_to_index: list[int]
 
 
 @dataclass
@@ -467,14 +460,14 @@ class OpensInfo:
     opens_index: int
     opens_flags: constants.ModuleOpensAccessFlag
     opens_to_count: int
-    opens_to_index: List[int]
+    opens_to_index: list[int]
 
 
 @dataclass
 class ProvidesInfo:
     provides_index: int
     provides_with_count: int
-    provides_with_index: List[int]
+    provides_with_index: list[int]
 
 
 @dataclass
@@ -483,21 +476,21 @@ class ModuleAttr(AttributeInfo):
     module_flags: constants.ModuleAccessFlag
     module_version_index: int
     requires_count: int
-    requires: List[RequiresInfo]
+    requires: list[RequiresInfo]
     exports_count: int
-    exports: List[ExportInfo]
+    exports: list[ExportInfo]
     opens_count: int
-    opens: List[OpensInfo]
+    opens: list[OpensInfo]
     uses_count: int
-    uses_index: List[int]
+    uses_index: list[int]
     provides_count: int
-    provides: List[ProvidesInfo]
+    provides: list[ProvidesInfo]
 
 
 @dataclass
 class ModulePackagesAttr(AttributeInfo):
     package_count: int
-    package_index: List[int]
+    package_index: list[int]
 
 
 @dataclass
@@ -513,7 +506,7 @@ class NestHostAttr(AttributeInfo):
 @dataclass
 class NestMembersAttr(AttributeInfo):
     number_of_classes: int
-    classes: List[int]
+    classes: list[int]
 
 
 @dataclass
@@ -521,19 +514,19 @@ class RecordComponentInfo:
     name_index: int
     descriptor_index: int
     attributes_count: int
-    attributes: List[AttributeInfo]
+    attributes: list[AttributeInfo]
 
 
 @dataclass
 class RecordAttr(AttributeInfo):
     components_count: int
-    components: List[RecordComponentInfo]
+    components: list[RecordComponentInfo]
 
 
 @dataclass
 class PermittedSubclassesAttr(AttributeInfo):
     number_of_classes: int
-    classes: List[int]
+    classes: list[int]
 
 
 class AttributeInfoType(Enum):

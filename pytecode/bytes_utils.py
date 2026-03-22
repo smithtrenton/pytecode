@@ -34,7 +34,7 @@ def _read_i4(buffer, offset=0):
 
 
 def _read_bytes(buffer, length, offset=0):
-    return unpack_from(">%ds" % length, buffer, offset)[0]
+    return unpack_from(f">{length}s", buffer, offset)[0]
 
 
 class ByteParser(ABC):

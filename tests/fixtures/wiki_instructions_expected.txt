@@ -1,0 +1,12 @@
+Inst(name='aload_0', hex='2a', operands='No operands')
+Inst(name='iload', hex='15', operands='index')
+Inst(name='goto', hex='a7', operands='branchbyte1, branchbyte2')
+Inst(name='invokeinterface', hex='b9', operands='indexbyte1, indexbyte2, count, 0')
+Inst(name='lookupswitch', hex='ab', operands='offset pairs')
+Inst(name='(wide)', hex='c4', operands='opcode, indexbyte1, indexbyte2')
+
+	ALOAD_0 = 0x2a, InsnInfo
+	ILOAD = 0x15, LocalIndex
+	GOTO = 0xa7, Branch
+	INVOKEINTERFACE = 0xb9, InvokeInterface
+	LOOKUPSWITCH = 0xab, LookupSwitch
