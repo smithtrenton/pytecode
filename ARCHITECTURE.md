@@ -17,7 +17,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Parsing 30 standard attribute types including annotations, stack map tables, module metadata, records, and permitted subclasses
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
-- Regression coverage for the checked-in JAR sample (1228 classes) and the instruction-table generation helper
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, and JAR handling (256 tests)
 
 ### Not implemented yet
 
@@ -144,20 +144,20 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - No descriptor or signature parsing utilities exist — code that needs to understand method types must parse descriptor strings ad hoc
 - There is an existing `TODO` comment in `class_reader.py:11` noting a desire to rework the reader to use dataclass annotations for byte reading instead of manual parsing
 
-### Test coverage ([#2](https://github.com/smithtrenton/pytecode/issues/2))
+### Test coverage
 
-The current test suite consists of two integration-level tests only:
+The test suite provides both integration-level and unit-level coverage (256 tests total):
 
-- `test_run_script.py` — end-to-end test that parses a real JAR file (1228 classes), writes output, and compares SHA256 hashes against a checked-in snapshot. This provides broad coverage but cannot isolate regressions to specific modules.
-- `test_parse_wiki_instructions.py` — regression test for the instruction-table generation tool.
+**Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
-There are **no unit tests** for individual modules. Notably missing:
+- `test_attributes.py` (87 tests) — per-attribute-type parsing for all 30 standard attribute types, stack map frame variants, verification types, annotation element values, type annotations, and the `UnimplementedAttr` fallback.
+- `test_instructions.py` (62 tests) — instruction decoding for all operand shapes including no-operand, local variable index, constant-pool index, bipush/sipush, branch16/branch32, iinc, invokedynamic, invokeinterface, newarray, multianewarray, lookupswitch, tableswitch, and wide variants.
+- `test_constant_pool.py` (26 tests) — all 17 constant-pool entry types, Long/Double double-slot handling, mixed pool parsing, and unknown tag errors.
+- `test_class_reader.py` (28 tests) — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
+- `test_bytes_utils.py` (42 tests) — all primitive byte readers (U1/I1/U2/I2/U4/I4/Bytes), `BytesReader` stateful cursor, rewind, and buffer overrun.
+- `test_jar.py` (11 tests) — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
 
-- Per-attribute-type parsing tests
-- Instruction decoding tests for each operand shape
-- Constant-pool edge cases (Long/Double double-slot handling)
-- Error-path and malformed-input tests
-- Tests that would have caught the known parser bugs listed above
+Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts.
 
 ## Recommended target architecture
 
@@ -385,7 +385,7 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 ## Recommended implementation order
 
 1. ~~Fix the known parser bugs.~~ ([#1](https://github.com/smithtrenton/pytecode/issues/1) — done)
-2. Add unit tests for each attribute type, instruction operand shape, and constant-pool entry. ([#2](https://github.com/smithtrenton/pytecode/issues/2))
+2. ~~Add unit tests for each attribute type, instruction operand shape, and constant-pool entry.~~ ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done)
 3. Add descriptor and signature parsing utilities. ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 4. Introduce a writer foundation for primitive values and classfile sections. ([#4](https://github.com/smithtrenton/pytecode/issues/4))
 5. Add constant-pool management utilities (deduplication, symbol lookup, reindexing). ([#5](https://github.com/smithtrenton/pytecode/issues/5))
@@ -404,11 +404,11 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 
 Before calling the library a manipulation toolkit, it should have:
 
-- unit tests for every attribute type parser and instruction operand shape
+- ~~unit tests for every attribute type parser and instruction operand shape~~
 - round-trip tests for representative classfiles across Java versions
 - fixture coverage for modern attributes (records, sealed classes, module metadata)
 - compatibility tests across multiple compiler outputs (javac 8, 11, 17, 21)
-- negative tests for malformed transformations and invalid classfile inputs
+- ~~negative tests for malformed transformations and invalid classfile inputs~~
 - verifier acceptance tests (generated classes pass `java -verify`)
 - stable emitted bytes for deterministic scenarios
 - structured diagnostic output for all validation failures
@@ -426,7 +426,7 @@ To keep the scope focused, the project does not need to become:
 
 `pytecode` already has a solid parser-oriented foundation: typed models, complete instruction decoding, attribute parsing, and JAR integration.
 
-The test suite needs unit-level coverage to catch regressions.
+The test suite now has unit-level coverage across all modules (256 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, and error paths.
 
 The missing work is not only "manipulate, calculate frames, validate, and emit." To fully meet the project's objective, the roadmap should also explicitly include:
 
