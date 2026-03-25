@@ -197,29 +197,29 @@ class ClassReader(BytesReader):
 
     def read_target_info(self, target_type) -> attributes.TargetInfo:
         match target_type:
-            case x if x in constants.TargetInfoType.TYPE_PARAMETER:
+            case x if x in constants.TargetInfoType.TYPE_PARAMETER.value:
                 return attributes.TypeParameterTargetInfo(self.read_u1())
-            case x if x in constants.TargetInfoType.SUPERTYPE:
+            case x if x in constants.TargetInfoType.SUPERTYPE.value:
                 return attributes.SupertypeTargetInfo(self.read_u2())
-            case x if x in constants.TargetInfoType.TYPE_PARAMETER_BOUND:
+            case x if x in constants.TargetInfoType.TYPE_PARAMETER_BOUND.value:
                 return attributes.TypeParameterBoundTargetInfo(self.read_u1(), self.read_u1())
-            case x if x in constants.TargetInfoType.EMPTY:
+            case x if x in constants.TargetInfoType.EMPTY.value:
                 return attributes.EmptyTargetInfo()
-            case x if x in constants.TargetInfoType.FORMAL_PARAMETER:
+            case x if x in constants.TargetInfoType.FORMAL_PARAMETER.value:
                 return attributes.FormalParameterTargetInfo(self.read_u1())
-            case x if x in constants.TargetInfoType.THROWS:
+            case x if x in constants.TargetInfoType.THROWS.value:
                 return attributes.ThrowsTargetInfo(self.read_u2())
-            case x if x in constants.TargetInfoType.LOCALVAR:
+            case x if x in constants.TargetInfoType.LOCALVAR.value:
                 table_length = self.read_u2()
                 table = [
                     attributes.TableInfo(self.read_u2(), self.read_u2(), self.read_u2()) for _ in range(table_length)
                 ]
                 return attributes.LocalvarTargetInfo(table_length, table)
-            case x if x in constants.TargetInfoType.CATCH:
+            case x if x in constants.TargetInfoType.CATCH.value:
                 return attributes.CatchTargetInfo(self.read_u2())
-            case x if x in constants.TargetInfoType.OFFSET:
+            case x if x in constants.TargetInfoType.OFFSET.value:
                 return attributes.OffsetTargetInfo(self.read_u2())
-            case x if x in constants.TargetInfoType.TYPE_ARGUMENT:
+            case x if x in constants.TargetInfoType.TYPE_ARGUMENT.value:
                 return attributes.TypeArgumentTargetInfo(self.read_u2(), self.read_u1())
         raise ValueError(f"Unknown target info type: {target_type}")
 

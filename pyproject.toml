@@ -31,6 +31,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
   "basedpyright>=1.38.3",
+  "pytest",
   "ruff",
 ]
 
@@ -53,6 +54,9 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
 
 [tool.uv]
 required-version = ">=0.10.12"

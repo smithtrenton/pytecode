@@ -121,7 +121,6 @@ class InsnInfoType(IntEnum):
     BALOAD = 0x33, InsnInfo
     BASTORE = 0x54, InsnInfo
     BIPUSH = 0x10, ByteValue
-    BREAKPOINT = 0xCA, InsnInfo
     CALOAD = 0x34, InsnInfo
     CASTORE = 0x55, InsnInfo
     CHECKCAST = 0xC0, ConstPoolIndex
@@ -228,8 +227,6 @@ class InsnInfoType(IntEnum):
     ILOAD_1 = 0x1B, InsnInfo
     ILOAD_2 = 0x1C, InsnInfo
     ILOAD_3 = 0x1D, InsnInfo
-    IMPDEP1 = 0xFE, InsnInfo
-    IMPDEP2 = 0xFF, InsnInfo
     IMUL = 0x68, InsnInfo
     INEG = 0x74, InsnInfo
     INSTANCEOF = 0xC1, ConstPoolIndex
