@@ -37,11 +37,12 @@ dev = [
 
 [tool.basedpyright]
 pythonVersion = "3.14"
-typeCheckingMode = "basic"
+typeCheckingMode = "strict"
 include = ["pytecode", "run.py", "tools", "tests"]
 exclude = ["output", "venv", ".venv"]
 reportMissingTypeStubs = false
 reportAttributeAccessIssue = false
+reportPrivateUsage = false
 
 [tool.ruff]
 target-version = "py314"

@@ -337,11 +337,11 @@ def test_double_slot_skips_next_index():
 def test_mixed_pool_all_simple_types():
     # Indices 5–9: Integer, Float, String, Class, Utf8
     extra_cp_bytes = (
-        integer_entry_bytes(100)        # index 5
+        integer_entry_bytes(100)  # index 5
         + float_entry_bytes(0x3F800000)  # index 6  (1.0f bits)
-        + string_entry_bytes(9)          # index 7
-        + class_entry_bytes(9)           # index 8
-        + utf8_entry_bytes("hello")      # index 9
+        + string_entry_bytes(9)  # index 7
+        + class_entry_bytes(9)  # index 8
+        + utf8_entry_bytes("hello")  # index 9
     )
     data = minimal_classfile(extra_cp_bytes=extra_cp_bytes, extra_cp_count=5)
     reader = ClassReader.from_bytes(data)

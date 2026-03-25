@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -260,7 +262,7 @@ class ArrayValueInfo:
 
 @dataclass
 class ElementValueInfo:
-    tag: int
+    tag: int | str
     value: ConstValueInfo | EnumConstantValueInfo | ClassInfoValueInfo | AnnotationInfo | ArrayValueInfo
 
 
@@ -374,7 +376,7 @@ class TypeArgumentTargetInfo(TargetInfo):
 
 @dataclass
 class PathInfo:
-    type_path_kind: constants.TypePathKind
+    type_path_kind: int
     type_argument_index: int
 
 
@@ -386,7 +388,7 @@ class TypePathInfo:
 
 @dataclass
 class TypeAnnotationInfo:
-    target_type: constants.TargetType
+    target_type: int
     target_info: TargetInfo
     target_path: TypePathInfo
     type_index: int
@@ -581,14 +583,16 @@ class AttributeInfoType(Enum):
 
     UNIMPLEMENTED = "", UnimplementedAttr
 
-    def __new__(cls, name, attr_class):
+    attr_class: type[AttributeInfo]
+
+    def __new__(cls, name: str, attr_class: type[AttributeInfo]) -> AttributeInfoType:
         obj = object.__new__(cls)
         obj._value_ = name
         obj.attr_class = attr_class
         return obj
 
     @classmethod
-    def _missing_(cls, value):
+    def _missing_(cls, value: object) -> AttributeInfoType:
         obj = cls.UNIMPLEMENTED
         obj._value_ = value
         return obj

@@ -1,4 +1,5 @@
 """Shared byte-building utilities for pytecode unit tests."""
+
 from __future__ import annotations
 
 import struct
@@ -56,6 +57,7 @@ def make_compiled_jar(
             zf.writestr(filename, data)
 
     return jar_path
+
 
 # ---------------------------------------------------------------------------
 # Big-endian byte packers
@@ -203,7 +205,7 @@ def make_attribute_blob(name_index: int, payload: bytes) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def class_reader_with_cp(data: bytes, cp_list: list) -> ClassReader:
+def class_reader_with_cp(data: bytes, cp_list: list[cp_module.ConstantPoolInfo | None]) -> ClassReader:
     """
     Return a ClassReader-like object whose buffer is `data` and whose
     constant_pool is `cp_list`.  Bypasses read_class() so only the
@@ -243,10 +245,7 @@ _MAGIC = b"\xca\xfe\xba\xbe"
 #   3  Utf8  "java/lang/Object"
 #   4  Class name_index=3
 _BASE_CP = (
-    utf8_entry_bytes("TestClass")
-    + class_entry_bytes(1)
-    + utf8_entry_bytes("java/lang/Object")
-    + class_entry_bytes(3)
+    utf8_entry_bytes("TestClass") + class_entry_bytes(1) + utf8_entry_bytes("java/lang/Object") + class_entry_bytes(3)
 )
 _BASE_CP_COUNT = 5  # cp_count field value = number of entries + 1
 
@@ -319,6 +318,6 @@ def attr_reader(attr_name: str, payload: bytes) -> ClassReader:
         assert isinstance(attr, ConstantValueAttr)
         assert attr.constantvalue_index == 42
     """
-    cp_list = [None, make_utf8_info(1, attr_name)]
+    cp_list: list[cp_module.ConstantPoolInfo | None] = [None, make_utf8_info(1, attr_name)]
     blob = make_attribute_blob(1, payload)
     return class_reader_with_cp(blob, cp_list)

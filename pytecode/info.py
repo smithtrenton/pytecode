@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from .attributes import AttributeInfo
@@ -29,7 +31,7 @@ class ClassFile:
     minor_version: int
     major_version: int
     constant_pool_count: int
-    constant_pool: list[ConstantPoolInfo]
+    constant_pool: list[ConstantPoolInfo | None]
     access_flags: ClassAccessFlag
     this_class: int
     super_class: int

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -17,24 +19,24 @@ class Utf8Info(ConstantPoolInfo):
 
 @dataclass
 class IntegerInfo(ConstantPoolInfo):
-    value_bytes: bytes
+    value_bytes: int
 
 
 @dataclass
 class FloatInfo(ConstantPoolInfo):
-    value_bytes: bytes
+    value_bytes: int
 
 
 @dataclass
 class LongInfo(ConstantPoolInfo):
-    high_bytes: bytes
-    low_bytes: bytes
+    high_bytes: int
+    low_bytes: int
 
 
 @dataclass
 class DoubleInfo(ConstantPoolInfo):
-    high_bytes: bytes
-    low_bytes: bytes
+    high_bytes: int
+    low_bytes: int
 
 
 @dataclass
@@ -123,7 +125,9 @@ class ConstantPoolInfoType(Enum):
     MODULE = 19, ModuleInfo
     PACKAGE = 20, PackageInfo
 
-    def __new__(cls, tag, cp_class):
+    cp_class: type[ConstantPoolInfo]
+
+    def __new__(cls, tag: int, cp_class: type[ConstantPoolInfo]) -> ConstantPoolInfoType:
         obj = object.__new__(cls)
         obj._value_ = tag
         obj.cp_class = cp_class

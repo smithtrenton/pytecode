@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytecode import attributes, constants, instructions
+from pytecode import attributes, constant_pool, constants, instructions
 from tests.helpers import attr_reader, class_reader_with_cp, i1, make_attribute_blob, make_utf8_info, u1, u2, u4
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ def test_code_attr_with_exception_table_and_nested_attributes():
         + make_attribute_blob(2, line_number_payload)
         + make_attribute_blob(3, local_variable_payload)
     )
-    cp_list = [
+    cp_list: list[constant_pool.ConstantPoolInfo | None] = [
         None,
         make_utf8_info(1, "Code"),
         make_utf8_info(2, "LineNumberTable"),
@@ -143,6 +143,7 @@ def test_code_attr_with_exception_table_and_nested_attributes():
         instructions.InsnInfoType.RETURN,
     ]
     assert [insn.bytecode_offset for insn in attr.code] == [0, 2, 3]
+    assert isinstance(attr.code[0], instructions.ByteValue)
     assert attr.code[0].value == 42
     assert attr.exception_table_length == 1
     assert attr.exception_table == [attributes.ExceptionInfo(0, 3, 3, 9)]
@@ -442,6 +443,7 @@ def test_stackmaptable_same_frame():
     payload = u2(1) + u1(0)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     assert attr.number_of_entries == 1
     assert isinstance(attr.entries[0], attributes.SameFrameInfo)
     assert attr.entries[0].frame_type == 0
@@ -451,6 +453,7 @@ def test_stackmaptable_same_frame_type63():
     payload = u2(1) + u1(63)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     assert isinstance(attr.entries[0], attributes.SameFrameInfo)
     assert attr.entries[0].frame_type == 63
 
@@ -460,6 +463,7 @@ def test_stackmaptable_same_locals_1_stack():
     payload = u2(1) + u1(64) + u1(1)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
     assert frame.frame_type == 64
@@ -471,6 +475,7 @@ def test_stackmaptable_same_locals_1_stack_extended():
     payload = u2(1) + u1(247) + u2(10) + u1(1)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.SameLocals1StackItemFrameExtendedInfo)
     assert frame.frame_type == 247
@@ -483,6 +488,7 @@ def test_stackmaptable_chop_frame():
     payload = u2(1) + u1(249) + u2(5)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.ChopFrameInfo)
     assert frame.frame_type == 249
@@ -494,6 +500,7 @@ def test_stackmaptable_same_frame_extended():
     payload = u2(1) + u1(251) + u2(3)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.SameFrameExtendedInfo)
     assert frame.frame_type == 251
@@ -505,6 +512,7 @@ def test_stackmaptable_append_frame_252():
     payload = u2(1) + u1(252) + u2(1) + u1(0)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.AppendFrameInfo)
     assert frame.frame_type == 252
@@ -518,6 +526,7 @@ def test_stackmaptable_append_frame_254():
     payload = u2(1) + u1(254) + u2(0) + u1(1) + u1(2) + u1(3)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.AppendFrameInfo)
     assert len(frame.locals) == 3
@@ -528,13 +537,10 @@ def test_stackmaptable_append_frame_254():
 
 def test_stackmaptable_full_frame():
     # frame_type=255, offset_delta=0, 2 locals (INTEGER, FLOAT), 1 stack (LONG)
-    payload = (
-        u2(1) + u1(255) + u2(0)
-        + u2(2) + u1(1) + u1(2)
-        + u2(1) + u1(4)
-    )
+    payload = u2(1) + u1(255) + u2(0) + u2(2) + u1(1) + u1(2) + u2(1) + u1(4)
     reader = attr_reader("StackMapTable", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.StackMapTableAttr)
     frame = attr.entries[0]
     assert isinstance(frame, attributes.FullFrameInfo)
     assert frame.frame_type == 255
@@ -554,54 +560,71 @@ def test_stackmaptable_full_frame():
 def _stackmap_with_vtype(vtype_bytes: bytes) -> attributes.StackMapTableAttr:
     payload = u2(1) + u1(64) + vtype_bytes
     reader = attr_reader("StackMapTable", payload)
-    return reader.read_attribute()
+    result = reader.read_attribute()
+    assert isinstance(result, attributes.StackMapTableAttr)
+    return result
 
 
 def test_vtype_top():
     attr = _stackmap_with_vtype(u1(0))
-    assert isinstance(attr.entries[0].stack, attributes.TopVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.TOP
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.TopVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.TOP
 
 
 def test_vtype_integer():
     attr = _stackmap_with_vtype(u1(1))
-    assert isinstance(attr.entries[0].stack, attributes.IntegerVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.INTEGER
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.IntegerVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.INTEGER
 
 
 def test_vtype_float():
     attr = _stackmap_with_vtype(u1(2))
-    assert isinstance(attr.entries[0].stack, attributes.FloatVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.FLOAT
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.FloatVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.FLOAT
 
 
 def test_vtype_double():
     attr = _stackmap_with_vtype(u1(3))
-    assert isinstance(attr.entries[0].stack, attributes.DoubleVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.DOUBLE
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.DoubleVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.DOUBLE
 
 
 def test_vtype_long():
     attr = _stackmap_with_vtype(u1(4))
-    assert isinstance(attr.entries[0].stack, attributes.LongVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.LONG
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.LongVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.LONG
 
 
 def test_vtype_null():
     attr = _stackmap_with_vtype(u1(5))
-    assert isinstance(attr.entries[0].stack, attributes.NullVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.NULL
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.NullVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.NULL
 
 
 def test_vtype_uninitialized_this():
     attr = _stackmap_with_vtype(u1(6))
-    assert isinstance(attr.entries[0].stack, attributes.UninitializedThisVariableInfo)
-    assert attr.entries[0].stack.tag == constants.VerificationType.UNINITIALIZED_THIS
+    frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
+    assert isinstance(frame.stack, attributes.UninitializedThisVariableInfo)
+    assert frame.stack.tag == constants.VerificationType.UNINITIALIZED_THIS
 
 
 def test_vtype_object():
     attr = _stackmap_with_vtype(u1(7) + u2(42))
     frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
     assert isinstance(frame.stack, attributes.ObjectVariableInfo)
     assert frame.stack.tag == constants.VerificationType.OBJECT
     assert frame.stack.cpool_index == 42
@@ -610,6 +633,7 @@ def test_vtype_object():
 def test_vtype_uninitialized():
     attr = _stackmap_with_vtype(u1(8) + u2(15))
     frame = attr.entries[0]
+    assert isinstance(frame, attributes.SameLocals1StackItemFrameInfo)
     assert isinstance(frame.stack, attributes.UninitializedVariableInfo)
     assert frame.stack.tag == constants.VerificationType.UNINITIALIZED
     assert frame.stack.offset == 15
@@ -617,6 +641,14 @@ def test_vtype_uninitialized():
 
 def test_vtype_unknown_raises():
     payload = u2(1) + u1(64) + u1(9)
+    reader = attr_reader("StackMapTable", payload)
+    with pytest.raises(ValueError):
+        reader.read_attribute()
+
+
+def test_stackmaptable_unknown_frame_type_raises():
+    # frame_type=200 falls in the gap 128-246 (excluding 247), not valid
+    payload = u2(1) + u1(200)
     reader = attr_reader("StackMapTable", payload)
     with pytest.raises(ValueError):
         reader.read_attribute()
@@ -664,6 +696,7 @@ def test_annotation_with_element_value_pair():
     payload = u2(1) + u2(2) + u2(1) + pair_bytes
     reader = attr_reader("RuntimeVisibleAnnotations", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.RuntimeVisibleAnnotationsAttr)
     ann = attr.annotations[0]
     assert ann.num_element_value_pairs == 1
     pair = ann.element_value_pairs[0]
@@ -680,7 +713,9 @@ def test_annotation_with_element_value_pair():
 
 def _annotation_default(ev_bytes: bytes) -> attributes.AnnotationDefaultAttr:
     reader = attr_reader("AnnotationDefault", ev_bytes)
-    return reader.read_attribute()
+    result = reader.read_attribute()
+    assert isinstance(result, attributes.AnnotationDefaultAttr)
+    return result
 
 
 def test_element_value_const_B():
@@ -693,6 +728,7 @@ def test_element_value_const_B():
 def test_element_value_const_I():
     attr = _annotation_default(u1(ord("I")) + u2(99))
     assert attr.default_value.tag == "I"
+    assert isinstance(attr.default_value.value, attributes.ConstValueInfo)
     assert attr.default_value.value.const_value_index == 99
 
 
@@ -706,6 +742,7 @@ def test_element_value_const_s():
 def test_element_value_const_J():
     attr = _annotation_default(u1(ord("J")) + u2(100))
     assert attr.default_value.tag == "J"
+    assert isinstance(attr.default_value.value, attributes.ConstValueInfo)
     assert attr.default_value.value.const_value_index == 100
 
 
@@ -744,8 +781,10 @@ def test_element_value_array():
     assert isinstance(arr, attributes.ArrayValueInfo)
     assert arr.num_values == 2
     assert arr.values[0].tag == "I"
+    assert isinstance(arr.values[0].value, attributes.ConstValueInfo)
     assert arr.values[0].value.const_value_index == 10
     assert arr.values[1].tag == "I"
+    assert isinstance(arr.values[1].value, attributes.ConstValueInfo)
     assert arr.values[1].value.const_value_index == 20
 
 
@@ -804,21 +843,20 @@ def test_runtime_invisible_parameter_annotations():
 # Type annotations — RuntimeVisibleTypeAnnotations
 # ---------------------------------------------------------------------------
 
+
 # Helper: wrap a TypeAnnotationInfo inside a RuntimeVisibleTypeAnnotations attr
 def _type_ann_attr(
     target_type_byte: int, target_info_bytes: bytes, type_index: int = 2
 ) -> attributes.RuntimeVisibleTypeAnnotationsAttr:
     type_path_bytes = u1(0)  # path_length=0
     ann_bytes = (
-        u1(target_type_byte)
-        + target_info_bytes
-        + type_path_bytes
-        + u2(type_index)
-        + u2(0)  # num_element_value_pairs=0
+        u1(target_type_byte) + target_info_bytes + type_path_bytes + u2(type_index) + u2(0)  # num_element_value_pairs=0
     )
     payload = u2(1) + ann_bytes
     reader = attr_reader("RuntimeVisibleTypeAnnotations", payload)
-    return reader.read_attribute()
+    result = reader.read_attribute()
+    assert isinstance(result, attributes.RuntimeVisibleTypeAnnotationsAttr)
+    return result
 
 
 def test_type_annotation_type_parameter_target():
@@ -918,6 +956,7 @@ def test_type_annotation_type_path():
     payload = u2(1) + ann_bytes
     reader = attr_reader("RuntimeVisibleTypeAnnotations", payload)
     attr = reader.read_attribute()
+    assert isinstance(attr, attributes.RuntimeVisibleTypeAnnotationsAttr)
     ann = attr.annotations[0]
     path_info = ann.target_path
     assert isinstance(path_info, attributes.TypePathInfo)
@@ -925,6 +964,16 @@ def test_type_annotation_type_path():
     assert len(path_info.path) == 1
     assert path_info.path[0].type_path_kind == constants.TypePathKind.ARRAY_TYPE
     assert path_info.path[0].type_argument_index == 0
+
+
+def test_type_annotation_unknown_target_type_raises():
+    # target_type=0xFF is not in any valid TargetInfoType range
+    type_path_bytes = u1(0)
+    ann_bytes = u1(0xFF) + type_path_bytes + u2(2) + u2(0)
+    payload = u2(1) + ann_bytes
+    reader = attr_reader("RuntimeVisibleTypeAnnotations", payload)
+    with pytest.raises(ValueError):
+        reader.read_attribute()
 
 
 def test_runtime_invisible_type_annotations():
@@ -945,14 +994,14 @@ def test_runtime_invisible_type_annotations():
 
 def test_module_attr_empty():
     payload = (
-        u2(2)   # module_name_index
-        + u2(0) # module_flags=0
-        + u2(3) # module_version_index
-        + u2(0) # requires_count=0
-        + u2(0) # exports_count=0
-        + u2(0) # opens_count=0
-        + u2(0) # uses_count=0
-        + u2(0) # provides_count=0
+        u2(2)  # module_name_index
+        + u2(0)  # module_flags=0
+        + u2(3)  # module_version_index
+        + u2(0)  # requires_count=0
+        + u2(0)  # exports_count=0
+        + u2(0)  # opens_count=0
+        + u2(0)  # uses_count=0
+        + u2(0)  # provides_count=0
     )
     reader = attr_reader("Module", payload)
     attr = reader.read_attribute()
@@ -974,13 +1023,17 @@ def test_module_attr_empty():
 
 def test_module_attr_with_requires():
     payload = (
-        u2(2) + u2(0) + u2(0)
-        + u2(1)               # requires_count=1
-        + u2(3) + u2(0) + u2(0)  # requires_index=3, flags=0, version=0
-        + u2(0)               # exports_count=0
-        + u2(0)               # opens_count=0
-        + u2(0)               # uses_count=0
-        + u2(0)               # provides_count=0
+        u2(2)
+        + u2(0)
+        + u2(0)
+        + u2(1)  # requires_count=1
+        + u2(3)
+        + u2(0)
+        + u2(0)  # requires_index=3, flags=0, version=0
+        + u2(0)  # exports_count=0
+        + u2(0)  # opens_count=0
+        + u2(0)  # uses_count=0
+        + u2(0)  # provides_count=0
     )
     reader = attr_reader("Module", payload)
     attr = reader.read_attribute()
@@ -995,13 +1048,19 @@ def test_module_attr_with_requires():
 
 def test_module_attr_with_exports():
     payload = (
-        u2(2) + u2(0) + u2(0)
-        + u2(0)                   # requires_count=0
-        + u2(1)                   # exports_count=1
-        + u2(5) + u2(0) + u2(2) + u2(6) + u2(7)  # idx=5, flags=0, to_count=2, to=[6,7]
-        + u2(0)                   # opens_count=0
-        + u2(0)                   # uses_count=0
-        + u2(0)                   # provides_count=0
+        u2(2)
+        + u2(0)
+        + u2(0)
+        + u2(0)  # requires_count=0
+        + u2(1)  # exports_count=1
+        + u2(5)
+        + u2(0)
+        + u2(2)
+        + u2(6)
+        + u2(7)  # idx=5, flags=0, to_count=2, to=[6,7]
+        + u2(0)  # opens_count=0
+        + u2(0)  # uses_count=0
+        + u2(0)  # provides_count=0
     )
     reader = attr_reader("Module", payload)
     attr = reader.read_attribute()

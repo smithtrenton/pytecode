@@ -457,10 +457,10 @@ def test_multianewarray():
 
 def test_lookupswitch_no_pairs():
     data = (
-        u1(0xAB)          # LOOKUPSWITCH opcode
-        + b"\x00\x00\x00" # 3 padding bytes (align at offset 0)
-        + i4(-1)           # default
-        + u4(0)            # npairs=0
+        u1(0xAB)  # LOOKUPSWITCH opcode
+        + b"\x00\x00\x00"  # 3 padding bytes (align at offset 0)
+        + i4(-1)  # default
+        + u4(0)  # npairs=0
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -473,12 +473,14 @@ def test_lookupswitch_no_pairs():
 
 def test_lookupswitch_two_pairs():
     data = (
-        u1(0xAB)            # LOOKUPSWITCH opcode
+        u1(0xAB)  # LOOKUPSWITCH opcode
         + b"\x00\x00\x00"  # 3 padding bytes
-        + i4(100)           # default=100
-        + u4(2)             # npairs=2
-        + i4(-1) + u4(5)   # pair 0: match=-1, offset=5
-        + i4(0) + u4(10)   # pair 1: match=0, offset=10
+        + i4(100)  # default=100
+        + u4(2)  # npairs=2
+        + i4(-1)
+        + u4(5)  # pair 0: match=-1, offset=5
+        + i4(0)
+        + u4(10)  # pair 1: match=0, offset=10
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -494,11 +496,12 @@ def test_lookupswitch_two_pairs():
 
 def test_lookupswitch_negative_match():
     data = (
-        u1(0xAB)            # LOOKUPSWITCH opcode
+        u1(0xAB)  # LOOKUPSWITCH opcode
         + b"\x00\x00\x00"  # 3 padding bytes
-        + i4(0)             # default=0
-        + u4(1)             # npairs=1
-        + i4(-2147483648) + u4(99)  # pair: match=INT_MIN, offset=99
+        + i4(0)  # default=0
+        + u4(1)  # npairs=1
+        + i4(-2147483648)
+        + u4(99)  # pair: match=INT_MIN, offset=99
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -511,10 +514,11 @@ def test_lookupswitch_negative_match():
 def test_lookupswitch_aligned_at_offset_3():
     # current_method_offset=3: (4 - (3+1)%4) % 4 = (4-0)%4 = 0 padding bytes
     data = (
-        u1(0xAB)    # LOOKUPSWITCH opcode at offset 3
-        + i4(50)    # default=50 (no padding)
-        + u4(1)     # npairs=1
-        + i4(10) + u4(20)  # pair: match=10, offset=20
+        u1(0xAB)  # LOOKUPSWITCH opcode at offset 3
+        + i4(50)  # default=50 (no padding)
+        + u4(1)  # npairs=1
+        + i4(10)
+        + u4(20)  # pair: match=10, offset=20
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(3)
@@ -534,12 +538,12 @@ def test_lookupswitch_aligned_at_offset_3():
 def test_tableswitch_single_case():
     # low==high, 1 offset
     data = (
-        u1(0xAA)            # TABLESWITCH opcode
+        u1(0xAA)  # TABLESWITCH opcode
         + b"\x00\x00\x00"  # 3 padding bytes
-        + i4(0)             # default=0
-        + i4(5)             # low=5
-        + i4(5)             # high=5
-        + i4(100)           # offsets[0]=100
+        + i4(0)  # default=0
+        + i4(5)  # low=5
+        + i4(5)  # high=5
+        + i4(100)  # offsets[0]=100
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -556,10 +560,12 @@ def test_tableswitch_range():
     data = (
         u1(0xAA)
         + b"\x00\x00\x00"  # 3 padding bytes
-        + i4(0)             # default
-        + i4(1)             # low=1
-        + i4(3)             # high=3
-        + i4(10) + i4(20) + i4(30)  # offsets
+        + i4(0)  # default
+        + i4(1)  # low=1
+        + i4(3)  # high=3
+        + i4(10)
+        + i4(20)
+        + i4(30)  # offsets
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -575,10 +581,12 @@ def test_tableswitch_negative_range():
     data = (
         u1(0xAA)
         + b"\x00\x00\x00"  # 3 padding bytes
-        + i4(99)            # default=99
-        + i4(-2)            # low=-2
-        + i4(0)             # high=0
-        + i4(10) + i4(20) + i4(30)
+        + i4(99)  # default=99
+        + i4(-2)  # low=-2
+        + i4(0)  # high=0
+        + i4(10)
+        + i4(20)
+        + i4(30)
     )
     reader = class_reader_for_insns(data)
     insn = reader.read_instruction(0)
@@ -679,9 +687,12 @@ def test_read_code_bytes_tracks_offsets():
     # SIPUSH(3) at offset 4: 3 bytes
     # total = 7 bytes
     data = (
-        u1(0x10) + i1(1)   # BIPUSH 1 at offset 0
-        + u1(0x10) + i1(2) # BIPUSH 2 at offset 2
-        + u1(0x11) + i2(3) # SIPUSH 3 at offset 4
+        u1(0x10)
+        + i1(1)  # BIPUSH 1 at offset 0
+        + u1(0x10)
+        + i1(2)  # BIPUSH 2 at offset 2
+        + u1(0x11)
+        + i2(3)  # SIPUSH 3 at offset 4
     )
     reader = class_reader_for_insns(data)
     result = reader.read_code_bytes(7)
@@ -689,4 +700,3 @@ def test_read_code_bytes_tracks_offsets():
     assert result[0].bytecode_offset == 0
     assert result[1].bytecode_offset == 2
     assert result[2].bytecode_offset == 4
-

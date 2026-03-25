@@ -21,25 +21,25 @@ def make_jar(files: dict[str, bytes], path: Path) -> JarFile:
 # ---------------------------------------------------------------------------
 
 
-def test_read_jar_files_populated(tmp_path):
+def test_read_jar_files_populated(tmp_path: Path):
     jar = make_jar({"a.txt": b"hello", "b.class": minimal_classfile()}, tmp_path / "t.jar")
     assert len(jar.files) == 2
 
 
-def test_jar_info_has_bytes(tmp_path):
+def test_jar_info_has_bytes(tmp_path: Path):
     content = b"some content"
     jar = make_jar({"readme.txt": content}, tmp_path / "t.jar")
     key = str(Path("readme.txt"))
     assert jar.files[key].bytes == content
 
 
-def test_jar_info_has_zipinfo(tmp_path):
+def test_jar_info_has_zipinfo(tmp_path: Path):
     jar = make_jar({"readme.txt": b"x"}, tmp_path / "t.jar")
     key = str(Path("readme.txt"))
     assert isinstance(jar.files[key].zipinfo, zipfile.ZipInfo)
 
 
-def test_jar_empty(tmp_path):
+def test_jar_empty(tmp_path: Path):
     jar = make_jar({}, tmp_path / "t.jar")
     assert jar.files == {}
 
@@ -49,7 +49,7 @@ def test_jar_empty(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_parse_classes_separates_class_files(tmp_path):
+def test_parse_classes_separates_class_files(tmp_path: Path):
     jar = make_jar(
         {"Foo.class": minimal_classfile(), "README.txt": b"docs"},
         tmp_path / "t.jar",
@@ -59,7 +59,7 @@ def test_parse_classes_separates_class_files(tmp_path):
     assert len(others) == 1
 
 
-def test_parse_classes_all_non_class(tmp_path):
+def test_parse_classes_all_non_class(tmp_path: Path):
     jar = make_jar(
         {"a.txt": b"a", "b.properties": b"b=1"},
         tmp_path / "t.jar",
@@ -69,7 +69,7 @@ def test_parse_classes_all_non_class(tmp_path):
     assert len(others) == 2
 
 
-def test_parse_classes_all_classes(tmp_path):
+def test_parse_classes_all_classes(tmp_path: Path):
     jar = make_jar(
         {"A.class": minimal_classfile(), "B.class": minimal_classfile()},
         tmp_path / "t.jar",
@@ -79,7 +79,7 @@ def test_parse_classes_all_classes(tmp_path):
     assert others == []
 
 
-def test_parse_classes_returns_classreader(tmp_path):
+def test_parse_classes_returns_classreader(tmp_path: Path):
     jar = make_jar({"Foo.class": minimal_classfile()}, tmp_path / "t.jar")
     classes, _ = jar.parse_classes()
     jar_info, cr = classes[0]
@@ -87,7 +87,7 @@ def test_parse_classes_returns_classreader(tmp_path):
     assert isinstance(cr, ClassReader)
 
 
-def test_parse_classes_classreader_has_class_info(tmp_path):
+def test_parse_classes_classreader_has_class_info(tmp_path: Path):
     jar = make_jar({"Foo.class": minimal_classfile()}, tmp_path / "t.jar")
     classes, _ = jar.parse_classes()
     _, cr = classes[0]
@@ -99,7 +99,7 @@ def test_parse_classes_classreader_has_class_info(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_path_normalization(tmp_path):
+def test_path_normalization(tmp_path: Path):
     jar = make_jar(
         {"com/example/Foo.class": minimal_classfile()},
         tmp_path / "t.jar",
@@ -113,7 +113,7 @@ def test_path_normalization(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_compiled_jar_class_count(tmp_path):
+def test_compiled_jar_class_count(tmp_path: Path):
     jar_path = make_compiled_jar(
         tmp_path,
         [TEST_RESOURCES / "HelloWorld.java"],

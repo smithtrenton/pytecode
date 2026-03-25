@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import argparse
-from collections import namedtuple
 from collections.abc import Sequence
 from html.parser import HTMLParser
 from pathlib import Path
 from pprint import pformat
+from typing import NamedTuple
 from urllib.request import urlopen
 
-Inst = namedtuple("Inst", ["name", "hex", "operands"])
 WIKI_URL = "https://en.wikipedia.org/wiki/List_of_Java_bytecode_instructions"
+
+
+class Inst(NamedTuple):
+    name: str
+    hex: str
+    operands: str
 
 
 class InstructionTableParser(HTMLParser):

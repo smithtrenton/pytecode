@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -316,7 +318,9 @@ class InsnInfoType(IntEnum):
     RETW = (WIDE[0] + RET[0]), LocalIndexW
     IINCW = (WIDE[0] + IINC[0]), IIncW
 
-    def __new__(cls, value, instinfo):
+    instinfo: type[InsnInfo]
+
+    def __new__(cls, value: int, instinfo: type[InsnInfo]) -> InsnInfoType:
         obj = int.__new__(cls)
         obj._value_ = value
         obj.instinfo = instinfo
