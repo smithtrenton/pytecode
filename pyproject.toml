@@ -2,6 +2,15 @@
 requires = ["setuptools>=82.0.1"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pytecode"]
+
+[tool.setuptools.package-data]
+pytecode = ["py.typed"]
+
 [project]
 name = "pytecode"
 version = "0.0.1"
@@ -25,14 +34,13 @@ dev = [
   "ruff",
 ]
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-include = ["pytecode"]
-
-[tool.setuptools.package-data]
-pytecode = ["py.typed"]
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+include = ["pytecode", "run.py", "tools", "tests"]
+exclude = ["output", "venv", ".venv"]
+reportMissingTypeStubs = false
+reportAttributeAccessIssue = false
 
 [tool.ruff]
 target-version = "py314"
@@ -45,14 +53,6 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
-
-[tool.basedpyright]
-pythonVersion = "3.14"
-typeCheckingMode = "basic"
-include = ["pytecode", "run.py", "tools", "tests"]
-exclude = ["output", "venv", ".venv"]
-reportMissingTypeStubs = false
-reportAttributeAccessIssue = false
 
 [tool.uv]
 required-version = ">=0.10.12"

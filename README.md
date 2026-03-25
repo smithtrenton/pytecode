@@ -2,6 +2,8 @@
 
 `pytecode` is a Python 3.14 library for parsing and analyzing JVM bytecode and JAR files.
 
+See `ARCHITECTURE.md` for a summary of the current parser-focused design and the roadmap toward a full classfile manipulation library.
+
 ## Requirements
 
 - Python `3.14`

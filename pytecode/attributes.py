@@ -302,7 +302,7 @@ class RuntimeVisibleParameterAnnotationsAttr(AttributeInfo):
 
 
 @dataclass
-class RuntimeInvisbleParameterAnnotationsAttr(AttributeInfo):
+class RuntimeInvisibleParameterAnnotationsAttr(AttributeInfo):
     num_parameters: int
     parameter_annotations: list[ParameterAnnotationInfo]
 
@@ -557,8 +557,8 @@ class AttributeInfoType(Enum):
         RuntimeVisibleParameterAnnotationsAttr,
     )
     RUNTIME_INVISIBLE_PARAMETER_ANNOTATIONS = (
-        "RuntimeInvisbleParameterAnnotations",
-        RuntimeInvisbleParameterAnnotationsAttr,
+        "RuntimeInvisibleParameterAnnotations",
+        RuntimeInvisibleParameterAnnotationsAttr,
     )
     RUNTIME_VISIBLE_TYPE_ANNOTATIONS = (
         "RuntimeVisibleTypeAnnotations",

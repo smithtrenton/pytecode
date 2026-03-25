@@ -420,7 +420,7 @@ class ClassReader(BytesReader):
                 num_annotations = self.read_u2()
                 annotations = [self.read_annotation_info() for _ in range(num_annotations)]
                 parameter_annotations.append(attributes.ParameterAnnotationInfo(num_annotations, annotations))
-            return attr_class(num_annotations, annotations)
+            return attr_class(num_parameters, parameter_annotations)
 
         elif attr_type in (
             attributes.AttributeInfoType.RUNTIME_VISIBLE_TYPE_ANNOTATIONS,
@@ -431,7 +431,7 @@ class ClassReader(BytesReader):
             return attr_class(num_annotations, annotations)
 
         elif attr_type is attributes.AttributeInfoType.ANNOTATION_DEFAULT:
-            return attr_class(self.read_u2(), self.read_u4(), self.read_element_value_info())
+            return attr_class(self.read_element_value_info())
 
         elif attr_type is attributes.AttributeInfoType.BOOTSTRAP_METHODS:
             num_bootstrap_methods = self.read_u2()
@@ -459,7 +459,7 @@ class ClassReader(BytesReader):
 
         elif attr_type is attributes.AttributeInfoType.MODULE:
             module_name_index = self.read_u2()
-            module_flags = constants.ModuleAccessFlag(self.read_u2)
+            module_flags = constants.ModuleAccessFlag(self.read_u2())
             module_version_index = self.read_u2()
 
             requires_count = self.read_u2()
