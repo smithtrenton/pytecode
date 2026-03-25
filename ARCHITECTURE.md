@@ -21,25 +21,6 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 
 ### Not implemented yet
 
-- A public API for editing classfiles and bytecode
-- Frame calculation
-- Validation of manipulated classfiles
-- Emission of new `.class` bytes from an edited model
-- Descriptor and signature parsing utilities
-- Class hierarchy resolution
-
-### Known parser bugs ([#1](https://github.com/smithtrenton/pytecode/issues/1))
-
-The following bugs exist in the current parser. They do not affect the majority of classfiles but will surface on inputs that exercise the affected attribute types.
-
-1. **Module attribute: missing function call** (`class_reader.py:462`). `self.read_u2` is referenced without calling it. Should be `self.read_u2()`. This passes a method object to `ModuleAccessFlag` instead of an integer, causing Module attribute parsing to fail.
-
-2. **AnnotationDefault attribute: wrong constructor arguments** (`class_reader.py:434`). The parser passes three values (`read_u2()`, `read_u4()`, `read_element_value_info()`) but `AnnotationDefaultAttr` only accepts one field beyond the inherited base (`default_value`). The correct call is `attr_class(self.read_element_value_info())`.
-
-3. **RuntimeVisibleParameterAnnotations: wrong return variables** (`class_reader.py:423`). The return statement uses `num_annotations` and `annotations` (from the last loop iteration) instead of `num_parameters` and `parameter_annotations`. This returns incorrect data.
-
-4. **RuntimeInvisibleParameterAnnotations: attribute name typo** (`attributes.py:305,560`). The class name and enum value string spell it `"RuntimeInvisbleParameterAnnotations"` (missing `i`). Since the JVM spec name is `"RuntimeInvisibleParameterAnnotations"`, the enum lookup never matches, and these attributes silently fall through to `UnimplementedAttr`.
-
 ## Current architecture
 
 The codebase is currently organized as a parser pipeline with a strongly typed read model.
@@ -403,7 +384,7 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 
 ## Recommended implementation order
 
-1. Fix the known parser bugs documented above. ([#1](https://github.com/smithtrenton/pytecode/issues/1))
+1. ~~Fix the known parser bugs.~~ ([#1](https://github.com/smithtrenton/pytecode/issues/1) — done)
 2. Add unit tests for each attribute type, instruction operand shape, and constant-pool entry. ([#2](https://github.com/smithtrenton/pytecode/issues/2))
 3. Add descriptor and signature parsing utilities. ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 4. Introduce a writer foundation for primitive values and classfile sections. ([#4](https://github.com/smithtrenton/pytecode/issues/4))
@@ -445,7 +426,7 @@ To keep the scope focused, the project does not need to become:
 
 `pytecode` already has a solid parser-oriented foundation: typed models, complete instruction decoding, attribute parsing, and JAR integration.
 
-There are four known parser bugs that should be fixed before building on top of the parsing layer, and the test suite needs unit-level coverage to catch regressions.
+The test suite needs unit-level coverage to catch regressions.
 
 The missing work is not only "manipulate, calculate frames, validate, and emit." To fully meet the project's objective, the roadmap should also explicitly include:
 
