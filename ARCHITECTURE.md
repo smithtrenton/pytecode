@@ -17,7 +17,8 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Parsing 30 standard attribute types including annotations, stack map tables, module metadata, records, and permitted subclasses
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, and JAR handling (256 tests)
+- Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and validation — see `pytecode/descriptors.py`
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, and descriptor/signature parsing (377 tests)
 
 ### Not implemented yet
 
@@ -90,7 +91,19 @@ These dataclasses hold references to attribute and constant-pool structures defi
 
 #### `pytecode\constants.py`
 
-Enums and flags representing JVM constants, access flags, verification types, and target-type metadata.
+Enums and flags representing JVM constants, access flags, verification types, and target-type metadata. (The former `FieldType` enum was removed here and superseded by `BaseType` in `descriptors.py`.)
+
+#### `pytecode\descriptors.py`
+
+Descriptor and generic signature utilities. Provides:
+
+- **Data model**: `BaseType` enum (8 JVM primitives), `VoidType`, `ObjectType`, `ArrayType`, `MethodDescriptor` frozen dataclasses, and a full generic signature type hierarchy (`ClassTypeSignature`, `TypeVariable`, `ArrayTypeSignature`, `TypeArgument`, `TypeParameter`, `ClassSignature`, `MethodSignature`)
+- **Parsing**: `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()` — all recursive-descent, raising `ValueError` with position context on malformed input
+- **Construction**: `to_descriptor()` — converts structured types back to JVM descriptor strings (round-trip)
+- **Slot helpers**: `slot_size()` and `parameter_slot_count()` — category-aware (long/double occupy 2 slots)
+- **Validation**: `is_valid_field_descriptor()` and `is_valid_method_descriptor()`
+
+All types are imported directly from `pytecode.descriptors`.
 
 #### `pytecode\jar.py`
 
@@ -141,7 +154,6 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - There is no semantic editing layer or writer layer yet
 - Most parser behavior lives in one large module (`class_reader.py`, ~618 lines), which will become harder to evolve once mutation and emission are added
 - Parsed objects still use raw constant-pool indexes heavily, which is accurate to the classfile spec but not ideal for ergonomic transformations
-- No descriptor or signature parsing utilities exist — code that needs to understand method types must parse descriptor strings ad hoc
 - There is an existing `TODO` comment in `class_reader.py:11` noting a desire to rework the reader to use dataclass annotations for byte reading instead of manual parsing
 
 ### Test coverage
@@ -156,6 +168,7 @@ The test suite provides both integration-level and unit-level coverage (256 test
 - `test_class_reader.py` (28 tests) — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
 - `test_bytes_utils.py` (42 tests) — all primitive byte readers (U1/I1/U2/I2/U4/I4/Bytes), `BytesReader` stateful cursor, rewind, and buffer overrun.
 - `test_jar.py` (11 tests) — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
+- `test_descriptors.py` (121 tests) — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, and throws clauses.
 
 Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts.
 
@@ -386,7 +399,7 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 
 1. ~~Fix the known parser bugs.~~ ([#1](https://github.com/smithtrenton/pytecode/issues/1) — done)
 2. ~~Add unit tests for each attribute type, instruction operand shape, and constant-pool entry.~~ ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done)
-3. Add descriptor and signature parsing utilities. ([#3](https://github.com/smithtrenton/pytecode/issues/3))
+3. ~~Add descriptor and signature parsing utilities.~~ ([#3](https://github.com/smithtrenton/pytecode/issues/3) — done)
 4. Introduce a writer foundation for primitive values and classfile sections. ([#4](https://github.com/smithtrenton/pytecode/issues/4))
 5. Add constant-pool management utilities (deduplication, symbol lookup, reindexing). ([#5](https://github.com/smithtrenton/pytecode/issues/5))
 6. Design the mutable editing model and public transformation API. ([#6](https://github.com/smithtrenton/pytecode/issues/6))
