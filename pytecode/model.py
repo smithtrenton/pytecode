@@ -3,29 +3,51 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
-from .attributes import AttributeInfo, CodeAttr, ExceptionInfo
+from .attributes import (
+    AttributeInfo,
+    CodeAttr,
+    LineNumberTableAttr,
+    LocalVariableTableAttr,
+    LocalVariableTypeTableAttr,
+)
 from .class_reader import ClassReader
 from .constant_pool import ClassInfo
 from .constant_pool_builder import ConstantPoolBuilder
 from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
 from .info import ClassFile, FieldInfo, MethodInfo
-from .instructions import InsnInfo
+from .instructions import Branch, BranchW, InsnInfo, LookupSwitch, TableSwitch
+from .labels import (
+    BranchInsn,
+    CodeItem,
+    ExceptionHandler,
+    Label,
+    LineNumberEntry,
+    LocalVariableEntry,
+    LocalVariableTypeEntry,
+    LookupSwitchInsn,
+    TableSwitchInsn,
+    lower_code,
+    resolve_catch_type,
+)
 
 
 @dataclass
 class CodeModel:
     """Mutable wrapper around a method's code body.
 
-    Carries the raw instruction list, exception table, and stack/locals
-    limits from the parsed ``CodeAttr``.  This type is the extension point
-    for label-based instruction editing (#7).
+    Carries a mixed instruction stream of raw instructions plus ``Label``
+    pseudo-instructions, symbolic exception/debug metadata, and stack/local
+    limits from the parsed ``CodeAttr``.
     """
 
     max_stack: int
     max_locals: int
-    instructions: list[InsnInfo]
-    exception_table: list[ExceptionInfo]
-    attributes: list[AttributeInfo]
+    instructions: list[CodeItem] = field(default_factory=list)
+    exception_handlers: list[ExceptionHandler] = field(default_factory=list)
+    line_numbers: list[LineNumberEntry] = field(default_factory=list)
+    local_variables: list[LocalVariableEntry] = field(default_factory=list)
+    local_variable_types: list[LocalVariableTypeEntry] = field(default_factory=list)
+    attributes: list[AttributeInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -95,9 +117,7 @@ class ClassModel:
         # Resolve this_class → class name string.
         this_class_entry = cp.get(cf.this_class)
         if not isinstance(this_class_entry, ClassInfo):
-            raise ValueError(
-                f"this_class CP index {cf.this_class} is not a CONSTANT_Class"
-            )
+            raise ValueError(f"this_class CP index {cf.this_class} is not a CONSTANT_Class")
         name = cp.resolve_utf8(this_class_entry.name_index)
 
         # Resolve super_class → class name string or None.
@@ -105,9 +125,7 @@ class ClassModel:
         if cf.super_class != 0:
             super_entry = cp.get(cf.super_class)
             if not isinstance(super_entry, ClassInfo):
-                raise ValueError(
-                    f"super_class CP index {cf.super_class} is not a CONSTANT_Class"
-                )
+                raise ValueError(f"super_class CP index {cf.super_class} is not a CONSTANT_Class")
             super_name = cp.resolve_utf8(super_entry.name_index)
 
         # Resolve interfaces.
@@ -115,9 +133,7 @@ class ClassModel:
         for iface_index in cf.interfaces:
             iface_entry = cp.get(iface_index)
             if not isinstance(iface_entry, ClassInfo):
-                raise ValueError(
-                    f"interface CP index {iface_index} is not a CONSTANT_Class"
-                )
+                raise ValueError(f"interface CP index {iface_index} is not a CONSTANT_Class")
             interfaces.append(cp.resolve_utf8(iface_entry.name_index))
 
         # Convert fields.
@@ -210,13 +226,7 @@ def _method_from_info(mi: MethodInfo, cp: ConstantPoolBuilder) -> MethodModel:
 
     for attr in mi.attributes:
         if isinstance(attr, CodeAttr):
-            code = CodeModel(
-                max_stack=attr.max_stacks,
-                max_locals=attr.max_locals,
-                instructions=copy.deepcopy(attr.code),
-                exception_table=copy.deepcopy(attr.exception_table),
-                attributes=copy.deepcopy(attr.attributes),
-            )
+            code = _code_from_attr(attr, cp)
         else:
             non_code_attrs.append(copy.deepcopy(attr))
 
@@ -243,19 +253,7 @@ def _method_to_info(mm: MethodModel, cp: ConstantPoolBuilder) -> MethodInfo:
     attrs: list[AttributeInfo] = copy.deepcopy(mm.attributes)
 
     if mm.code is not None:
-        code_attr_name_index = cp.add_utf8("Code")
-        code_attr = CodeAttr(
-            attribute_name_index=code_attr_name_index,
-            attribute_length=0,  # placeholder — computed during emission
-            max_stacks=mm.code.max_stack,
-            max_locals=mm.code.max_locals,
-            code_length=0,  # placeholder — computed during emission
-            code=copy.deepcopy(mm.code.instructions),
-            exception_table_length=len(mm.code.exception_table),
-            exception_table=copy.deepcopy(mm.code.exception_table),
-            attributes_count=len(mm.code.attributes),
-            attributes=copy.deepcopy(mm.code.attributes),
-        )
+        code_attr = lower_code(mm.code, cp)
         attrs.insert(0, code_attr)
 
     return MethodInfo(
@@ -264,4 +262,261 @@ def _method_to_info(mm: MethodModel, cp: ConstantPoolBuilder) -> MethodInfo:
         descriptor_index=cp.add_utf8(mm.descriptor),
         attributes_count=len(attrs),
         attributes=attrs,
+    )
+
+
+def _validate_code_offset(offset: int, code_length: int, *, context: str) -> int:
+    if not 0 <= offset <= code_length:
+        raise ValueError(f"{context} offset {offset} is outside code range [0, {code_length}]")
+    return offset
+
+
+def _label_for_offset(labels_by_offset: dict[int, Label], offset: int) -> Label:
+    return labels_by_offset[offset]
+
+
+def _branch_target_offset(insn: Branch | BranchW, code_length: int) -> int:
+    return _validate_code_offset(
+        insn.bytecode_offset + insn.offset,
+        code_length,
+        context=f"{insn.type.name} target",
+    )
+
+
+def _collect_labels(code_attr: CodeAttr) -> dict[int, Label]:
+    labels_by_offset: dict[int, Label] = {}
+
+    def ensure_label(offset: int, *, context: str) -> None:
+        validated = _validate_code_offset(offset, code_attr.code_length, context=context)
+        labels_by_offset.setdefault(validated, Label(f"L{validated}"))
+
+    for insn in code_attr.code:
+        if isinstance(insn, (Branch, BranchW)):
+            ensure_label(_branch_target_offset(insn, code_attr.code_length), context=f"{insn.type.name} target")
+        elif isinstance(insn, LookupSwitch):
+            ensure_label(
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.default,
+                    code_attr.code_length,
+                    context="lookupswitch default target",
+                ),
+                context="lookupswitch default target",
+            )
+            for pair in insn.pairs:
+                ensure_label(
+                    _validate_code_offset(
+                        insn.bytecode_offset + pair.offset,
+                        code_attr.code_length,
+                        context="lookupswitch case target",
+                    ),
+                    context="lookupswitch case target",
+                )
+        elif isinstance(insn, TableSwitch):
+            ensure_label(
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.default,
+                    code_attr.code_length,
+                    context="tableswitch default target",
+                ),
+                context="tableswitch default target",
+            )
+            for relative in insn.offsets:
+                ensure_label(
+                    _validate_code_offset(
+                        insn.bytecode_offset + relative,
+                        code_attr.code_length,
+                        context="tableswitch case target",
+                    ),
+                    context="tableswitch case target",
+                )
+
+    for exception in code_attr.exception_table:
+        ensure_label(exception.start_pc, context="exception handler start")
+        ensure_label(exception.end_pc, context="exception handler end")
+        ensure_label(exception.handler_pc, context="exception handler target")
+
+    for attribute in code_attr.attributes:
+        if isinstance(attribute, LineNumberTableAttr):
+            for entry in attribute.line_number_table:
+                ensure_label(entry.start_pc, context="line number entry")
+        elif isinstance(attribute, LocalVariableTableAttr):
+            for entry in attribute.local_variable_table:
+                ensure_label(entry.start_pc, context="local variable start")
+                ensure_label(entry.start_pc + entry.length, context="local variable end")
+        elif isinstance(attribute, LocalVariableTypeTableAttr):
+            for entry in attribute.local_variable_type_table:
+                ensure_label(entry.start_pc, context="local variable type start")
+                ensure_label(entry.start_pc + entry.length, context="local variable type end")
+
+    return labels_by_offset
+
+
+def _lift_instruction(insn: InsnInfo, labels_by_offset: dict[int, Label], code_length: int) -> CodeItem:
+    if isinstance(insn, (Branch, BranchW)):
+        return BranchInsn(
+            insn.type,
+            _label_for_offset(labels_by_offset, _branch_target_offset(insn, code_length)),
+        )
+    if isinstance(insn, LookupSwitch):
+        return LookupSwitchInsn(
+            _label_for_offset(
+                labels_by_offset,
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.default,
+                    code_length,
+                    context="lookupswitch default target",
+                ),
+            ),
+            [
+                (
+                    pair.match,
+                    _label_for_offset(
+                        labels_by_offset,
+                        _validate_code_offset(
+                            insn.bytecode_offset + pair.offset,
+                            code_length,
+                            context="lookupswitch case target",
+                        ),
+                    ),
+                )
+                for pair in insn.pairs
+            ],
+        )
+    if isinstance(insn, TableSwitch):
+        return TableSwitchInsn(
+            _label_for_offset(
+                labels_by_offset,
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.default,
+                    code_length,
+                    context="tableswitch default target",
+                ),
+            ),
+            insn.low,
+            insn.high,
+            [
+                _label_for_offset(
+                    labels_by_offset,
+                    _validate_code_offset(
+                        insn.bytecode_offset + relative,
+                        code_length,
+                        context="tableswitch case target",
+                    ),
+                )
+                for relative in insn.offsets
+            ],
+        )
+    return copy.deepcopy(insn)
+
+
+def _lift_instructions(code_attr: CodeAttr, labels_by_offset: dict[int, Label]) -> list[CodeItem]:
+    instructions: list[CodeItem] = []
+    inserted_offsets: set[int] = set()
+
+    for insn in code_attr.code:
+        label = labels_by_offset.get(insn.bytecode_offset)
+        if label is not None and insn.bytecode_offset not in inserted_offsets:
+            instructions.append(label)
+            inserted_offsets.add(insn.bytecode_offset)
+        instructions.append(_lift_instruction(insn, labels_by_offset, code_attr.code_length))
+
+    end_label = labels_by_offset.get(code_attr.code_length)
+    if end_label is not None and code_attr.code_length not in inserted_offsets:
+        instructions.append(end_label)
+        inserted_offsets.add(code_attr.code_length)
+
+    missing_offsets = sorted(set(labels_by_offset) - inserted_offsets)
+    if missing_offsets:
+        raise ValueError(
+            "labels refer to offsets that are not instruction boundaries: "
+            + ", ".join(str(offset) for offset in missing_offsets)
+        )
+
+    return instructions
+
+
+def _lift_exception_handlers(
+    code_attr: CodeAttr,
+    labels_by_offset: dict[int, Label],
+    cp: ConstantPoolBuilder,
+) -> list[ExceptionHandler]:
+    return [
+        ExceptionHandler(
+            start=_label_for_offset(labels_by_offset, exception.start_pc),
+            end=_label_for_offset(labels_by_offset, exception.end_pc),
+            handler=_label_for_offset(labels_by_offset, exception.handler_pc),
+            catch_type=resolve_catch_type(cp, exception.catch_type),
+        )
+        for exception in code_attr.exception_table
+    ]
+
+
+def _lift_nested_code_attributes(
+    code_attr: CodeAttr,
+    labels_by_offset: dict[int, Label],
+    cp: ConstantPoolBuilder,
+) -> tuple[
+    list[LineNumberEntry],
+    list[LocalVariableEntry],
+    list[LocalVariableTypeEntry],
+    list[AttributeInfo],
+]:
+    line_numbers: list[LineNumberEntry] = []
+    local_variables: list[LocalVariableEntry] = []
+    local_variable_types: list[LocalVariableTypeEntry] = []
+    attributes: list[AttributeInfo] = []
+
+    for attribute in code_attr.attributes:
+        if isinstance(attribute, LineNumberTableAttr):
+            line_numbers.extend(
+                LineNumberEntry(
+                    label=_label_for_offset(labels_by_offset, entry.start_pc),
+                    line_number=entry.line_number,
+                )
+                for entry in attribute.line_number_table
+            )
+        elif isinstance(attribute, LocalVariableTableAttr):
+            local_variables.extend(
+                LocalVariableEntry(
+                    start=_label_for_offset(labels_by_offset, entry.start_pc),
+                    end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
+                    name=cp.resolve_utf8(entry.name_index),
+                    descriptor=cp.resolve_utf8(entry.descriptor_index),
+                    slot=entry.index,
+                )
+                for entry in attribute.local_variable_table
+            )
+        elif isinstance(attribute, LocalVariableTypeTableAttr):
+            local_variable_types.extend(
+                LocalVariableTypeEntry(
+                    start=_label_for_offset(labels_by_offset, entry.start_pc),
+                    end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
+                    name=cp.resolve_utf8(entry.name_index),
+                    signature=cp.resolve_utf8(entry.signature_index),
+                    slot=entry.index,
+                )
+                for entry in attribute.local_variable_type_table
+            )
+        else:
+            attributes.append(copy.deepcopy(attribute))
+
+    return line_numbers, local_variables, local_variable_types, attributes
+
+
+def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder) -> CodeModel:
+    labels_by_offset = _collect_labels(attr)
+    line_numbers, local_variables, local_variable_types, attributes = _lift_nested_code_attributes(
+        attr,
+        labels_by_offset,
+        cp,
+    )
+    return CodeModel(
+        max_stack=attr.max_stacks,
+        max_locals=attr.max_locals,
+        instructions=_lift_instructions(attr, labels_by_offset),
+        exception_handlers=_lift_exception_handlers(attr, labels_by_offset, cp),
+        line_numbers=line_numbers,
+        local_variables=local_variables,
+        local_variable_types=local_variable_types,
+        attributes=attributes,
     )

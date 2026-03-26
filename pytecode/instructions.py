@@ -321,7 +321,7 @@ class InsnInfoType(IntEnum):
     instinfo: type[InsnInfo]
 
     def __new__(cls, value: int, instinfo: type[InsnInfo]) -> InsnInfoType:
-        obj = int.__new__(cls)
+        obj = int.__new__(cls, value)
         obj._value_ = value
         obj.instinfo = instinfo
         return obj

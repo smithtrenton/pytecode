@@ -113,7 +113,7 @@ class ClassReader(BytesReader):
         elif instinfo is instructions.LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, npairs = self.read_i4(), self.read_u4()
-            pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_u4()) for _ in range(npairs)]
+            pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_i4()) for _ in range(npairs)]
             return instructions.LookupSwitch(inst_type, current_method_offset, default, npairs, pairs)
         elif instinfo is instructions.TableSwitch:
             self.read_align_bytes(current_method_offset + 1)

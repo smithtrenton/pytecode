@@ -2,13 +2,15 @@
 
 `pytecode` is a Python 3.14+ library for parsing, inspecting, and beginning to manipulate JVM class files, bytecode, and JAR files.
 
-See `ARCHITECTURE.md` for a summary of the current parser + Phase 1 editing model and the roadmap toward a full classfile manipulation library.
+See `ARCHITECTURE.md` for a summary of the current parser + label-aware editing model and the roadmap toward a full classfile manipulation library.
 
 ## Current public API
 
 - `pytecode.ClassReader` parses `.class` bytes eagerly into an `info.ClassFile` tree.
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, and parses classes via `ClassReader`.
-- `pytecode.ClassModel` provides the current Phase 1 mutable editing model with symbolic class, field, and method references.
+- `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references.
+
+For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, and lifted exception/debug entry types, import directly from `pytecode.labels`.
 
 ## Requirements
 

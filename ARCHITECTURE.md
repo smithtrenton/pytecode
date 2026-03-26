@@ -20,14 +20,16 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
 - Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, and mutable editing model (650 tests)
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, and mutable editing model (665 tests)
 - Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
-- Mutable editing model (Phase 1): `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` — mutable dataclasses with symbolic references (resolved names instead of CP indexes), bidirectional conversion to/from the parsed `ClassFile` model, `ConstantPoolBuilder` integration for raw attribute/instruction passthrough — see `pytecode/model.py`
+- Mutable editing model: `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` — mutable dataclasses with symbolic class/field/method references, bidirectional conversion to/from the parsed `ClassFile` model, `ConstantPoolBuilder` integration for raw operand/index passthrough, and label-aware code editing surfaces — see `pytecode/model.py`
+- Label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)): `pytecode/labels.py` introduces `Label`, symbolic branch/switch wrappers, lifted exception/debug metadata, automatic offset recalculation, switch padding recomputation, and wide-branch promotion during lowering
 
 ### Not implemented yet
 
-- Label-based instruction editing and branch-offset recalculation for safe bytecode mutation ([#7](https://github.com/smithtrenton/pytecode/issues/7))
+- Symbolic operand wrappers for non-control-flow instructions (constant-pool references, local-slot references, and other still-raw instruction operands) ([#16](https://github.com/smithtrenton/pytecode/issues/16))
 - Class hierarchy resolution, control-flow analysis, and frame/max-stack recomputation ([#8](https://github.com/smithtrenton/pytecode/issues/8), [#9](https://github.com/smithtrenton/pytecode/issues/9), [#10](https://github.com/smithtrenton/pytecode/issues/10))
+- Full debug-info and stack-map maintenance after mutation (label rebinding is now implemented, but `StackMapTable` recomputation and higher-level policies remain future work) ([#10](https://github.com/smithtrenton/pytecode/issues/10), [#13](https://github.com/smithtrenton/pytecode/issues/13))
 - Structured validation/diagnostics and binary classfile emission ([#11](https://github.com/smithtrenton/pytecode/issues/11), [#12](https://github.com/smithtrenton/pytecode/issues/12))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 
@@ -164,14 +166,24 @@ Constant-pool management utilities for building and editing JVM constant pools. 
 
 #### `pytecode\model.py`
 
-Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four types form the editing layer:
+Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four core types form the user-facing editing layer, with label-specific helpers delegated to `pytecode\labels.py`:
 
 - **`ClassModel`** — top-level mutable representation of a class file. Fields use symbolic (resolved) references: `name: str`, `super_name: str | None`, `interfaces: list[str]`, along with `access_flags`, `version: tuple[int, int]`, lists of `FieldModel` and `MethodModel`, class-level attributes, and a `ConstantPoolBuilder`. Provides `from_classfile()` and `from_bytes()` factory methods for construction, and `to_classfile()` for lowering back to a spec-faithful `ClassFile`.
-- **`MethodModel`** — mutable representation of a method with resolved `name: str` and `descriptor: str`, `access_flags`, an optional `CodeModel` (None for abstract/native methods), and non-Code attributes. The Code attribute is lifted out of the attribute list into the dedicated `code` field.
+- **`MethodModel`** — mutable representation of a method with resolved `name: str` and `descriptor: str`, `access_flags`, an optional `CodeModel` (`None` for abstract/native methods), and non-Code attributes. The raw `Code` attribute is lifted out of the attribute list into the dedicated `code` field.
 - **`FieldModel`** — mutable representation of a field with resolved `name: str` and `descriptor: str`, `access_flags`, and attributes.
-- **`CodeModel`** — wraps the instruction list, exception handler table, `max_stack`, `max_locals`, and nested Code attributes. Serves as the extension point for label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)).
+- **`CodeModel`** — wraps a mixed instruction stream (`InsnInfo` plus `Label` pseudo-instructions), symbolic exception handlers, lifted line/local-variable debug tables, `max_stack`, `max_locals`, and residual nested Code attributes. Parsed branch/switch instructions are converted into symbolic `BranchInsn`, `LookupSwitchInsn`, and `TableSwitchInsn` wrappers during `from_classfile()`, then lowered back to raw instructions during `to_classfile()`.
 
-The model carries a `ConstantPoolBuilder` seeded from the original constant pool so that raw attributes and instructions (which still contain CP indexes) remain valid through editing. Symbolic references are resolved during `from_classfile()` and re-allocated during `to_classfile()`. Both conversion directions use deep copies for all mutable raw structures (attribute lists, instruction lists, exception tables) so the `ClassModel` owns its data independently from the source `ClassFile` — consistent with the defensive-copy convention already used by `ConstantPoolBuilder`.
+The model carries a `ConstantPoolBuilder` seeded from the original constant pool so that raw attributes and any still-raw instruction operands remain valid through editing. Symbolic references are resolved during `from_classfile()` and re-allocated during `to_classfile()`. Both conversion directions use deep copies for all mutable raw structures they retain (attribute lists, instruction records, and constant-pool-backed payloads) so the `ClassModel` owns its data independently from the source `ClassFile` — consistent with the defensive-copy convention already used by `ConstantPoolBuilder`.
+
+#### `pytecode\labels.py`
+
+Label-based bytecode editing helpers and lowering utilities introduced for issue [#7](https://github.com/smithtrenton/pytecode/issues/7). This module owns the symbolic control-flow layer:
+
+- **`Label`** — identity-based pseudo-instruction marker for bytecode positions
+- **`BranchInsn` / `LookupSwitchInsn` / `TableSwitchInsn`** — editing-model control-flow instructions that target labels instead of raw offsets
+- **`ExceptionHandler` / `LineNumberEntry` / `LocalVariableEntry` / `LocalVariableTypeEntry`** — lifted exception/debug metadata bound to labels rather than byte offsets
+- **`resolve_labels()`** — computes byte offsets for labels and instructions in a mixed `InsnInfo | Label` stream
+- **`lower_code()`** — lowers symbolic code back to a raw `CodeAttr`, recalculating offsets and switch padding, promoting `GOTO`/`JSR` to wide forms, inverting overflowing conditional branches, and reconstructing lifted debug attributes
 
 For the broader design rationale, trade-offs, and future phases behind this editing model, see `DESIGN-EDITING-MODEL.md`.
 
@@ -221,12 +233,12 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 - Parsing is eager and tightly coupled to `ClassReader`
 - Most parser behavior lives in one large module (`class_reader.py`, ~653 lines), which will become harder to evolve once emission is added
-- The editing model (`model.py`) provides symbolic references for class/field/method names but still carries raw constant-pool indexes inside instructions and attributes — these will be resolved by the label system ([#7](https://github.com/smithtrenton/pytecode/issues/7)) and attribute resolution (future issues)
+- The editing model now uses labels for control flow, exception ranges, and debug scopes, but most non-control-flow instruction operands still remain raw indexes/encoded operands inside `InsnInfo` records; a symbolic operand layer is the next logical step
 - There is no classfile emission layer yet — `ClassModel.to_classfile()` produces a spec-model `ClassFile` but binary serialization requires issue [#12](https://github.com/smithtrenton/pytecode/issues/12)
 
 ### Test coverage
 
-The test suite provides both integration-level and unit-level coverage (650 tests total):
+The test suite provides both integration-level and unit-level coverage (665 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
@@ -239,7 +251,8 @@ The test suite provides both integration-level and unit-level coverage (650 test
 - `test_descriptors.py` — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, throws clauses, and invalid internal-name edge cases.
 - `test_constant_pool_builder.py` — builder deduplication, Modified UTF-8 handling, MethodHandle validation, import/export behavior, overflow guards, and defensive-copy semantics.
 - `test_modified_utf8.py` — direct Modified UTF-8 codec coverage for NUL, supplementary characters, round-tripping, and malformed byte rejection.
-- `test_model.py` — mutable editing model: from-scratch creation of `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`, `from_classfile()` symbolic resolution with error handling for malformed constant-pool references, `from_bytes()` convenience, round-trip `ClassFile → ClassModel → to_classfile()` equivalence across 11 Java fixture classes (interfaces, abstract classes, enums, multi-interface, field access flag variants, try/catch exception handlers, annotations, static initializers, generic classes with `Signature` attributes, outer/inner classes with `InnerClasses` attributes), in-place mutation (add/remove fields and methods, rename class, change access flags), and ownership-boundary tests confirming the model does not share mutable state with the source or lowered `ClassFile`.
+- `test_model.py` — mutable editing model: from-scratch creation of `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`, `from_classfile()` symbolic resolution with error handling for malformed constant-pool references, `from_bytes()` convenience, round-trip `ClassFile → ClassModel → to_classfile()` equivalence across 12 Java fixture classes (interfaces, abstract classes, enums, multi-interface, field access flag variants, try/catch exception handlers, control-flow-heavy methods with branches/`TABLESWITCH`/`LOOKUPSWITCH`, annotations, static initializers, generic classes with `Signature` attributes, outer/inner classes with `InnerClasses` attributes), in-place mutation (add/remove fields and methods, rename class, change access flags), and ownership-boundary tests confirming the model does not share mutable state with the source or lowered `ClassFile`.
+- `test_labels.py` — label/layout lowering coverage: offset resolution, adjacent/end labels, branch self-targeting, automatic `GOTO_W` promotion, conditional-branch inversion, lifted exception/debug metadata reconstruction, and symbolic lifting from both manual raw `CodeAttr` fixtures and compiled control-flow bytecode
 
 Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts. Helper utilities in `tests/helpers.py` compile focused fixtures and small JARs with `javac` during tests.
 
@@ -415,9 +428,13 @@ helpers, MethodHandle validation, and deterministic ordering, so the roadmap
 should treat it as an enabling dependency that subsequent editing/emission work
 builds on.
 
-#### 3. Symbolic labels and branch management ([#7](https://github.com/smithtrenton/pytecode/issues/7))
+#### 3. Symbolic labels and branch management ([#7](https://github.com/smithtrenton/pytecode/issues/7)) — implemented foundation
 
-Editing bytecode safely requires label-based branch targets instead of manual offset arithmetic. Labels must support forward references (needed for forward branches), must survive instruction insertion and removal, and must handle exception handler range binding. `TABLESWITCH`/`LOOKUPSWITCH` padding recalculation also depends on stable label resolution.
+Editing bytecode safely required label-based branch targets instead of manual offset arithmetic. That foundation is now in place via `pytecode\labels.py`: labels support forward references, survive instruction insertion/removal, rebind exception/debug metadata, recompute `TABLESWITCH`/`LOOKUPSWITCH` padding, and widen overflowing branches during lowering.
+
+#### 3a. Symbolic instruction operands ([#16](https://github.com/smithtrenton/pytecode/issues/16))
+
+Control flow is now symbolic, but most non-branch instructions still expose raw constant-pool indexes, local-variable slot encodings, and other operand-level details through spec-shaped `InsnInfo` records. A follow-on symbolic operand layer should add editing-model wrappers for common non-control-flow instructions (for example, constant-pool references and local-slot references) so transformations and future analyses can avoid manual raw-index bookkeeping altogether.
 
 #### 4. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3)) — implemented foundation
 
@@ -486,15 +503,16 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 4. ~~Introduce a writer foundation for primitive values and classfile sections.~~ ([#4](https://github.com/smithtrenton/pytecode/issues/4) — done)
 5. ~~Add constant-pool management utilities (deduplication, symbol lookup, reindexing).~~ ([#5](https://github.com/smithtrenton/pytecode/issues/5) — done)
 6. ~~Design the mutable editing model and public transformation API.~~ ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phase 1 done)
-7. Add label-based instruction editing with automatic offset recalculation. ([#7](https://github.com/smithtrenton/pytecode/issues/7))
-8. Add a pluggable class hierarchy resolver. ([#8](https://github.com/smithtrenton/pytecode/issues/8))
-9. Build control-flow graph construction and stack/local simulation. ([#9](https://github.com/smithtrenton/pytecode/issues/9))
-10. Implement max stack, max locals, and stack map frame recomputation. ([#10](https://github.com/smithtrenton/pytecode/issues/10))
-11. Implement validation with structured diagnostics and version-aware rules. ([#11](https://github.com/smithtrenton/pytecode/issues/11))
-12. Add classfile emission with deterministic constant-pool layout. ([#12](https://github.com/smithtrenton/pytecode/issues/12))
-13. Add debug info rebinding utilities. ([#13](https://github.com/smithtrenton/pytecode/issues/13))
-14. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14))
-15. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))
+7. ~~Add label-based instruction editing with automatic offset recalculation.~~ ([#7](https://github.com/smithtrenton/pytecode/issues/7) — done)
+8. Add symbolic instruction operand wrappers for non-control-flow instructions. ([#16](https://github.com/smithtrenton/pytecode/issues/16))
+9. Add a pluggable class hierarchy resolver. ([#8](https://github.com/smithtrenton/pytecode/issues/8))
+10. Build control-flow graph construction and stack/local simulation. ([#9](https://github.com/smithtrenton/pytecode/issues/9))
+11. Implement max stack, max locals, and stack map frame recomputation. ([#10](https://github.com/smithtrenton/pytecode/issues/10))
+12. Implement validation with structured diagnostics and version-aware rules. ([#11](https://github.com/smithtrenton/pytecode/issues/11))
+13. Add classfile emission with deterministic constant-pool layout. ([#12](https://github.com/smithtrenton/pytecode/issues/12))
+14. Broaden debug info management beyond label rebinding. ([#13](https://github.com/smithtrenton/pytecode/issues/13) — partially addressed)
+15. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14))
+16. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 
 ## Recommended quality gates
 
@@ -520,21 +538,20 @@ To keep the scope focused, the project does not need to become:
 
 ## Summary
 
-`pytecode` has a solid parser-oriented foundation — typed models, complete instruction decoding, attribute parsing, JAR integration — and now a mutable editing model (`ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`) with symbolic references and bidirectional conversion to/from the parsed `ClassFile`.
+`pytecode` has a solid parser-oriented foundation — typed models, complete instruction decoding, attribute parsing, JAR integration — and now a mutable editing model (`ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`) with symbolic class references, label-based control-flow editing, lifted exception/debug metadata, and bidirectional conversion to/from the parsed `ClassFile`.
 
-The test suite has unit-level coverage across all modules (650 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, Modified UTF-8 behavior, descriptor validation, constant-pool builder safety, binary writer primitives, and mutable model round-trip verification across 11 Java fixture classes.
+The test suite has unit-level coverage across all modules (665 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, Modified UTF-8 behavior, descriptor validation, constant-pool builder safety, binary writer primitives, label/layout lowering, and mutable model round-trip verification across 12 Java fixture classes.
 
-The remaining work is centered on instruction-level editing, analysis,
-validation, and emission. The roadmap continues with:
+The remaining work is centered on symbolic operand coverage beyond control flow, deeper analysis, validation, and emission. The roadmap continues with:
 
-- symbolic branch/label handling and instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7))
+- symbolic instruction operands beyond control-flow labels ([#16](https://github.com/smithtrenton/pytecode/issues/16))
 - classfile writing infrastructure ([#12](https://github.com/smithtrenton/pytecode/issues/12))
 - control-flow and data-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9))
 - class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8))
 - max stack/max locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10))
 - version-aware validation ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 - structured diagnostics
-- debug info management during mutation ([#13](https://github.com/smithtrenton/pytecode/issues/13))
+- broader debug info and stack-map management during mutation ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#10](https://github.com/smithtrenton/pytecode/issues/10))
 - round-trip and JVM compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - composable transform pipelines (Phase 2 of [#6](https://github.com/smithtrenton/pytecode/issues/6))
 

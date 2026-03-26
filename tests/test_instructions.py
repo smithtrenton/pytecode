@@ -27,6 +27,11 @@ from tests.helpers import class_reader_for_insns, i1, i2, i4, u1, u2, u4
 # ---------------------------------------------------------------------------
 
 
+def test_insn_info_type_preserves_integer_value():
+    assert int(InsnInfoType.IFEQ) == 0x99
+    assert int(InsnInfoType.GOTO_W) == 0xC8
+
+
 def test_nop():
     reader = class_reader_for_insns(u1(0x00))
     insn = reader.read_instruction(0)
@@ -447,7 +452,7 @@ def test_multianewarray():
 
 
 # ---------------------------------------------------------------------------
-# LookupSwitch — 4-byte aligned, i4 default, u4 npairs, [i4 match, u4 offset]*
+# LookupSwitch — 4-byte aligned, i4 default, u4 npairs, [i4 match, i4 offset]*
 #
 # Padding: align_bytes = (4 - (current_method_offset+1) % 4) % 4
 # At current_method_offset=0: (4 - 1%4) % 4 = 3 padding bytes
@@ -509,6 +514,23 @@ def test_lookupswitch_negative_match():
     assert len(insn.pairs) == 1
     assert insn.pairs[0].match == -2147483648
     assert insn.pairs[0].offset == 99
+
+
+def test_lookupswitch_negative_offset():
+    data = (
+        u1(0xAB)  # LOOKUPSWITCH opcode
+        + b"\x00\x00\x00"  # 3 padding bytes
+        + i4(0)  # default=0
+        + u4(1)  # npairs=1
+        + i4(7)
+        + i4(-12)  # pair: match=7, offset=-12
+    )
+    reader = class_reader_for_insns(data)
+    insn = reader.read_instruction(0)
+    assert isinstance(insn, LookupSwitch)
+    assert len(insn.pairs) == 1
+    assert insn.pairs[0].match == 7
+    assert insn.pairs[0].offset == -12
 
 
 def test_lookupswitch_aligned_at_offset_3():

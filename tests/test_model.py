@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from pytecode import constant_pool as cp_module
-from pytecode.attributes import CodeAttr, ExceptionInfo, InnerClassesAttr, SignatureAttr, SyntheticAttr
+from pytecode.attributes import CodeAttr, InnerClassesAttr, SignatureAttr, SyntheticAttr
 from pytecode.constant_pool_builder import ConstantPoolBuilder
 from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
 from pytecode.info import ClassFile
+from pytecode.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
 from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.modified_utf8 import decode_modified_utf8
 from tests.helpers import (
@@ -79,6 +80,11 @@ def generic_class(tmp_path: Path) -> Path:
 @pytest.fixture
 def outer_class(tmp_path: Path) -> Path:
     return compile_java_resource(tmp_path, "Outer.java")
+
+
+@pytest.fixture
+def control_flow_class(tmp_path: Path) -> Path:
+    return compile_java_resource(tmp_path, "ControlFlowExample.java")
 
 
 # ---------------------------------------------------------------------------
@@ -235,12 +241,13 @@ class TestFromScratchCreation:
             max_stack=2,
             max_locals=1,
             instructions=[],
-            exception_table=[],
+            exception_handlers=[],
             attributes=[],
         )
         assert code.max_stack == 2
         assert code.max_locals == 1
         assert code.instructions == []
+        assert code.exception_handlers == []
 
     def test_fields_and_methods_are_mutable(self) -> None:
         cls = ClassModel(
@@ -507,27 +514,53 @@ class TestFieldShowcaseModel:
 
 
 class TestTryCatchModel:
-    def test_exception_table_present(self, try_catch_class: Path) -> None:
+    def test_exception_handlers_present(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
         safe_div = _find_method(model, "safeDivide")
         assert safe_div.code is not None
-        assert len(safe_div.code.exception_table) > 0
+        assert len(safe_div.code.exception_handlers) > 0
 
     def test_multi_catch_handlers(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
         multi = _find_method(model, "multiCatch")
         assert multi.code is not None
-        assert len(multi.code.exception_table) >= 2
+        assert len(multi.code.exception_handlers) >= 2
 
-    def test_exception_info_is_raw(self, try_catch_class: Path) -> None:
+    def test_exception_handlers_are_symbolic(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
         safe_div = _find_method(model, "safeDivide")
         assert safe_div.code is not None
-        for ex in safe_div.code.exception_table:
-            assert isinstance(ex, ExceptionInfo)
-            assert isinstance(ex.start_pc, int)
-            assert isinstance(ex.end_pc, int)
-            assert isinstance(ex.handler_pc, int)
+        for ex in safe_div.code.exception_handlers:
+            assert isinstance(ex, ExceptionHandler)
+            assert isinstance(ex.start, Label)
+            assert isinstance(ex.end, Label)
+            assert isinstance(ex.handler, Label)
+            assert ex.catch_type is None or isinstance(ex.catch_type, str)
+
+
+class TestControlFlowModel:
+    def test_branch_instructions_are_symbolic(self, control_flow_class: Path) -> None:
+        model = ClassModel.from_bytes(control_flow_class.read_bytes())
+        loop_sum = _find_method(model, "loopSum")
+        assert loop_sum.code is not None
+        assert any(isinstance(item, BranchInsn) for item in loop_sum.code.instructions)
+        assert any(isinstance(item, Label) for item in loop_sum.code.instructions)
+
+    def test_switch_instructions_are_symbolic(self, control_flow_class: Path) -> None:
+        model = ClassModel.from_bytes(control_flow_class.read_bytes())
+        dense_switch = _find_method(model, "denseSwitch")
+        sparse_switch = _find_method(model, "sparseSwitch")
+        assert dense_switch.code is not None
+        assert sparse_switch.code is not None
+        assert any(isinstance(item, TableSwitchInsn) for item in dense_switch.code.instructions)
+        assert any(isinstance(item, LookupSwitchInsn) for item in sparse_switch.code.instructions)
+
+    def test_line_numbers_are_lifted(self, control_flow_class: Path) -> None:
+        model = ClassModel.from_bytes(control_flow_class.read_bytes())
+        branch = _find_method(model, "branch")
+        assert branch.code is not None
+        assert len(branch.code.line_numbers) > 0
+        assert all(isinstance(entry.label, Label) for entry in branch.code.line_numbers)
 
 
 class TestAnnotatedClassModel:
@@ -580,9 +613,7 @@ class TestRoundTrip:
         assert restored.minor_version == original.minor_version
 
         # Resolved names should match original.
-        assert _resolve_class_name(restored, restored.this_class) == _resolve_class_name(
-            original, original.this_class
-        )
+        assert _resolve_class_name(restored, restored.this_class) == _resolve_class_name(original, original.this_class)
 
         if original.super_class != 0:
             assert _resolve_class_name(restored, restored.super_class) == _resolve_class_name(
@@ -605,9 +636,7 @@ class TestRoundTrip:
         for orig_f, rest_f in zip(original.fields, restored.fields, strict=True):
             assert rest_f.access_flags == orig_f.access_flags
             assert _resolve_utf8(restored, rest_f.name_index) == _resolve_utf8(original, orig_f.name_index)
-            assert _resolve_utf8(restored, rest_f.descriptor_index) == _resolve_utf8(
-                original, orig_f.descriptor_index
-            )
+            assert _resolve_utf8(restored, rest_f.descriptor_index) == _resolve_utf8(original, orig_f.descriptor_index)
             assert rest_f.attributes_count == orig_f.attributes_count
             assert rest_f.attributes == orig_f.attributes
 
@@ -616,9 +645,7 @@ class TestRoundTrip:
         for orig_m, rest_m in zip(original.methods, restored.methods, strict=True):
             assert rest_m.access_flags == orig_m.access_flags
             assert _resolve_utf8(restored, rest_m.name_index) == _resolve_utf8(original, orig_m.name_index)
-            assert _resolve_utf8(restored, rest_m.descriptor_index) == _resolve_utf8(
-                original, orig_m.descriptor_index
-            )
+            assert _resolve_utf8(restored, rest_m.descriptor_index) == _resolve_utf8(original, orig_m.descriptor_index)
 
             # Code attribute presence.
             orig_code = next((a for a in orig_m.attributes if isinstance(a, CodeAttr)), None)
@@ -670,6 +697,9 @@ class TestRoundTrip:
 
     def test_roundtrip_outer_class(self, outer_class: Path) -> None:
         self._assert_roundtrip(outer_class)
+
+    def test_roundtrip_control_flow(self, control_flow_class: Path) -> None:
+        self._assert_roundtrip(control_flow_class)
 
     def test_roundtrip_from_scratch(self) -> None:
         """A from-scratch model should round-trip through to_classfile."""
