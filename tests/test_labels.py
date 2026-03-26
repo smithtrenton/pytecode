@@ -18,7 +18,23 @@ from pytecode.class_reader import ClassReader
 from pytecode.constant_pool_builder import ConstantPoolBuilder
 from pytecode.constants import ClassAccessFlag, MethodAccessFlag
 from pytecode.info import ClassFile, MethodInfo
-from pytecode.instructions import Branch, BranchW, InsnInfo, InsnInfoType
+from pytecode.instructions import (
+    ArrayType,
+    Branch,
+    BranchW,
+    ByteValue,
+    ConstPoolIndex,
+    IInc,
+    InsnInfo,
+    InsnInfoType,
+    InvokeDynamic,
+    InvokeInterface,
+    LocalIndex,
+    LocalIndexW,
+    MultiANewArray,
+    NewArray,
+    ShortValue,
+)
 from pytecode.labels import (
     BranchInsn,
     ExceptionHandler,
@@ -342,3 +358,418 @@ def test_from_classfile_uses_symbolic_branch_and_switch_wrappers(control_flow_cl
 
     assert sparse_switch.code is not None
     assert any(isinstance(item, LookupSwitchInsn) for item in sparse_switch.code.instructions)
+
+
+def test_lower_code_promotes_goto_backward_overflow() -> None:
+    far_back = Label("far_back")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            far_back,
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(33000)],
+            BranchInsn(InsnInfoType.GOTO, far_back),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert isinstance(lowered.code[-1], BranchW)
+    assert lowered.code[-1].type == InsnInfoType.GOTO_W
+    assert lowered.code[-1].offset < -32768
+
+
+def test_lower_code_promotes_jsr_to_jsr_w() -> None:
+    far_target = Label("far")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(InsnInfoType.JSR, far_target),
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(33000)],
+            far_target,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert isinstance(lowered.code[0], BranchW)
+    assert lowered.code[0].type == InsnInfoType.JSR_W
+    assert lowered.code[0].offset > 32767
+
+
+def test_lower_code_no_promotion_needed() -> None:
+    near_target = Label("near")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(InsnInfoType.GOTO, near_target),
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(10)],
+            near_target,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert isinstance(lowered.code[0], Branch)
+    assert lowered.code[0].type == InsnInfoType.GOTO
+    assert len(lowered.code) == 12  # GOTO + 10 NOPs + RETURN
+
+
+_CONDITIONAL_INVERSION_PAIRS = [
+    (InsnInfoType.IFEQ, InsnInfoType.IFNE),
+    (InsnInfoType.IFNE, InsnInfoType.IFEQ),
+    (InsnInfoType.IFLT, InsnInfoType.IFGE),
+    (InsnInfoType.IFGE, InsnInfoType.IFLT),
+    (InsnInfoType.IFGT, InsnInfoType.IFLE),
+    (InsnInfoType.IFLE, InsnInfoType.IFGT),
+    (InsnInfoType.IF_ICMPEQ, InsnInfoType.IF_ICMPNE),
+    (InsnInfoType.IF_ICMPNE, InsnInfoType.IF_ICMPEQ),
+    (InsnInfoType.IF_ICMPLT, InsnInfoType.IF_ICMPGE),
+    (InsnInfoType.IF_ICMPGE, InsnInfoType.IF_ICMPLT),
+    (InsnInfoType.IF_ICMPGT, InsnInfoType.IF_ICMPLE),
+    (InsnInfoType.IF_ICMPLE, InsnInfoType.IF_ICMPGT),
+    (InsnInfoType.IF_ACMPEQ, InsnInfoType.IF_ACMPNE),
+    (InsnInfoType.IF_ACMPNE, InsnInfoType.IF_ACMPEQ),
+    (InsnInfoType.IFNULL, InsnInfoType.IFNONNULL),
+    (InsnInfoType.IFNONNULL, InsnInfoType.IFNULL),
+]
+
+
+@pytest.mark.parametrize(
+    "branch_type,inverted_type",
+    _CONDITIONAL_INVERSION_PAIRS,
+    ids=lambda t: t.name,
+)
+def test_lower_code_inverts_all_conditional_branches(
+    branch_type: InsnInfoType, inverted_type: InsnInfoType
+) -> None:
+    far_target = Label("far")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(branch_type, far_target),
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(33000)],
+            far_target,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert isinstance(lowered.code[0], Branch)
+    assert lowered.code[0].type == inverted_type
+    assert isinstance(lowered.code[1], BranchW)
+    assert lowered.code[1].type == InsnInfoType.GOTO_W
+
+
+def test_lower_code_cascading_promotion() -> None:
+    label_a = Label("label_a")
+    label_b = Label("label_b")
+    # Initial layout:
+    #   GOTO_A at 0 (3 bytes) → label_a at 32766  →  offset 32766 (fits i2: ≤ 32767)
+    #   GOTO_B at 3 (3 bytes) → label_b at 32771  →  offset 32768 (overflows i2)
+    # After round 1 GOTO_B is widened to GOTO_W (+2 bytes), label_a shifts to 32768.
+    # Now GOTO_A's offset becomes 32768 > 32767, triggering a second promotion.
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(InsnInfoType.GOTO, label_a),
+            BranchInsn(InsnInfoType.GOTO, label_b),
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(32760)],
+            label_a,
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(5)],
+            label_b,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert isinstance(lowered.code[0], BranchW)
+    assert lowered.code[0].type == InsnInfoType.GOTO_W
+    assert isinstance(lowered.code[1], BranchW)
+    assert lowered.code[1].type == InsnInfoType.GOTO_W
+
+
+@pytest.mark.parametrize(
+    "insn, prefix_nops, expected_size",
+    [
+        # InsnInfo (NOP) → 1 byte
+        (InsnInfo(InsnInfoType.NOP, -1), 0, 1),
+        # LocalIndex (ILOAD) → 2 bytes
+        (LocalIndex(InsnInfoType.ILOAD, -1, 0), 0, 2),
+        # LocalIndexW (WIDE ILOAD) → 4 bytes
+        (LocalIndexW(InsnInfoType.ILOADW, -1, 0), 0, 4),
+        # ConstPoolIndex (LDC_W) → 3 bytes
+        (ConstPoolIndex(InsnInfoType.LDC_W, -1, 0), 0, 3),
+        # ByteValue (BIPUSH) → 2 bytes
+        (ByteValue(InsnInfoType.BIPUSH, -1, 0), 0, 2),
+        # ShortValue (SIPUSH) → 3 bytes
+        (ShortValue(InsnInfoType.SIPUSH, -1, 0), 0, 3),
+        # BranchInsn targeting a Branch opcode (GOTO) → 3 bytes
+        (BranchInsn(InsnInfoType.GOTO, Label("target")), 0, 3),
+        # BranchInsn targeting a BranchW opcode (GOTO_W) → 5 bytes
+        (BranchInsn(InsnInfoType.GOTO_W, Label("target")), 0, 5),
+        # IInc (IINC) → 3 bytes
+        (IInc(InsnInfoType.IINC, -1, 0, 1), 0, 3),
+        # InvokeDynamic → 5 bytes
+        (InvokeDynamic(InsnInfoType.INVOKEDYNAMIC, -1, 0, b"\x00\x00"), 0, 5),
+        # InvokeInterface → 5 bytes
+        (InvokeInterface(InsnInfoType.INVOKEINTERFACE, -1, 0, 1, b"\x00"), 0, 5),
+        # NewArray → 2 bytes
+        (NewArray(InsnInfoType.NEWARRAY, -1, ArrayType.INT), 0, 2),
+        # MultiANewArray → 4 bytes
+        (MultiANewArray(InsnInfoType.MULTIANEWARRAY, -1, 0, 2), 0, 4),
+        # LookupSwitchInsn at offset 0 (padding=3), 2 pairs → 1+3+8+16 = 28 bytes
+        (LookupSwitchInsn(Label("d"), [(1, Label("c1")), (2, Label("c2"))]), 0, 28),
+        # LookupSwitchInsn at offset 1 (padding=2), 2 pairs → 1+2+8+16 = 27 bytes
+        (LookupSwitchInsn(Label("d"), [(1, Label("c1")), (2, Label("c2"))]), 1, 27),
+        # LookupSwitchInsn at offset 2 (padding=1), 2 pairs → 1+1+8+16 = 26 bytes
+        (LookupSwitchInsn(Label("d"), [(1, Label("c1")), (2, Label("c2"))]), 2, 26),
+        # LookupSwitchInsn at offset 3 (padding=0), 2 pairs → 1+0+8+16 = 25 bytes
+        (LookupSwitchInsn(Label("d"), [(1, Label("c1")), (2, Label("c2"))]), 3, 25),
+        # TableSwitchInsn at offset 0 (padding=3), low=0 high=2 → 1+3+12+12 = 28 bytes
+        (TableSwitchInsn(Label("d"), 0, 2, [Label("t0"), Label("t1"), Label("t2")]), 0, 28),
+        # TableSwitchInsn at offset 1 (padding=2), low=0 high=2 → 1+2+12+12 = 27 bytes
+        (TableSwitchInsn(Label("d"), 0, 2, [Label("t0"), Label("t1"), Label("t2")]), 1, 27),
+    ],
+)
+def test_instruction_byte_size(insn: InsnInfo, prefix_nops: int, expected_size: int) -> None:
+    items: list[InsnInfo | Label] = [*[InsnInfo(InsnInfoType.NOP, -1) for _ in range(prefix_nops)], insn]
+    resolution = resolve_labels(items)
+    assert resolution.total_code_length == prefix_nops + expected_size
+
+
+def test_lower_code_remove_instruction_updates_offset() -> None:
+    target_label = Label("target")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(InsnInfoType.GOTO, target_label),
+            InsnInfo(InsnInfoType.NOP, -1),
+            InsnInfo(InsnInfoType.NOP, -1),
+            InsnInfo(InsnInfoType.NOP, -1),
+            target_label,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    # GOTO(3) + NOP + NOP + NOP = 6 bytes; target at offset 6
+    first = lower_code(code, ConstantPoolBuilder())
+    assert isinstance(first.code[0], Branch)
+    assert first.code[0].offset == 6
+
+    # Remove one NOP; target shifts to offset 5
+    code.instructions.pop(3)
+    second = lower_code(code, ConstantPoolBuilder())
+    assert isinstance(second.code[0], Branch)
+    assert second.code[0].offset == 5
+
+
+def test_lower_code_insert_triggers_goto_w_promotion() -> None:
+    target = Label("target")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            BranchInsn(InsnInfoType.GOTO, target),
+            *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(32764)],
+            target,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    # GOTO(3) + 32764 NOPs = target at offset 32767; just fits in i2
+    first = lower_code(code, ConstantPoolBuilder())
+    assert isinstance(first.code[0], Branch)
+    assert first.code[0].offset == 32767
+
+    # One extra NOP pushes the target past the i2 boundary
+    code.instructions.insert(1, InsnInfo(InsnInfoType.NOP, -1))
+    second = lower_code(code, ConstantPoolBuilder())
+    assert isinstance(second.code[0], BranchW)
+    assert second.code[0].type == InsnInfoType.GOTO_W
+    assert second.code[0].offset > 32767
+
+
+def test_lower_code_add_exception_handler_dynamically() -> None:
+    start = Label("start")
+    end = Label("end")
+    handler = Label("handler")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            start,
+            InsnInfo(InsnInfoType.NOP, -1),
+            end,
+            handler,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    first = lower_code(code, ConstantPoolBuilder())
+    assert first.exception_table == []
+
+    code.exception_handlers.append(ExceptionHandler(start, end, handler, None))
+    second = lower_code(code, ConstantPoolBuilder())
+
+    assert len(second.exception_table) == 1
+    assert second.exception_table[0].start_pc == 0
+    assert second.exception_table[0].end_pc == 1
+    assert second.exception_table[0].handler_pc == 1
+
+
+def test_lower_code_add_line_number_entry() -> None:
+    start = Label("start")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            start,
+            InsnInfo(InsnInfoType.NOP, -1),
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    first = lower_code(code, ConstantPoolBuilder())
+    assert not any(isinstance(attr, LineNumberTableAttr) for attr in first.attributes)
+
+    code.line_numbers.append(LineNumberEntry(start, 42))
+    second = lower_code(code, ConstantPoolBuilder())
+
+    line_table = next(attr for attr in second.attributes if isinstance(attr, LineNumberTableAttr))
+    assert line_table.line_number_table[0].line_number == 42
+
+
+def test_lower_code_dangling_label_allowed() -> None:
+    dangling = Label("dangling")
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[
+            dangling,
+            InsnInfo(InsnInfoType.NOP, -1),
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert lowered.code_length == 2
+
+
+def test_lower_code_large_method_near_limit() -> None:
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[InsnInfo(InsnInfoType.NOP, -1) for _ in range(65535)],
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert lowered.code_length == 65535
+
+
+def test_lower_code_exceeds_code_length_limit() -> None:
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=[InsnInfo(InsnInfoType.NOP, -1) for _ in range(65536)],
+    )
+
+    with pytest.raises(ValueError, match="exceeds JVM maximum of 65535 bytes"):
+        lower_code(code, ConstantPoolBuilder())
+
+
+def test_resolve_labels_linear_code() -> None:
+    items: list[InsnInfo | Label] = [
+        InsnInfo(InsnInfoType.NOP, -1),
+        InsnInfo(InsnInfoType.NOP, -1),
+        InsnInfo(InsnInfoType.NOP, -1),
+    ]
+
+    resolution = resolve_labels(items)
+
+    assert resolution.instruction_offsets == [0, 1, 2]
+    assert resolution.total_code_length == 3
+    assert resolution.label_offsets == {}
+
+
+def test_resolve_labels_forward_branch() -> None:
+    label = Label("target")
+    items = [
+        BranchInsn(InsnInfoType.GOTO, label),
+        InsnInfo(InsnInfoType.NOP, -1),
+        label,
+        InsnInfo(InsnInfoType.RETURN, -1),
+    ]
+
+    resolution = resolve_labels(items)
+
+    assert resolution.label_offsets[label] == 4
+    assert resolution.total_code_length == 5
+
+
+def test_resolve_labels_backward_branch() -> None:
+    label = Label("loop")
+    items = [
+        label,
+        InsnInfo(InsnInfoType.NOP, -1),
+        BranchInsn(InsnInfoType.GOTO, label),
+        InsnInfo(InsnInfoType.RETURN, -1),
+    ]
+
+    resolution = resolve_labels(items)
+
+    assert resolution.label_offsets[label] == 0
+    assert resolution.instruction_offsets[0] == 0  # label
+    assert resolution.instruction_offsets[1] == 0  # NOP
+    assert resolution.instruction_offsets[2] == 1  # GOTO
+    assert resolution.instruction_offsets[3] == 4  # RETURN
+    assert resolution.total_code_length == 5
+
+
+def test_resolve_labels_multiple_branches_same_label() -> None:
+    target = Label("target")
+    items = [
+        BranchInsn(InsnInfoType.GOTO, target),
+        BranchInsn(InsnInfoType.GOTO, target),
+        target,
+        InsnInfo(InsnInfoType.RETURN, -1),
+    ]
+
+    resolution = resolve_labels(items)
+
+    assert len(resolution.label_offsets) == 1
+    assert resolution.label_offsets[target] == 6
+    assert resolution.instruction_offsets[0] == 0
+    assert resolution.instruction_offsets[1] == 3
+    assert resolution.total_code_length == 7
+
+
+def test_resolve_labels_empty_list() -> None:
+    resolution = resolve_labels([])
+
+    assert resolution.total_code_length == 0
+    assert resolution.label_offsets == {}
+    assert resolution.instruction_offsets == []
+
+
+def test_resolve_labels_duplicate_label_raises() -> None:
+    label = Label("dup")
+    items = [
+        label,
+        InsnInfo(InsnInfoType.NOP, -1),
+        label,
+    ]
+
+    with pytest.raises(ValueError):
+        resolve_labels(items)
