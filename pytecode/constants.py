@@ -84,19 +84,6 @@ class FieldAccessFlag(IntFlag):
     ENUM = 0x4000
 
 
-class FieldType(Enum):
-    BYTE = "B"
-    CHAR = "C"
-    DOUBLE = "D"
-    FLOAT = "F"
-    INT = "I"
-    LONG = "J"
-    REF = "L"
-    SHORT = "S"
-    BOOL = "Z"
-    ARRAY = "["
-
-
 class TargetType(IntEnum):
     TYPE_PARAMETER_GENERIC_CLASS_OR_INTERFACE = 0x00
     TYPE_PARAMETER_GENERIC_METHOD_OR_CONSTRUCTOR = 0x01
