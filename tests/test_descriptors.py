@@ -105,6 +105,14 @@ class TestParseFieldDescriptor:
         with pytest.raises(ValueError, match="empty class name"):
             parse_field_descriptor("L;")
 
+    def test_object_type_rejects_dotted_internal_name(self) -> None:
+        with pytest.raises(ValueError, match="invalid character '\\.' in class name"):
+            parse_field_descriptor("Ljava.lang.String;")
+
+    def test_object_type_rejects_empty_path_segments(self) -> None:
+        with pytest.raises(ValueError, match="empty class name segment"):
+            parse_field_descriptor("Ljava//lang/String;")
+
     def test_array_without_component(self) -> None:
         with pytest.raises(ValueError, match="unexpected end"):
             parse_field_descriptor("[")
@@ -428,6 +436,14 @@ class TestParseFieldSignature:
         assert isinstance(result, ArrayTypeSignature)
         assert isinstance(result.component, ClassTypeSignature)
         assert result.component.name == "List"
+
+    def test_rejects_empty_class_name_segments(self) -> None:
+        with pytest.raises(ValueError, match="empty class name segment"):
+            parse_field_signature("Ljava//util/List;")
+
+    def test_rejects_empty_inner_class_name(self) -> None:
+        with pytest.raises(ValueError, match="empty inner class name"):
+            parse_field_signature("LFoo.;")
 
 
 # ===================================================================

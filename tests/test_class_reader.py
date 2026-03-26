@@ -8,6 +8,7 @@ import pytest
 from pytecode import attributes, constants, info, instructions
 from pytecode import constant_pool as cp_module
 from pytecode.class_reader import ClassReader, MalformedClassException
+from pytecode.modified_utf8 import decode_modified_utf8
 from tests.helpers import (
     class_entry_bytes,
     compile_java_resource,
@@ -25,7 +26,7 @@ def _method_by_name(cf: info.ClassFile, name: str) -> info.MethodInfo:
     for method in cf.methods:
         entry = cf.constant_pool[method.name_index]
         assert isinstance(entry, cp_module.Utf8Info)
-        if entry.str_bytes.decode("utf8") == name:
+        if decode_modified_utf8(entry.str_bytes) == name:
             return method
     raise AssertionError(f"Method {name!r} not found")
 

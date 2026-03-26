@@ -4,6 +4,7 @@ import os
 
 from . import attributes, constant_pool, constants, info, instructions
 from .bytes_utils import BytesReader
+from .modified_utf8 import decode_modified_utf8
 
 
 class MalformedClassException(Exception):
@@ -255,7 +256,7 @@ class ClassReader(BytesReader):
         if not isinstance(name_cp, constant_pool.Utf8Info):
             raise ValueError(f"name_index({name_index}) should be Utf8Info, not {type(name_cp)}")
 
-        name = name_cp.str_bytes.decode("utf8")
+        name = decode_modified_utf8(name_cp.str_bytes)
         attr_type = attributes.AttributeInfoType(name)
 
         if attr_type is attributes.AttributeInfoType.SYNTHETIC:

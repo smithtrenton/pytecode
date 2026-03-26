@@ -17,9 +17,11 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Parsing 30 standard attribute types including annotations, stack map tables, module metadata, records, and permitted subclasses
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
-- Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and validation — see `pytecode/descriptors.py`
+- Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, and descriptor/signature parsing (430 tests)
+- Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, and constant-pool builder hardening (562 tests)
+- Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
 
 ### Not implemented yet
 
@@ -72,9 +74,26 @@ It also contains specialized parsing routines for:
 
 This module is the current orchestration layer for nearly all parsing logic.
 
+When constant-pool-backed names are interpreted (for example, attribute names),
+they are decoded using the shared JVM Modified UTF-8 helpers rather than plain
+UTF-8.
+
 #### `pytecode\constant_pool.py`
 
 Typed dataclasses for all 17 constant-pool entry types plus the `ConstantPoolInfoType` enum mapping tags to dataclasses. The enum embeds both the numeric tag and the corresponding dataclass, so new constant types only require adding an enum member.
+
+#### `pytecode\modified_utf8.py`
+
+Shared JVM Modified UTF-8 codec helpers for `CONSTANT_Utf8` values. This module
+centralizes spec-correct encoding and decoding of:
+
+- embedded NUL (`U+0000`) using the two-byte modified form
+- supplementary characters via UTF-16 surrogate pairs
+- malformed byte-sequence rejection (for example, illegal four-byte UTF-8 forms)
+
+It is used by `ConstantPoolBuilder`, `ClassReader`, and test helpers so
+constant-pool string handling stays consistent across parsing, editing, and
+fixtures.
 
 #### `pytecode\attributes.py`
 
@@ -103,12 +122,26 @@ Enums and flags representing JVM constants, access flags, verification types, an
 Descriptor and generic signature utilities. Provides:
 
 - **Data model**: `BaseType` enum (8 JVM primitives), `VoidType`, `ObjectType`, `ArrayType`, `MethodDescriptor` frozen dataclasses, and a full generic signature type hierarchy (`ClassTypeSignature`, `TypeVariable`, `ArrayTypeSignature`, `TypeArgument`, `TypeParameter`, `ClassSignature`, `MethodSignature`)
-- **Parsing**: `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()` — all recursive-descent, raising `ValueError` with position context on malformed input
+- **Parsing**: `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()` — all recursive-descent, raising `ValueError` with position context on malformed input, including malformed internal names, empty path segments, and empty inner-class suffixes
 - **Construction**: `to_descriptor()` — converts structured types back to JVM descriptor strings (round-trip)
 - **Slot helpers**: `slot_size()` and `parameter_slot_count()` — category-aware (long/double occupy 2 slots)
-- **Validation**: `is_valid_field_descriptor()` and `is_valid_method_descriptor()`
+- **Validation**: `is_valid_field_descriptor()` and `is_valid_method_descriptor()` with spec-aware internal-name checks
 
 All types are imported directly from `pytecode.descriptors`.
+
+#### `pytecode\constant_pool_builder.py`
+
+Constant-pool management utilities for building and editing JVM constant pools. Provides `ConstantPoolBuilder`, a mutable accumulator with:
+
+- **Deduplication on insertion** — identical entries return the existing index rather than growing the pool; both structural (raw-index-based via `add_entry`) and semantic (value-based via convenience methods) deduplication are supported
+- **High-level convenience methods** — `add_utf8`, `add_class`, `add_methodref`, `add_fieldref`, etc. automatically create and deduplicate all prerequisite entries (e.g. `add_class("Foo")` creates the `CONSTANT_Utf8` name entry first), and `add_utf8()` uses JVM Modified UTF-8 with the JVM `u2` byte-length limit
+- **Symbol-table lookups** — `find_utf8`, `find_class`, `find_name_and_type`, and `resolve_utf8` enable index-free lookups by value using spec-correct Modified UTF-8
+- **Double-slot handling** — Long and Double entries automatically occupy two consecutive slots, consistent with the JVM spec
+- **Spec hardening** — `add_method_handle()` validates reference kind, target entry type, and special-method rules; direct/imported `Utf8Info` entries are validated for length and Modified UTF-8 correctness
+- **Deterministic ordering** — entries are assigned indexes in insertion order; deduplication never reorders existing entries
+- **Import from parsed pools** — `ConstantPoolBuilder.from_pool(list)` seeds the builder from an existing `ClassFile.constant_pool`, preserving all original indexes so existing CP references remain valid; it now also validates index-0 placeholder rules, Long/Double gap slots, Utf8 payload consistency, and MethodHandle constraints before accepting the imported pool
+- **Export to spec format** — `build()` returns a defensive-copy `list[ConstantPoolInfo | None]` identical in structure to `ClassFile.constant_pool`, and `get()` also returns defensive copies so caller mutation cannot corrupt builder state
+- **Pool size guard** — raises `ValueError` if an allocation would exceed the JVM's u2 maximum (65 534 single-slot or 65 533 double-slot)
 
 #### `pytecode\jar.py`
 
@@ -162,17 +195,19 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 ### Test coverage
 
-The test suite provides both integration-level and unit-level coverage (430 tests total):
+The test suite provides both integration-level and unit-level coverage (562 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
-- `test_attributes.py` (87 tests) — per-attribute-type parsing for all 30 standard attribute types, stack map frame variants, verification types, annotation element values, type annotations, and the `UnimplementedAttr` fallback.
-- `test_instructions.py` (62 tests) — instruction decoding for all operand shapes including no-operand, local variable index, constant-pool index, bipush/sipush, branch16/branch32, iinc, invokedynamic, invokeinterface, newarray, multianewarray, lookupswitch, tableswitch, and wide variants.
-- `test_constant_pool.py` (26 tests) — all 17 constant-pool entry types, Long/Double double-slot handling, mixed pool parsing, and unknown tag errors.
-- `test_class_reader.py` (28 tests) — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
-- `test_bytes_utils.py` (95 tests) — all primitive byte readers and writers (`_read_*`/`_write_*`), `BytesReader` stateful cursor, rewind, and buffer overrun, `BytesWriter` sequential writes, alignment padding, reserve/patch, and round-trip read↔write.
-- `test_jar.py` (11 tests) — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
-- `test_descriptors.py` (121 tests) — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, and throws clauses.
+- `test_attributes.py` — per-attribute-type parsing for all 30 standard attribute types, stack map frame variants, verification types, annotation element values, type annotations, and the `UnimplementedAttr` fallback.
+- `test_instructions.py` — instruction decoding for all operand shapes including no-operand, local variable index, constant-pool index, bipush/sipush, branch16/branch32, iinc, invokedynamic, invokeinterface, newarray, multianewarray, lookupswitch, tableswitch, and wide variants.
+- `test_constant_pool.py` — all 17 constant-pool entry types, Long/Double double-slot handling, Modified UTF-8 `CONSTANT_Utf8` cases, mixed pool parsing, and unknown tag errors.
+- `test_class_reader.py` — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
+- `test_bytes_utils.py` — all primitive byte readers and writers (`_read_*`/`_write_*`), `BytesReader` stateful cursor, rewind, and buffer overrun, `BytesWriter` sequential writes, alignment padding, reserve/patch, and round-trip read↔write.
+- `test_jar.py` — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
+- `test_descriptors.py` — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, throws clauses, and invalid internal-name edge cases.
+- `test_constant_pool_builder.py` — builder deduplication, Modified UTF-8 handling, MethodHandle validation, import/export behavior, overflow guards, and defensive-copy semantics.
+- `test_modified_utf8.py` — direct Modified UTF-8 codec coverage for NUL, supplementary characters, round-tripping, and malformed byte rejection.
 
 Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts.
 
@@ -193,7 +228,7 @@ Responsibilities:
 
 Module:
 
-- `bytes_utils.py` — read side (`BytesReader`, `ByteParser` subclasses) and write side (`BytesWriter`, `ByteUnparser` subclasses)
+- `bytes_utils.py` — read side (`BytesReader`) and write side (`BytesWriter`)
 
 ### 2. Parsed spec model layer
 
@@ -323,7 +358,9 @@ Without this, mutated classes will produce confusing stack traces and debugger b
 
 ## Roadmap aligned to the project goal
 
-The user-provided roadmap is correct, but it is missing a few enabling pieces.
+The user-provided roadmap is correct, but it benefits from calling out a few
+enabling pieces explicitly. Some of these are now implemented foundations, while
+others remain future work.
 
 ### Already identified
 
@@ -331,23 +368,34 @@ The user-provided roadmap is correct, but it is missing a few enabling pieces.
 2. Calculate frames
 3. Validate the manipulated classfile and generate new classfiles
 
-### Missing capabilities that should be added to the roadmap
+### Capabilities that should stay explicit in the roadmap
 
 #### 1. A bytecode/classfile writer ([#4](https://github.com/smithtrenton/pytecode/issues/4), [#12](https://github.com/smithtrenton/pytecode/issues/12))
 
 Generation is mentioned, but it is worth calling out explicitly as a major subsystem. Writing new class files is more than a final `to_bytes()` method; it requires a full serialization pipeline including instruction offset resolution, constant-pool layout, attribute length computation, and `WIDE` instruction insertion when operands exceed single-byte range.
 
-#### 2. Constant-pool management ([#5](https://github.com/smithtrenton/pytecode/issues/5))
+#### 2. Constant-pool management ([#5](https://github.com/smithtrenton/pytecode/issues/5)) — implemented foundation
 
-Any manipulation API will need to create, deduplicate, update, and reindex constant-pool entries. Without this, even simple edits become fragile. A `ConstantPoolBuilder` or similar utility should support deduplication on insertion, symbol-table-style lookups (class name → index), type-safety constraints (ensuring only valid constant types appear in specific positions), and deterministic ordering for reproducible output.
+Any manipulation API needs to create, deduplicate, update, and reindex
+constant-pool entries. That foundation is now present via
+`ConstantPoolBuilder`, including spec-aware Modified UTF-8 handling, lookup
+helpers, MethodHandle validation, and deterministic ordering, so the roadmap
+should treat it as an enabling dependency that subsequent editing/emission work
+builds on.
 
 #### 3. Symbolic labels and branch management ([#7](https://github.com/smithtrenton/pytecode/issues/7))
 
 Editing bytecode safely requires label-based branch targets instead of manual offset arithmetic. Labels must support forward references (needed for forward branches), must survive instruction insertion and removal, and must handle exception handler range binding. `TABLESWITCH`/`LOOKUPSWITCH` padding recalculation also depends on stable label resolution.
 
-#### 4. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
+#### 4. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3)) — implemented foundation
 
-A dedicated descriptor parsing utility is needed throughout the library — for frame computation (establishing initial local slots from method parameters), for constant-pool management (creating method/field references), for validation (checking type correctness), and for the editing API (adding methods or fields). This is easy to overlook but becomes a pervasive dependency.
+A dedicated descriptor parsing utility is needed throughout the library — for
+frame computation (establishing initial local slots from method parameters), for
+constant-pool management (creating method/field references), for validation
+(checking type correctness), and for the editing API (adding methods or
+fields). This foundation is now in place and already performs stricter
+well-formedness checks, so later roadmap items can rely on it instead of
+re-implementing descriptor logic ad hoc.
 
 #### 5. Control-flow and data-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9))
 
@@ -403,8 +451,8 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 1. ~~Fix the known parser bugs.~~ ([#1](https://github.com/smithtrenton/pytecode/issues/1) — done)
 2. ~~Add unit tests for each attribute type, instruction operand shape, and constant-pool entry.~~ ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done)
 3. ~~Add descriptor and signature parsing utilities.~~ ([#3](https://github.com/smithtrenton/pytecode/issues/3) — done)
-4. Introduce a writer foundation for primitive values and classfile sections. ([#4](https://github.com/smithtrenton/pytecode/issues/4))
-5. Add constant-pool management utilities (deduplication, symbol lookup, reindexing). ([#5](https://github.com/smithtrenton/pytecode/issues/5))
+4. ~~Introduce a writer foundation for primitive values and classfile sections.~~ ([#4](https://github.com/smithtrenton/pytecode/issues/4) — done)
+5. ~~Add constant-pool management utilities (deduplication, symbol lookup, reindexing).~~ ([#5](https://github.com/smithtrenton/pytecode/issues/5) — done)
 6. Design the mutable editing model and public transformation API. ([#6](https://github.com/smithtrenton/pytecode/issues/6))
 7. Add label-based instruction editing with automatic offset recalculation. ([#7](https://github.com/smithtrenton/pytecode/issues/7))
 8. Add a pluggable class hierarchy resolver. ([#8](https://github.com/smithtrenton/pytecode/issues/8))
@@ -442,13 +490,13 @@ To keep the scope focused, the project does not need to become:
 
 `pytecode` already has a solid parser-oriented foundation: typed models, complete instruction decoding, attribute parsing, and JAR integration.
 
-The test suite now has unit-level coverage across all modules (430 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, error paths, and binary writer primitives.
+The test suite now has unit-level coverage across all modules (562 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, Modified UTF-8 behavior, stricter descriptor validation, constant-pool builder safety checks, error paths, and binary writer primitives.
 
-The missing work is not only "manipulate, calculate frames, validate, and emit." To fully meet the project's objective, the roadmap should also explicitly include:
+The remaining work is now centered on higher-level editing, analysis,
+validation, and emission. To fully meet the project's objective, the roadmap
+should continue to explicitly include:
 
 - classfile writing infrastructure
-- constant-pool management
-- descriptor and signature parsing
 - symbolic branch/label handling
 - control-flow and data-flow analysis
 - class hierarchy resolution

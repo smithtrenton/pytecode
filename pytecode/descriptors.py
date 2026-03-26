@@ -67,6 +67,7 @@ class MethodDescriptor:
 
 type FieldDescriptor = BaseType | ObjectType | ArrayType
 type ReturnType = FieldDescriptor | VoidType
+_INVALID_UNQUALIFIED_NAME_CHARS = frozenset({".", ";", "[", "/", "<", ">", ":"})
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +200,42 @@ class _Reader:
         raise ValueError(f"{msg} at position {p} in {self._s!r}")
 
 
+def _validate_unqualified_name(name: str, r: _Reader, start: int, context: str) -> None:
+    if not name:
+        r._fail(f"empty {context}", start)
+    for ch in name:
+        if ch in _INVALID_UNQUALIFIED_NAME_CHARS:
+            r._fail(f"invalid character '{ch}' in {context}", start)
+
+
+def _validate_internal_class_name(class_name: str, r: _Reader, start: int) -> None:
+    if not class_name:
+        r._fail("empty class name in object type", start)
+
+    segments = class_name.split("/")
+    if any(segment == "" for segment in segments):
+        r._fail("empty class name segment in object type", start)
+
+    for segment in segments:
+        _validate_unqualified_name(segment, r, start, "class name")
+
+
+def _split_class_type_identifier(r: _Reader, full_ident: str, start: int) -> tuple[str, str]:
+    if not full_ident:
+        r._fail("empty class name in class type signature", start)
+
+    segments = full_ident.split("/")
+    if any(segment == "" for segment in segments):
+        r._fail("empty class name segment in class type signature", start)
+
+    for segment in segments:
+        _validate_unqualified_name(segment, r, start, "class name")
+
+    if len(segments) == 1:
+        return "", segments[0]
+    return "/".join(segments[:-1]) + "/", segments[-1]
+
+
 def _read_field_descriptor(r: _Reader) -> FieldDescriptor:
     ch = r.peek()
     bt = _BASE_TYPE_BY_CHAR.get(ch)
@@ -220,8 +257,7 @@ def _read_object_type(r: _Reader) -> ObjectType:
         r.advance()
     class_name = r._s[start : r.pos]
     r.expect(";")
-    if not class_name:
-        r._fail("empty class name in object type", start)
+    _validate_internal_class_name(class_name, r, start)
     return ObjectType(class_name)
 
 
@@ -264,8 +300,7 @@ def _read_type_variable(r: _Reader) -> TypeVariable:
         r.advance()
     name = r._s[start : r.pos]
     r.expect(";")
-    if not name:
-        r._fail("empty type variable name", start)
+    _validate_unqualified_name(name, r, start, "type variable name")
     return TypeVariable(name)
 
 
@@ -293,6 +328,7 @@ def _read_type_argument(r: _Reader) -> TypeArgument:
 
 def _read_class_type_signature(r: _Reader) -> ClassTypeSignature:
     r.expect("L")
+    start = r.pos
 
     # Collect the full identifier path (package + simple name) first.
     ident_chars: list[str] = []
@@ -300,15 +336,7 @@ def _read_class_type_signature(r: _Reader) -> ClassTypeSignature:
         ident_chars.append(r.advance())
 
     full_ident = "".join(ident_chars)
-
-    # Split into package and simple name at the last '/'.
-    last_slash = full_ident.rfind("/")
-    if last_slash == -1:
-        package = ""
-        name = full_ident
-    else:
-        package = full_ident[: last_slash + 1]
-        name = full_ident[last_slash + 1 :]
+    package, name = _split_class_type_identifier(r, full_ident, start)
 
     # Optional type arguments.
     type_arguments: tuple[TypeArgument, ...] = ()
@@ -319,10 +347,12 @@ def _read_class_type_signature(r: _Reader) -> ClassTypeSignature:
     inner: list[InnerClassType] = []
     while not r.at_end() and r.peek() == ".":
         r.advance()  # consume '.'
+        inner_start = r.pos
         inner_name_chars: list[str] = []
         while r.peek() not in ("<", ".", ";"):
             inner_name_chars.append(r.advance())
         inner_name = "".join(inner_name_chars)
+        _validate_unqualified_name(inner_name, r, inner_start, "inner class name")
         inner_type_args: tuple[TypeArgument, ...] = ()
         if not r.at_end() and r.peek() == "<":
             inner_type_args = _read_type_arguments(r)

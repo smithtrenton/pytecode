@@ -10,6 +10,7 @@ from pathlib import Path
 from pytecode import constant_pool as cp_module
 from pytecode.bytes_utils import BytesReader
 from pytecode.class_reader import ClassReader
+from pytecode.modified_utf8 import encode_modified_utf8
 
 TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
 
@@ -94,8 +95,8 @@ def i4(v: int) -> bytes:
 
 
 def utf8_entry_bytes(s: str) -> bytes:
-    """Tag 1 — UTF8 entry: tag + u2(length) + raw bytes."""
-    encoded = s.encode("utf-8")
+    """Tag 1 — CONSTANT_Utf8 entry: tag + u2(length) + modified UTF-8 bytes."""
+    encoded = encode_modified_utf8(s)
     return u1(1) + u2(len(encoded)) + encoded
 
 
@@ -186,7 +187,7 @@ def package_entry_bytes(name_index: int) -> bytes:
 
 def make_utf8_info(index: int, s: str) -> cp_module.Utf8Info:
     """Build a Utf8Info dataclass instance for use in cp_list."""
-    encoded = s.encode("utf-8")
+    encoded = encode_modified_utf8(s)
     return cp_module.Utf8Info(index, 0, 1, len(encoded), encoded)
 
 

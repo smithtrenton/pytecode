@@ -4,6 +4,7 @@ import pytest
 
 from pytecode import constant_pool as cp_module
 from pytecode.class_reader import ClassReader
+from pytecode.modified_utf8 import encode_modified_utf8
 from tests.helpers import (
     class_entry_bytes,
     class_reader_for_cp,
@@ -61,8 +62,28 @@ def test_utf8_multibyte():
     reader = class_reader_for_cp(data)
     cp_info, index_extra = reader.read_constant_pool_index(3)
     assert isinstance(cp_info, cp_module.Utf8Info)
-    assert cp_info.str_bytes == s.encode("utf-8")
-    assert cp_info.length == len(s.encode("utf-8"))
+    assert cp_info.str_bytes == encode_modified_utf8(s)
+    assert cp_info.length == len(encode_modified_utf8(s))
+    assert index_extra == 0
+
+
+def test_utf8_nul_uses_modified_encoding():
+    data = utf8_entry_bytes("\x00")
+    reader = class_reader_for_cp(data)
+    cp_info, index_extra = reader.read_constant_pool_index(4)
+    assert isinstance(cp_info, cp_module.Utf8Info)
+    assert cp_info.str_bytes == b"\xC0\x80"
+    assert cp_info.length == 2
+    assert index_extra == 0
+
+
+def test_utf8_supplementary_char_uses_surrogate_encoding():
+    data = utf8_entry_bytes("😀")
+    reader = class_reader_for_cp(data)
+    cp_info, index_extra = reader.read_constant_pool_index(5)
+    assert isinstance(cp_info, cp_module.Utf8Info)
+    assert cp_info.str_bytes == b"\xED\xA0\xBD\xED\xB8\x80"
+    assert cp_info.length == 6
     assert index_extra == 0
 
 
