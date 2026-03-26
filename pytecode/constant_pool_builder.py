@@ -312,7 +312,9 @@ class ConstantPoolBuilder:
         """
         builder = cls()
         _validate_import_pool(pool)
-        # Deep-copy to ensure the builder owns its data.
+        # Shallow-copy each entry.  All ConstantPoolInfo fields are int or
+        # bytes (both immutable), so a shallow copy is sufficient to ensure
+        # the builder owns independent objects.
         builder._pool = [_copy_entry(entry) for entry in pool]
         builder._next_index = len(pool)
         # Rebuild dedup maps from the copied entries.

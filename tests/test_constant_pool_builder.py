@@ -657,6 +657,16 @@ def test_add_entry_does_not_mutate_original():
     assert e.offset == 88
 
 
+def test_add_entry_caller_mutation_after_call_does_not_affect_stored_entry():
+    b = fresh()
+    e = cp_module.Utf8Info(index=0, offset=0, tag=1, length=3, str_bytes=b"abc")
+    idx = b.add_entry(e)
+    e.str_bytes = b"MUTATED"  # mutate the caller's original AFTER add_entry
+    stored = b.get(idx)
+    assert isinstance(stored, cp_module.Utf8Info)
+    assert stored.str_bytes == b"abc"
+
+
 def test_add_entry_dedup():
     b = fresh()
     e1 = cp_module.FloatInfo(index=0, offset=0, tag=4, value_bytes=0x3F800000)
@@ -865,6 +875,25 @@ def test_from_pool_rejects_invalid_method_handle_reference():
     pool.append(cp_module.ClassInfo(index=2, offset=0, tag=7, name_index=1))
     pool.append(cp_module.MethodHandleInfo(index=3, offset=0, tag=15, reference_kind=1, reference_index=2))
     with pytest.raises(ValueError, match="CONSTANT_Fieldref"):
+        ConstantPoolBuilder.from_pool(pool)
+
+
+def test_from_pool_rejects_empty_pool():
+    with pytest.raises(ValueError, match="index 0"):
+        ConstantPoolBuilder.from_pool([])
+
+
+def test_from_pool_rejects_mismatched_entry_index():
+    pool: list[cp_module.ConstantPoolInfo | None] = [None]
+    pool.append(cp_module.Utf8Info(index=99, offset=0, tag=1, length=3, str_bytes=b"Foo"))
+    with pytest.raises(ValueError, match="mismatched index"):
+        ConstantPoolBuilder.from_pool(pool)
+
+
+def test_from_pool_rejects_utf8_length_mismatch():
+    pool: list[cp_module.ConstantPoolInfo | None] = [None]
+    pool.append(cp_module.Utf8Info(index=1, offset=0, tag=1, length=99, str_bytes=b"Foo"))
+    with pytest.raises(ValueError, match="length"):
         ConstantPoolBuilder.from_pool(pool)
 
 
