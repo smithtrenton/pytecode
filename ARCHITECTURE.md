@@ -18,7 +18,8 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and validation — see `pytecode/descriptors.py`
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, and descriptor/signature parsing (377 tests)
+- Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, and descriptor/signature parsing (430 tests)
 
 ### Not implemented yet
 
@@ -43,7 +44,11 @@ At the moment, these are the only public exports in `pytecode.__init__`.
 
 #### `pytecode\bytes_utils.py`
 
-Low-level big-endian byte readers and the `BytesReader` base class. This is the I/O foundation for class parsing. Includes `ByteParser` abstract class and concrete parser types (`U1`, `I1`, `U2`, `I2`, `U4`, `I4`, `Bytes`) for composable binary reading, plus standalone helper functions and a stateful `BytesReader` that tracks offset.
+Low-level big-endian binary I/O primitives for both reading and writing. This is the I/O foundation for class parsing and future classfile emission.
+
+**Read side**: Standalone `_read_u1/i1/u2/i2/u4/i4/_read_bytes` helper functions and a stateful `BytesReader` that tracks a cursor offset.
+
+**Write side**: Standalone `_write_u1/i1/u2/i2/u4/i4/_write_bytes` helper functions and a stateful `BytesWriter` that appends to an internal buffer. `BytesWriter` provides `write_u1/i1/u2/i2/u4/i4/bytes` methods, `align(n)` for opcode-alignment padding, and a full set of `reserve_u1/i1/u2/i2/u4/i4` and `patch_u1/i1/u2/i2/u4/i4` methods for deferred length-prefixed structures.
 
 #### `pytecode\class_reader.py`
 
@@ -154,11 +159,10 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - There is no semantic editing layer or writer layer yet
 - Most parser behavior lives in one large module (`class_reader.py`, ~618 lines), which will become harder to evolve once mutation and emission are added
 - Parsed objects still use raw constant-pool indexes heavily, which is accurate to the classfile spec but not ideal for ergonomic transformations
-- There is an existing `TODO` comment in `class_reader.py:11` noting a desire to rework the reader to use dataclass annotations for byte reading instead of manual parsing
 
 ### Test coverage
 
-The test suite provides both integration-level and unit-level coverage (256 tests total):
+The test suite provides both integration-level and unit-level coverage (430 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
@@ -166,7 +170,7 @@ The test suite provides both integration-level and unit-level coverage (256 test
 - `test_instructions.py` (62 tests) — instruction decoding for all operand shapes including no-operand, local variable index, constant-pool index, bipush/sipush, branch16/branch32, iinc, invokedynamic, invokeinterface, newarray, multianewarray, lookupswitch, tableswitch, and wide variants.
 - `test_constant_pool.py` (26 tests) — all 17 constant-pool entry types, Long/Double double-slot handling, mixed pool parsing, and unknown tag errors.
 - `test_class_reader.py` (28 tests) — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
-- `test_bytes_utils.py` (42 tests) — all primitive byte readers (U1/I1/U2/I2/U4/I4/Bytes), `BytesReader` stateful cursor, rewind, and buffer overrun.
+- `test_bytes_utils.py` (95 tests) — all primitive byte readers and writers (`_read_*`/`_write_*`), `BytesReader` stateful cursor, rewind, and buffer overrun, `BytesWriter` sequential writes, alignment padding, reserve/patch, and round-trip read↔write.
 - `test_jar.py` (11 tests) — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
 - `test_descriptors.py` (121 tests) — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, and throws clauses.
 
@@ -178,7 +182,7 @@ To reach the stated project goal, the library should evolve from a parser into a
 
 ### 1. Binary I/O layer ([#4](https://github.com/smithtrenton/pytecode/issues/4))
 
-Keep low-level binary readers and add the inverse writer primitives.
+Both read and write primitives now live in `bytes_utils.py`.
 
 Responsibilities:
 
@@ -187,10 +191,9 @@ Responsibilities:
 - handle alignment and length-prefixed structures
 - provide reusable helpers for parser and emitter code
 
-Likely modules:
+Module:
 
-- `bytes_utils.py` for reading
-- future writer helpers such as `byte_writer.py` or a symmetric write API
+- `bytes_utils.py` — read side (`BytesReader`, `ByteParser` subclasses) and write side (`BytesWriter`, `ByteUnparser` subclasses)
 
 ### 2. Parsed spec model layer
 
@@ -439,7 +442,7 @@ To keep the scope focused, the project does not need to become:
 
 `pytecode` already has a solid parser-oriented foundation: typed models, complete instruction decoding, attribute parsing, and JAR integration.
 
-The test suite now has unit-level coverage across all modules (256 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, and error paths.
+The test suite now has unit-level coverage across all modules (430 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, error paths, and binary writer primitives.
 
 The missing work is not only "manipulate, calculate frames, validate, and emit." To fully meet the project's objective, the roadmap should also explicitly include:
 

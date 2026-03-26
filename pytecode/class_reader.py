@@ -10,7 +10,6 @@ class MalformedClassException(Exception):
     pass
 
 
-# TODO: Rework the reader to use dataclass annotations for byte reading instead of manual
 class ClassReader(BytesReader):
     class_info: info.ClassFile
 
