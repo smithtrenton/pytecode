@@ -491,9 +491,7 @@ class TestParseClassSignature:
 
     def test_super_interfaces(self) -> None:
         # class Foo extends Object implements Serializable, Comparable<Foo>
-        result = parse_class_signature(
-            "Ljava/lang/Object;Ljava/io/Serializable;Ljava/lang/Comparable<LFoo;>;"
-        )
+        result = parse_class_signature("Ljava/lang/Object;Ljava/io/Serializable;Ljava/lang/Comparable<LFoo;>;")
         assert result.type_parameters == ()
         assert result.super_class == ClassTypeSignature("java/lang/", "Object", (), ())
         assert len(result.super_interfaces) == 2
@@ -502,9 +500,7 @@ class TestParseClassSignature:
 
     def test_parameterized_superclass(self) -> None:
         # class StringList extends ArrayList<String>
-        result = parse_class_signature(
-            "Ljava/util/ArrayList<Ljava/lang/String;>;"
-        )
+        result = parse_class_signature("Ljava/util/ArrayList<Ljava/lang/String;>;")
         assert result.super_class.name == "ArrayList"
         assert len(result.super_class.type_arguments) == 1
 

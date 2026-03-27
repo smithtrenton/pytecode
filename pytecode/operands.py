@@ -150,9 +150,7 @@ _IMPLICIT_VAR_SLOTS: dict[InsnInfoType, tuple[InsnInfoType, int]] = {
 }
 
 # Reverse: (canonical_opcode, slot) → implicit opcode (for lowering)
-_VAR_SHORTCUTS: dict[tuple[InsnInfoType, int], InsnInfoType] = {
-    v: k for k, v in _IMPLICIT_VAR_SLOTS.items()
-}
+_VAR_SHORTCUTS: dict[tuple[InsnInfoType, int], InsnInfoType] = {v: k for k, v in _IMPLICIT_VAR_SLOTS.items()}
 
 # WIDE opcode → canonical base opcode
 _WIDE_TO_BASE: dict[InsnInfoType, InsnInfoType] = {
@@ -194,6 +192,7 @@ def _require_u1(value: int, *, context: str, minimum: int = 0) -> int:
     if not minimum <= value <= _U1_MAX:
         raise ValueError(f"{context} must be in range [{minimum}, {_U1_MAX}], got {value}")
     return value
+
 
 # ---------------------------------------------------------------------------
 # LDC value types (frozen dataclasses)
@@ -354,8 +353,7 @@ class MethodInsn(InsnInfo):
     ) -> None:
         if insn_type not in _METHOD_OPCODES:
             raise ValueError(
-                f"{insn_type.name} is not a method invocation opcode"
-                " (use InterfaceMethodInsn for INVOKEINTERFACE)"
+                f"{insn_type.name} is not a method invocation opcode (use InterfaceMethodInsn for INVOKEINTERFACE)"
             )
         super().__init__(insn_type, bytecode_offset)
         self.owner = owner

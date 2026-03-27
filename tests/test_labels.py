@@ -478,9 +478,7 @@ _CONDITIONAL_INVERSION_PAIRS = [
     _CONDITIONAL_INVERSION_PAIRS,
     ids=lambda t: t.name,
 )
-def test_lower_code_inverts_all_conditional_branches(
-    branch_type: InsnInfoType, inverted_type: InsnInfoType
-) -> None:
+def test_lower_code_inverts_all_conditional_branches(branch_type: InsnInfoType, inverted_type: InsnInfoType) -> None:
     far_target = Label("far")
     code = CodeModel(
         max_stack=0,

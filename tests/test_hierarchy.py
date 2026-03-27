@@ -175,11 +175,14 @@ def test_find_overridden_methods_respects_access_and_non_overridable_flags() -> 
             ResolvedMethod("protectedHook", "()V", MethodAccessFlag.PUBLIC),
         )
     ) == {"base/Base"}
-    assert find_overridden_methods(
-        resolver,
-        "other/Sub",
-        ResolvedMethod("packageHook", "()V", MethodAccessFlag.PUBLIC),
-    ) == ()
+    assert (
+        find_overridden_methods(
+            resolver,
+            "other/Sub",
+            ResolvedMethod("packageHook", "()V", MethodAccessFlag.PUBLIC),
+        )
+        == ()
+    )
     assert _method(
         find_overridden_methods(
             resolver,
@@ -187,21 +190,30 @@ def test_find_overridden_methods_respects_access_and_non_overridable_flags() -> 
             ResolvedMethod("packageHook", "()V", MethodAccessFlag.PUBLIC),
         )
     ) == {"base/Base"}
-    assert find_overridden_methods(
-        resolver,
-        "other/Sub",
-        ResolvedMethod("privateHook", "()V", MethodAccessFlag.PUBLIC),
-    ) == ()
-    assert find_overridden_methods(
-        resolver,
-        "other/Sub",
-        ResolvedMethod("staticHook", "()V", MethodAccessFlag.PUBLIC),
-    ) == ()
-    assert find_overridden_methods(
-        resolver,
-        "other/Sub",
-        ResolvedMethod("finalHook", "()V", MethodAccessFlag.PUBLIC),
-    ) == ()
+    assert (
+        find_overridden_methods(
+            resolver,
+            "other/Sub",
+            ResolvedMethod("privateHook", "()V", MethodAccessFlag.PUBLIC),
+        )
+        == ()
+    )
+    assert (
+        find_overridden_methods(
+            resolver,
+            "other/Sub",
+            ResolvedMethod("staticHook", "()V", MethodAccessFlag.PUBLIC),
+        )
+        == ()
+    )
+    assert (
+        find_overridden_methods(
+            resolver,
+            "other/Sub",
+            ResolvedMethod("finalHook", "()V", MethodAccessFlag.PUBLIC),
+        )
+        == ()
+    )
 
 
 def test_find_overridden_methods_returns_empty_for_private_static_and_special_declarations() -> None:
@@ -218,26 +230,38 @@ def test_find_overridden_methods_returns_empty_for_private_static_and_special_de
         ]
     )
 
-    assert find_overridden_methods(
-        resolver,
-        "base/Sub",
-        ResolvedMethod("hook", "()V", MethodAccessFlag.PRIVATE),
-    ) == ()
-    assert find_overridden_methods(
-        resolver,
-        "base/Sub",
-        ResolvedMethod("hook", "()V", MethodAccessFlag.STATIC),
-    ) == ()
-    assert find_overridden_methods(
-        resolver,
-        "base/Sub",
-        ResolvedMethod("<init>", "()V", MethodAccessFlag.PUBLIC),
-    ) == ()
-    assert find_overridden_methods(
-        resolver,
-        "base/Sub",
-        ResolvedMethod("<clinit>", "()V", MethodAccessFlag.STATIC),
-    ) == ()
+    assert (
+        find_overridden_methods(
+            resolver,
+            "base/Sub",
+            ResolvedMethod("hook", "()V", MethodAccessFlag.PRIVATE),
+        )
+        == ()
+    )
+    assert (
+        find_overridden_methods(
+            resolver,
+            "base/Sub",
+            ResolvedMethod("hook", "()V", MethodAccessFlag.STATIC),
+        )
+        == ()
+    )
+    assert (
+        find_overridden_methods(
+            resolver,
+            "base/Sub",
+            ResolvedMethod("<init>", "()V", MethodAccessFlag.PUBLIC),
+        )
+        == ()
+    )
+    assert (
+        find_overridden_methods(
+            resolver,
+            "base/Sub",
+            ResolvedMethod("<clinit>", "()V", MethodAccessFlag.STATIC),
+        )
+        == ()
+    )
 
 
 def test_iter_superclasses_raises_on_cycle() -> None:

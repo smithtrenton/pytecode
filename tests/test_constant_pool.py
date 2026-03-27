@@ -72,7 +72,7 @@ def test_utf8_nul_uses_modified_encoding():
     reader = class_reader_for_cp(data)
     cp_info, index_extra = reader.read_constant_pool_index(4)
     assert isinstance(cp_info, cp_module.Utf8Info)
-    assert cp_info.str_bytes == b"\xC0\x80"
+    assert cp_info.str_bytes == b"\xc0\x80"
     assert cp_info.length == 2
     assert index_extra == 0
 
@@ -82,7 +82,7 @@ def test_utf8_supplementary_char_uses_surrogate_encoding():
     reader = class_reader_for_cp(data)
     cp_info, index_extra = reader.read_constant_pool_index(5)
     assert isinstance(cp_info, cp_module.Utf8Info)
-    assert cp_info.str_bytes == b"\xED\xA0\xBD\xED\xB8\x80"
+    assert cp_info.str_bytes == b"\xed\xa0\xbd\xed\xb8\x80"
     assert cp_info.length == 6
     assert index_extra == 0
 

@@ -95,7 +95,7 @@ def test_add_utf8_nul_uses_modified_encoding():
     idx = b.add_utf8("\x00")
     entry = b.get(idx)
     assert isinstance(entry, cp_module.Utf8Info)
-    assert entry.str_bytes == b"\xC0\x80"
+    assert entry.str_bytes == b"\xc0\x80"
     assert entry.length == 2
 
 
@@ -104,7 +104,7 @@ def test_add_utf8_supplementary_char_uses_surrogate_encoding():
     idx = b.add_utf8("😀")
     entry = b.get(idx)
     assert isinstance(entry, cp_module.Utf8Info)
-    assert entry.str_bytes == b"\xED\xA0\xBD\xED\xB8\x80"
+    assert entry.str_bytes == b"\xed\xa0\xbd\xed\xb8\x80"
     assert entry.length == 6
 
 
@@ -234,8 +234,8 @@ def test_add_double_dedup():
 
 def test_len_excludes_double_slot_gaps():
     b = fresh()
-    b.add_long(0, 1)   # 1 logical entry, 2 slots
-    b.add_utf8("x")    # 1 logical entry, 1 slot
+    b.add_long(0, 1)  # 1 logical entry, 2 slots
+    b.add_utf8("x")  # 1 logical entry, 1 slot
     assert len(b) == 2
     assert b.count == 4
 
@@ -930,25 +930,28 @@ def test_overflow_double_slot():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("method_name, args, tag", [
-    ("add_utf8", ("x",), 1),
-    ("add_integer", (0,), 3),
-    ("add_float", (0,), 4),
-    ("add_long", (0, 0), 5),
-    ("add_double", (0, 0), 6),
-    ("add_class", ("A",), 7),
-    ("add_string", ("s",), 8),
-    ("add_name_and_type", ("n", "I"), 12),
-    ("add_fieldref", ("A", "f", "I"), 9),
-    ("add_methodref", ("A", "m", "()V"), 10),
-    ("add_interface_methodref", ("A", "m", "()V"), 11),
-    ("add_method_handle", (1, "fieldref"), 15),
-    ("add_method_type", ("()V",), 16),
-    ("add_dynamic", (0, "n", "I"), 17),
-    ("add_invoke_dynamic", (0, "n", "I"), 18),
-    ("add_module", ("m",), 19),
-    ("add_package", ("p",), 20),
-])
+@pytest.mark.parametrize(
+    "method_name, args, tag",
+    [
+        ("add_utf8", ("x",), 1),
+        ("add_integer", (0,), 3),
+        ("add_float", (0,), 4),
+        ("add_long", (0, 0), 5),
+        ("add_double", (0, 0), 6),
+        ("add_class", ("A",), 7),
+        ("add_string", ("s",), 8),
+        ("add_name_and_type", ("n", "I"), 12),
+        ("add_fieldref", ("A", "f", "I"), 9),
+        ("add_methodref", ("A", "m", "()V"), 10),
+        ("add_interface_methodref", ("A", "m", "()V"), 11),
+        ("add_method_handle", (1, "fieldref"), 15),
+        ("add_method_type", ("()V",), 16),
+        ("add_dynamic", (0, "n", "I"), 17),
+        ("add_invoke_dynamic", (0, "n", "I"), 18),
+        ("add_module", ("m",), 19),
+        ("add_package", ("p",), 20),
+    ],
+)
 def test_entry_tag(method_name: str, args: tuple[object, ...], tag: int):
     b = fresh()
     if method_name == "add_method_handle":

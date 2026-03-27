@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import json
+import shutil
 import struct
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -13,11 +18,75 @@ from pytecode.class_reader import ClassReader
 from pytecode.modified_utf8 import encode_modified_utf8
 
 TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
+_REPO_ROOT = TEST_RESOURCES.parent.parent
+JAVA_COMPILE_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-javac"
+_JAVA_COMPILE_CACHE_SCHEMA_VERSION = 1
 
 
-def compile_java_sources(tmp_path: Path, source_files: list[Path], *, release: int = 8) -> Path:
-    """Compile Java source files into `tmp_path\\classes` and return that directory."""
-    classes_dir = tmp_path / "classes"
+def _remove_path(path: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _normalize_source_files(source_files: list[Path]) -> tuple[Path, ...]:
+    if not source_files:
+        raise AssertionError("Expected at least one Java source file")
+
+    normalized: list[Path] = []
+    for source_path in source_files:
+        try:
+            normalized.append(source_path.resolve(strict=True))
+        except FileNotFoundError as exc:
+            raise AssertionError(f"Java source {source_path} does not exist") from exc
+    return tuple(normalized)
+
+
+@functools.lru_cache(maxsize=1)
+def _get_javac_identity() -> str:
+    result = subprocess.run(
+        ["javac", "-version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    version_text = (result.stdout or result.stderr).strip()
+    if result.returncode != 0 or not version_text:
+        raise AssertionError(version_text or "Failed to determine javac version")
+    return version_text
+
+
+def _source_cache_inputs(source_files: tuple[Path, ...]) -> list[dict[str, str]]:
+    cache_inputs: list[dict[str, str]] = []
+    for source_path in source_files:
+        try:
+            source_id = source_path.relative_to(_REPO_ROOT).as_posix()
+        except ValueError:
+            source_id = source_path.as_posix()
+        cache_inputs.append(
+            {
+                "path": source_id,
+                "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            }
+        )
+    return cache_inputs
+
+
+def _java_compile_cache_key(source_inputs: list[dict[str, str]], *, release: int) -> str:
+    payload = {
+        "javac": _get_javac_identity(),
+        "release": release,
+        "schema_version": _JAVA_COMPILE_CACHE_SCHEMA_VERSION,
+        "sources": source_inputs,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _compile_java_sources_uncached(classes_dir: Path, source_files: tuple[Path, ...], *, release: int = 8) -> None:
     classes_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
@@ -29,6 +98,75 @@ def compile_java_sources(tmp_path: Path, source_files: list[Path], *, release: i
     if result.returncode != 0:
         raise AssertionError(result.stderr or result.stdout)
 
+
+def _cache_entry_manifest_path(entry_dir: Path) -> Path:
+    return entry_dir / "manifest.json"
+
+
+def _cache_entry_classes_dir(entry_dir: Path) -> Path:
+    return entry_dir / "classes"
+
+
+def _is_valid_cache_entry(entry_dir: Path) -> bool:
+    return _cache_entry_manifest_path(entry_dir).is_file() and _cache_entry_classes_dir(entry_dir).is_dir()
+
+
+def _write_cache_manifest(entry_dir: Path, source_inputs: list[dict[str, str]], *, release: int) -> None:
+    classes_dir = _cache_entry_classes_dir(entry_dir)
+    class_files = sorted(path.relative_to(classes_dir).as_posix() for path in classes_dir.rglob("*.class"))
+    manifest = {
+        "class_files": class_files,
+        "javac": _get_javac_identity(),
+        "release": release,
+        "schema_version": _JAVA_COMPILE_CACHE_SCHEMA_VERSION,
+        "sources": source_inputs,
+    }
+    manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    _cache_entry_manifest_path(entry_dir).write_text(manifest_text, encoding="utf-8")
+
+
+def _cached_java_classes_dir(source_files: tuple[Path, ...], *, release: int = 8) -> Path:
+    source_inputs = _source_cache_inputs(source_files)
+    cache_key = _java_compile_cache_key(source_inputs, release=release)
+    entry_dir = JAVA_COMPILE_CACHE_ROOT / cache_key
+    if _is_valid_cache_entry(entry_dir):
+        return _cache_entry_classes_dir(entry_dir)
+
+    if entry_dir.exists():
+        _remove_path(entry_dir)
+
+    JAVA_COMPILE_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    staging_root = JAVA_COMPILE_CACHE_ROOT / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(tempfile.mkdtemp(prefix=f"{cache_key}-", dir=staging_root))
+    try:
+        _compile_java_sources_uncached(_cache_entry_classes_dir(staging_dir), source_files, release=release)
+        _write_cache_manifest(staging_dir, source_inputs, release=release)
+        try:
+            staging_dir.rename(entry_dir)
+        except OSError as exc:
+            if not _is_valid_cache_entry(entry_dir):
+                raise AssertionError(f"Cache entry {entry_dir} was created incompletely") from exc
+            _remove_path(staging_dir)
+        if not _is_valid_cache_entry(entry_dir):
+            raise AssertionError(f"Failed to publish cached Java compilation {cache_key}")
+        return _cache_entry_classes_dir(entry_dir)
+    except Exception:
+        _remove_path(staging_dir)
+        raise
+
+
+def _materialize_cached_classes(cache_classes_dir: Path, classes_dir: Path) -> None:
+    _remove_path(classes_dir)
+    classes_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(cache_classes_dir, classes_dir)
+
+
+def compile_java_sources(tmp_path: Path, source_files: list[Path], *, release: int = 8) -> Path:
+    """Compile Java source files into `tmp_path\\classes` and return that directory."""
+    classes_dir = tmp_path / "classes"
+    cache_classes_dir = _cached_java_classes_dir(_normalize_source_files(source_files), release=release)
+    _materialize_cached_classes(cache_classes_dir, classes_dir)
     return classes_dir
 
 

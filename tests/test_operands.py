@@ -261,25 +261,19 @@ class TestFieldInsnLifting:
 
     def test_write_field_is_putfield(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "writeField"))
-        pf = next(
-            i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.PUTFIELD
-        )
+        pf = next(i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.PUTFIELD)
         assert pf.name == "intField"
         assert pf.descriptor == "I"
 
     def test_read_static_is_getstatic(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "readStatic"))
-        gs = next(
-            i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.GETSTATIC
-        )
+        gs = next(i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.GETSTATIC)
         assert gs.name == "counter"
         assert gs.descriptor == "J"
 
     def test_write_static_is_putstatic(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "writeStatic"))
-        ps = next(
-            i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.PUTSTATIC
-        )
+        ps = next(i for i in items if isinstance(i, FieldInsn) and i.type == InsnInfoType.PUTSTATIC)
         assert ps.name == "counter"
         assert ps.descriptor == "J"
 
@@ -295,9 +289,7 @@ class TestFieldInsnLifting:
 
 
 class TestMethodInsnLifting:
-    def test_build_string_has_invokespecial_and_invokevirtual(
-        self, showcase_model: ClassModel
-    ) -> None:
+    def test_build_string_has_invokespecial_and_invokevirtual(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "buildString"))
         method_insns = [i for i in items if isinstance(i, MethodInsn)]
         opcodes = {i.type for i in method_insns}
@@ -306,9 +298,7 @@ class TestMethodInsnLifting:
 
     def test_static_helper_has_invokestatic(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "staticHelper"))
-        statics = [
-            i for i in items if isinstance(i, MethodInsn) and i.type == InsnInfoType.INVOKESTATIC
-        ]
+        statics = [i for i in items if isinstance(i, MethodInsn) and i.type == InsnInfoType.INVOKESTATIC]
         assert len(statics) >= 1
 
     def test_method_insn_has_correct_fields(self, showcase_model: ClassModel) -> None:
@@ -316,9 +306,7 @@ class TestMethodInsnLifting:
         init = next(
             i
             for i in items
-            if isinstance(i, MethodInsn)
-            and i.type == InsnInfoType.INVOKESPECIAL
-            and i.name == "<init>"
+            if isinstance(i, MethodInsn) and i.type == InsnInfoType.INVOKESPECIAL and i.name == "<init>"
         )
         assert "StringBuilder" in init.owner
         assert init.descriptor == "()V"
@@ -330,20 +318,14 @@ class TestMethodInsnLifting:
 
 
 class TestInterfaceMethodInsnLifting:
-    def test_compare_via_interface_has_invokeinterface(
-        self, showcase_model: ClassModel
-    ) -> None:
+    def test_compare_via_interface_has_invokeinterface(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "compareViaInterface"))
         iface_insns = [i for i in items if isinstance(i, InterfaceMethodInsn)]
         assert len(iface_insns) >= 1
 
-    def test_invokeinterface_owner_and_descriptor(
-        self, showcase_model: ClassModel
-    ) -> None:
+    def test_invokeinterface_owner_and_descriptor(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "compareViaInterface"))
-        size_call = next(
-            i for i in items if isinstance(i, InterfaceMethodInsn) and i.name == "size"
-        )
+        size_call = next(i for i in items if isinstance(i, InterfaceMethodInsn) and i.name == "size")
         assert "List" in size_call.owner
         assert size_call.descriptor == "()I"
 
@@ -356,38 +338,24 @@ class TestInterfaceMethodInsnLifting:
 class TestTypeInsnLifting:
     def test_type_ops_has_new(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "typeOps"))
-        new_insns = [
-            i for i in items if isinstance(i, TypeInsn) and i.type == InsnInfoType.NEW
-        ]
+        new_insns = [i for i in items if isinstance(i, TypeInsn) and i.type == InsnInfoType.NEW]
         assert len(new_insns) >= 1
         assert any("ArrayList" in i.class_name for i in new_insns)
 
     def test_type_ops_has_checkcast(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "typeOps"))
-        casts = [
-            i
-            for i in items
-            if isinstance(i, TypeInsn) and i.type == InsnInfoType.CHECKCAST
-        ]
+        casts = [i for i in items if isinstance(i, TypeInsn) and i.type == InsnInfoType.CHECKCAST]
         assert len(casts) >= 1
 
     def test_type_ops_has_instanceof(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "typeOps"))
-        checks = [
-            i
-            for i in items
-            if isinstance(i, TypeInsn) and i.type == InsnInfoType.INSTANCEOF
-        ]
+        checks = [i for i in items if isinstance(i, TypeInsn) and i.type == InsnInfoType.INSTANCEOF]
         assert len(checks) >= 1
         assert any("String" in i.class_name for i in checks)
 
     def test_type_ops_has_anewarray(self, showcase_model: ClassModel) -> None:
         items = _insns(_code_items(showcase_model, "typeOps"))
-        arrays = [
-            i
-            for i in items
-            if isinstance(i, TypeInsn) and i.type == InsnInfoType.ANEWARRAY
-        ]
+        arrays = [i for i in items if isinstance(i, TypeInsn) and i.type == InsnInfoType.ANEWARRAY]
         assert len(arrays) >= 1
         assert any("String" in i.class_name for i in arrays)
 
@@ -723,13 +691,12 @@ class TestMemberInsnLowering:
         assert isinstance(raw, ConstPoolIndex)
         # The CP entry should be an InterfaceMethodref
         from pytecode import constant_pool as _cp
+
         entry = cp.get(raw.index)
         assert isinstance(entry, _cp.InterfaceMethodrefInfo)
 
     def test_interface_method_insn_emits_invokeinterface(self) -> None:
-        items: list[CodeItem] = [
-            InterfaceMethodInsn("java/util/List", "size", "()I")
-        ]
+        items: list[CodeItem] = [InterfaceMethodInsn("java/util/List", "size", "()I")]
         lowered = _lower_simple(items)
         assert len(lowered) == 1
         raw = lowered[0]
@@ -738,9 +705,7 @@ class TestMemberInsnLowering:
 
     def test_invokeinterface_count_includes_params(self) -> None:
         # void add(Object) → 1 param (object = 1 slot) + 1 for receiver = 2
-        items: list[CodeItem] = [
-            InterfaceMethodInsn("java/util/List", "add", "(Ljava/lang/Object;)Z")
-        ]
+        items: list[CodeItem] = [InterfaceMethodInsn("java/util/List", "add", "(Ljava/lang/Object;)Z")]
         lowered = _lower_simple(items)
         raw = lowered[0]
         assert isinstance(raw, InvokeInterface)
@@ -896,6 +861,4 @@ class TestInstructionShowcaseRoundTrip:
             InvokeDynamicInsn,
         )
         for wt in wrapper_types:
-            assert any(isinstance(i, wt) for i in all_insns), (
-                f"No {wt.__name__} found in InstructionShowcase"
-            )
+            assert any(isinstance(i, wt) for i in all_insns), f"No {wt.__name__} found in InstructionShowcase"

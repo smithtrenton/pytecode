@@ -10,8 +10,8 @@ from pytecode.modified_utf8 import decode_modified_utf8, encode_modified_utf8
     [
         ("", b""),
         ("Hello", b"Hello"),
-        ("\x00", b"\xC0\x80"),
-        ("😀", b"\xED\xA0\xBD\xED\xB8\x80"),
+        ("\x00", b"\xc0\x80"),
+        ("😀", b"\xed\xa0\xbd\xed\xb8\x80"),
     ],
 )
 def test_encode_modified_utf8(value: str, expected: bytes) -> None:

@@ -169,9 +169,7 @@ _IMPLICIT_OBJECT = ResolvedClass(
     access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
     methods=(),
 )
-_NON_OVERRIDABLE_METHOD_FLAGS = (
-    MethodAccessFlag.PRIVATE | MethodAccessFlag.STATIC | MethodAccessFlag.FINAL
-)
+_NON_OVERRIDABLE_METHOD_FLAGS = MethodAccessFlag.PRIVATE | MethodAccessFlag.STATIC | MethodAccessFlag.FINAL
 
 
 def iter_superclasses(

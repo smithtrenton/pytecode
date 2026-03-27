@@ -142,13 +142,9 @@ def _require_pool_entry(
 
 def _validate_utf8_entry(entry: Utf8Info) -> None:
     if entry.length != len(entry.str_bytes):
-        raise ValueError(
-            f"Utf8Info length {entry.length} does not match payload size {len(entry.str_bytes)}"
-        )
+        raise ValueError(f"Utf8Info length {entry.length} does not match payload size {len(entry.str_bytes)}")
     if entry.length > _UTF8_MAX_BYTES:
-        raise ValueError(
-            f"Utf8Info payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes"
-        )
+        raise ValueError(f"Utf8Info payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes")
     try:
         decode_modified_utf8(entry.str_bytes)
     except UnicodeDecodeError as exc:
@@ -192,9 +188,7 @@ def _validate_method_handle(
 
     if reference_kind in (1, 2, 3, 4):
         if not isinstance(target, FieldrefInfo):
-            raise ValueError(
-                f"reference_kind {reference_kind} requires CONSTANT_Fieldref, got {type(target).__name__}"
-            )
+            raise ValueError(f"reference_kind {reference_kind} requires CONSTANT_Fieldref, got {type(target).__name__}")
         return
 
     if reference_kind in (5, 8):
@@ -212,8 +206,7 @@ def _validate_method_handle(
     else:
         if not isinstance(target, InterfaceMethodrefInfo):
             raise ValueError(
-                f"reference_kind {reference_kind} requires CONSTANT_InterfaceMethodref, "
-                f"got {type(target).__name__}"
+                f"reference_kind {reference_kind} requires CONSTANT_InterfaceMethodref, got {type(target).__name__}"
             )
 
     member_name = _method_handle_member_name(pool, target)
@@ -223,9 +216,7 @@ def _validate_method_handle(
         return
 
     if member_name in {"<init>", "<clinit>"}:
-        raise ValueError(
-            f"reference_kind {reference_kind} cannot target special method {member_name!r}"
-        )
+        raise ValueError(f"reference_kind {reference_kind} cannot target special method {member_name!r}")
 
 
 def _validate_import_pool(pool: list[ConstantPoolInfo | None]) -> None:
@@ -238,13 +229,9 @@ def _validate_import_pool(pool: list[ConstantPoolInfo | None]) -> None:
     while index < len(pool):
         entry = pool[index]
         if entry is None:
-            raise ValueError(
-                f"constant pool index {index} is None but not reserved as a Long/Double gap"
-            )
+            raise ValueError(f"constant pool index {index} is None but not reserved as a Long/Double gap")
         if entry.index != index:
-            raise ValueError(
-                f"constant pool entry at position {index} reports mismatched index {entry.index}"
-            )
+            raise ValueError(f"constant pool entry at position {index} reports mismatched index {entry.index}")
 
         if isinstance(entry, Utf8Info):
             _validate_utf8_entry(entry)
@@ -254,9 +241,7 @@ def _validate_import_pool(pool: list[ConstantPoolInfo | None]) -> None:
         if _is_double_slot(entry):
             gap_index = index + 1
             if gap_index >= len(pool) or pool[gap_index] is not None:
-                raise ValueError(
-                    f"double-slot entry at index {index} must be followed by a None gap slot"
-                )
+                raise ValueError(f"double-slot entry at index {index} must be followed by a None gap slot")
             index += 2
             continue
 
@@ -396,9 +381,7 @@ class ConstantPoolBuilder:
         """Add a ``CONSTANT_Utf8`` entry for *value*.  Returns the CP index."""
         encoded = encode_modified_utf8(value)
         if len(encoded) > _UTF8_MAX_BYTES:
-            raise ValueError(
-                f"Modified UTF-8 payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes"
-            )
+            raise ValueError(f"Modified UTF-8 payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes")
 
         # Fast path: Utf8 lookup bypasses the general key dict.
         existing = self._utf8_to_index.get(encoded)

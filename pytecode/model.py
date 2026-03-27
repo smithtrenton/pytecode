@@ -741,4 +741,3 @@ def _lift_invoke_interface(insn: InvokeInterface, cp: ConstantPoolBuilder) -> In
     """Lift a raw ``InvokeInterface`` instruction to an ``InterfaceMethodInsn``."""
     owner, name, descriptor, _ = _resolve_member_ref(cp, insn.index)
     return InterfaceMethodInsn(owner, name, descriptor)
-

@@ -267,19 +267,12 @@ def _clone_constant_pool_builder(cp: ConstantPoolBuilder) -> ConstantPoolBuilder
 
 
 def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
-    return any(
-        isinstance(item, LdcInsn) and not isinstance(item.value, (LdcLong, LdcDouble))
-        for item in items
-    )
+    return any(isinstance(item, LdcInsn) and not isinstance(item.value, (LdcLong, LdcDouble)) for item in items)
 
 
 def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> dict[int, int]:
     probe_cp = _clone_constant_pool_builder(cp)
-    return {
-        id(item): _lower_ldc_value(item.value, probe_cp)
-        for item in items
-        if isinstance(item, LdcInsn)
-    }
+    return {id(item): _lower_ldc_value(item.value, probe_cp) for item in items if isinstance(item, LdcInsn)}
 
 
 def _instruction_byte_size(
@@ -790,4 +783,3 @@ def _lower_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) ->
     else:
         raise ValueError(f"invalid MethodHandle reference_kind: {kind}")
     return cp.add_method_handle(kind, ref_index)
-
