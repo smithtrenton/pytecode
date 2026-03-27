@@ -1,1 +1,2 @@
 v0.0.1, #TODO -- Initial release.
+- Add pluggable class hierarchy resolution utilities in `pytecode.hierarchy` (#8).

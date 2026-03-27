@@ -34,9 +34,26 @@ def compile_java_sources(tmp_path: Path, source_files: list[Path], *, release: i
 
 def compile_java_resource(tmp_path: Path, resource_name: str, *, release: int = 8) -> Path:
     """Compile one Java resource file and return the generated class path."""
-    source_path = TEST_RESOURCES / resource_name
+    source_path = TEST_RESOURCES / Path(resource_name)
     classes_dir = compile_java_sources(tmp_path, [source_path], release=release)
     return classes_dir / Path(resource_name).with_suffix(".class").name
+
+
+def compile_java_resource_classes(tmp_path: Path, resource_name: str, *, release: int = 8) -> list[Path]:
+    """Compile one Java resource file and return every generated ``.class`` path."""
+
+    source_path = TEST_RESOURCES / Path(resource_name)
+    classes_dir = compile_java_sources(tmp_path, [source_path], release=release)
+    class_files = sorted(classes_dir.rglob("*.class"), key=lambda path: str(path.relative_to(classes_dir)))
+    if not class_files:
+        raise AssertionError(f"Java resource {resource_name!r} produced no .class files")
+    return class_files
+
+
+def list_java_resources() -> list[str]:
+    """Return all Java source fixtures under ``tests/resources`` as relative paths."""
+
+    return sorted(path.relative_to(TEST_RESOURCES).as_posix() for path in TEST_RESOURCES.rglob("*.java"))
 
 
 def make_compiled_jar(

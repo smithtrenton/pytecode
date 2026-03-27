@@ -17,10 +17,14 @@ from pytecode.modified_utf8 import decode_modified_utf8
 from tests.helpers import (
     class_entry_bytes,
     compile_java_resource,
+    compile_java_resource_classes,
     integer_entry_bytes,
+    list_java_resources,
     minimal_classfile,
     utf8_entry_bytes,
 )
+
+ROUNDTRIP_JAVA_RESOURCES = list_java_resources()
 
 # ---------------------------------------------------------------------------
 # Pytest fixtures — compiled Java sources
@@ -670,44 +674,12 @@ class TestRoundTrip:
         # CP validity — all entries should be non-None except index 0 and double-slot gaps.
         assert restored.constant_pool[0] is None
 
-    def test_roundtrip_hello_world(self, hello_world_class: Path) -> None:
-        self._assert_roundtrip(hello_world_class)
+    @pytest.mark.parametrize("resource_name", ROUNDTRIP_JAVA_RESOURCES)
+    def test_roundtrip_all_java_resources(self, tmp_path: Path, resource_name: str) -> None:
+        """Every Java source fixture should round-trip across all generated classes."""
 
-    def test_roundtrip_interface(self, interface_class: Path) -> None:
-        self._assert_roundtrip(interface_class)
-
-    def test_roundtrip_abstract(self, abstract_class: Path) -> None:
-        self._assert_roundtrip(abstract_class)
-
-    def test_roundtrip_enum(self, enum_class: Path) -> None:
-        self._assert_roundtrip(enum_class)
-
-    def test_roundtrip_multi_interface(self, multi_iface_class: Path) -> None:
-        self._assert_roundtrip(multi_iface_class)
-
-    def test_roundtrip_field_showcase(self, field_showcase_class: Path) -> None:
-        self._assert_roundtrip(field_showcase_class)
-
-    def test_roundtrip_try_catch(self, try_catch_class: Path) -> None:
-        self._assert_roundtrip(try_catch_class)
-
-    def test_roundtrip_annotated(self, annotated_class: Path) -> None:
-        self._assert_roundtrip(annotated_class)
-
-    def test_roundtrip_static_init(self, static_init_class: Path) -> None:
-        self._assert_roundtrip(static_init_class)
-
-    def test_roundtrip_generic_class(self, generic_class: Path) -> None:
-        self._assert_roundtrip(generic_class)
-
-    def test_roundtrip_outer_class(self, outer_class: Path) -> None:
-        self._assert_roundtrip(outer_class)
-
-    def test_roundtrip_control_flow(self, control_flow_class: Path) -> None:
-        self._assert_roundtrip(control_flow_class)
-
-    def test_roundtrip_instruction_showcase(self, instruction_showcase_class: Path) -> None:
-        self._assert_roundtrip(instruction_showcase_class)
+        for class_path in compile_java_resource_classes(tmp_path, resource_name):
+            self._assert_roundtrip(class_path)
 
     def test_roundtrip_from_scratch(self) -> None:
         """A from-scratch model should round-trip through to_classfile."""
