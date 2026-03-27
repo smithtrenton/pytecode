@@ -48,6 +48,7 @@ from pytecode.labels import (
     resolve_labels,
 )
 from pytecode.model import ClassModel, CodeModel, MethodModel
+from pytecode.operands import LdcInsn, LdcInt, LdcString
 from tests.helpers import compile_java_resource
 
 
@@ -183,6 +184,19 @@ def test_resolve_labels_allows_adjacent_and_terminal_labels() -> None:
     assert resolution.total_code_length == 1
 
 
+def test_resolve_labels_requires_cp_for_single_slot_ldc() -> None:
+    with pytest.raises(ValueError, match="ConstantPoolBuilder"):
+        resolve_labels([LdcInsn(LdcInt(42))])
+
+
+def test_resolve_labels_uses_cp_for_exact_single_slot_ldc_size() -> None:
+    end = Label("end")
+    resolution = resolve_labels([LdcInsn(LdcInt(42)), end], ConstantPoolBuilder())
+
+    assert resolution.label_offsets[end] == 2
+    assert resolution.total_code_length == 2
+
+
 def test_lower_code_supports_self_branch() -> None:
     loop = Label("loop")
     code = CodeModel(
@@ -221,6 +235,26 @@ def test_lower_code_recalculates_branch_offsets_after_edit() -> None:
 
     assert isinstance(second.code[0], Branch)
     assert second.code[0].offset == 5
+
+
+def test_lower_code_does_not_mutate_cp_on_failed_validation() -> None:
+    cp = ConstantPoolBuilder()
+    missing = Label("missing")
+    code = CodeModel(
+        max_stack=1,
+        max_locals=0,
+        instructions=[
+            LdcInsn(LdcString("x")),
+            BranchInsn(InsnInfoType.GOTO, missing),
+        ],
+    )
+    before = cp.build()
+
+    with pytest.raises(ValueError, match="not present"):
+        lower_code(code, cp)
+
+    assert cp.count == 1
+    assert cp.build() == before
 
 
 def test_lower_code_promotes_goto_to_goto_w() -> None:

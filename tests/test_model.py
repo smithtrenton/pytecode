@@ -87,6 +87,11 @@ def control_flow_class(tmp_path: Path) -> Path:
     return compile_java_resource(tmp_path, "ControlFlowExample.java")
 
 
+@pytest.fixture
+def instruction_showcase_class(tmp_path: Path) -> Path:
+    return compile_java_resource(tmp_path, "InstructionShowcase.java")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -700,6 +705,9 @@ class TestRoundTrip:
 
     def test_roundtrip_control_flow(self, control_flow_class: Path) -> None:
         self._assert_roundtrip(control_flow_class)
+
+    def test_roundtrip_instruction_showcase(self, instruction_showcase_class: Path) -> None:
+        self._assert_roundtrip(instruction_showcase_class)
 
     def test_roundtrip_from_scratch(self) -> None:
         """A from-scratch model should round-trip through to_classfile."""
