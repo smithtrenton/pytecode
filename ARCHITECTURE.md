@@ -272,7 +272,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 ### Test coverage
 
-The test suite provides both integration-level and unit-level coverage (828 tests total):
+The test suite provides both integration-level and unit-level coverage (831 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
@@ -289,8 +289,9 @@ The test suite provides both integration-level and unit-level coverage (828 test
 - `test_labels.py` — label/layout lowering coverage: offset resolution for linear, forward, backward, and multi-target branches; adjacent/terminal/dangling labels; duplicate label rejection; byte-size verification for every instruction subclass (including switch padding at offsets 0–3); automatic `GOTO_W`/`JSR_W` promotion for both forward and backward overflow; cascading promotion; all 16 conditional-branch inversions (parametrized); editing workflows showing offset recalculation after instruction insertion and removal; dynamic addition of exception handlers and debug entries; code-length boundary enforcement (65535 passes, 65536 raises); lifted exception/debug metadata reconstruction; and symbolic lifting from both manual raw `CodeAttr` fixtures and compiled control-flow bytecode
 - `test_operands.py` — symbolic operand wrapper coverage: constructor validation (opcode rejection, JVM `u1`/`u2`/`i2` bounds, bootstrap-index validation, MethodHandle reference-kind validation), mapping-table sanity (roundtrips for `_IMPLICIT_VAR_SLOTS`/`_VAR_SHORTCUTS`/`_WIDE_TO_BASE`/`_BASE_TO_WIDE`), lifting tests for all 9 wrapper families (FieldInsn/MethodInsn/InterfaceMethodInsn/TypeInsn/LdcInsn/MultiANewArrayInsn/VarInsn/IIncInsn/InvokeDynamicInsn) from compiled `InstructionShowcase.java`, VarInsn normalisation (implicit → VarInsn, no raw implicit opcode survives lifting), LDC value-type discrimination (including `LdcMethodHandle` and `LdcDynamic` lowering coverage), lowering encoding-selection tests (implicit/explicit/WIDE for VarInsn; narrow/wide for IIncInsn; LDC/LDC_W/LDC2_W for LdcInsn based on CP index range; InterfaceMethodref vs Methodref for MethodInsn.is_interface; auto-computed count for InterfaceMethodInsn), mutation-time validation during lowering for mutable wrappers, edit-from-scratch tests (FieldInsn CP entry creation, deduplication of identical LdcInsn, mixed symbolic + raw instruction lists), and InstructionShowcase round-trip verification
 - `test_hierarchy.py` — hierarchy-resolution coverage: adapters from parsed `ClassFile` and `ClassModel`, linear superclass walks with an implicit `java/lang/Object` root, supertype traversal through superclass and interface edges, subtype checks, common-superclass lookup, explicit missing-class and cycle failures, and method-override detection across same-package package-private methods, protected/public inheritance, interface methods, and non-overridable final/static/private declarations
+- `test_helpers.py` — persistent Java fixture-cache coverage for `tests/helpers.py`, including cache hits across separate temp directories, invalidation when source contents change, and invalidation when `javac --release` changes.
 
-Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts. Helper utilities in `tests/helpers.py` compile focused fixtures and small JARs with `javac` during tests.
+Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts. Helper utilities in `tests/helpers.py` compile focused fixtures and small JARs with `javac`, persist those outputs in a content-addressed cache under `.pytest_cache/pytecode-javac`, and only re-run `javac` when the ordered source list, source contents, `--release`, or `javac` identity changes.
 
 ## Recommended target architecture
 
