@@ -16,6 +16,8 @@ For symbolic operand wrappers — `FieldInsn`, `MethodInsn`, `InterfaceMethodIns
 
 For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `InheritedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names and provide the hierarchy foundation for later control-flow and frame work.
 
+For control-flow graph construction and stack/local simulation — `build_cfg()`, `simulate()`, `ControlFlowGraph`, `BasicBlock`, `SimulationResult`, `FrameState`, `initial_frame()`, and verification types (`VType`, `VTop`, `VInteger`, `VFloat`, `VLong`, `VDouble`, `VNull`, `VObject`, `VUninitializedThis`, `VUninitialized`) — import from `pytecode.analysis`. The analysis module operates on `CodeModel` and accepts an optional `ClassResolver` for reference-type merging at join points.
+
 For descriptor and signature parsing — `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()`, `to_descriptor()`, `slot_size()`, `parameter_slot_count()`, `is_valid_field_descriptor()`, `is_valid_method_descriptor()`, and the structured types `BaseType`, `ObjectType`, `ArrayType`, `MethodDescriptor`, `ClassSignature`, `MethodSignature` — import from `pytecode.descriptors`.
 
 For constant-pool construction and management — `ConstantPoolBuilder` with deduplication, symbol-table lookups, compound-entry auto-creation, and deterministic ordering — import from `pytecode.constant_pool_builder`.

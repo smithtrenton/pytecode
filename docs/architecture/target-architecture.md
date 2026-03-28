@@ -64,20 +64,19 @@ Responsibilities:
 
 This is a cross-cutting concern used by the editing model, frame computation, constant-pool management, and validation. Without it, descriptor parsing will be scattered ad hoc throughout the codebase.
 
-## 4. Analysis and control-flow layer ([#9](https://github.com/smithtrenton/pytecode/issues/9))
+## 4. Analysis and control-flow layer ([#9](https://github.com/smithtrenton/pytecode/issues/9) — done)
 
-Add intermediate analysis structures for bytecode reasoning.
+`pytecode.analysis` now provides control-flow graph construction, stack/local simulation with verification types, and forward dataflow analysis over the editing model. The implemented layer covers:
 
-Responsibilities:
+- verification type system mirroring JVM spec §4.10.1.2 (VType union with 9 types, merge rules)
+- opcode metadata table with stack effects and control-flow properties for all ~205 opcodes
+- basic block partitioning and CFG construction with branch, exception, switch, and fall-through edges
+- category-2-aware frame state with push/pop/set_local/get_local operations
+- worklist-based forward dataflow simulation computing per-block entry/exit states, max_stack, and max_locals
+- optional `ClassResolver` integration for reference-type merging at join points
+- structured error types for stack underflow, invalid locals, and type-merge failures
 
-- control-flow graph construction (basic blocks, edges for branches, exception handlers, and fall-through)
-- exception handler range analysis (overlapping handlers, nested ranges, handler entry stack state)
-- stack and local variable simulation (type tracking per slot, category-aware — int-like types, long, double, reference)
-- type merging at control-flow join points (needed for frame computation)
-- data-flow analysis used by frame computation and validation
-- method descriptor parsing to establish initial parameter slots in the frame
-
-This layer will make frame calculation and verification much more maintainable.
+Max stack/max locals recomputation and StackMapTable generation depend on this layer and are deferred to [#10](https://github.com/smithtrenton/pytecode/issues/10).
 
 ### 4a. Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 
@@ -89,7 +88,7 @@ This layer will make frame calculation and verification much more maintainable.
 - method-override detection (`find_overridden_methods()`)
 - a minimal `ClassResolver` protocol plus the in-memory `MappingClassResolver`
 
-Frame computation still depends on a later verifier-aware layer for control-flow, stack/local simulation, and reference-type merge policy. The hierarchy resolver is the foundation those later phases build on.
+Frame computation still depends on max_stack/max_locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), which build on the now-complete analysis layer.
 
 ## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 
