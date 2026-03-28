@@ -2,7 +2,7 @@
 
 `pytecode` is a Python 3.14+ library for parsing, inspecting, and beginning to manipulate JVM class files, bytecode, and JAR files.
 
-See `ARCHITECTURE.md` for a summary of the current parser + label-aware editing model and the roadmap toward a full classfile manipulation library.
+See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current parser + label-aware editing model and the roadmap toward a full classfile manipulation library.
 
 ## Current public API
 
@@ -10,11 +10,17 @@ See `ARCHITECTURE.md` for a summary of the current parser + label-aware editing 
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, and parses classes via `ClassReader`.
 - `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references.
 
-For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, and lifted exception/debug entry types, import directly from `pytecode.labels`.
+For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, and `LabelResolution`, import directly from `pytecode.labels`.
 
 For symbolic operand wrappers — `FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`, and the `LdcValue` union types — import from `pytecode.operands`. These wrappers are lifted automatically by `ClassModel.from_classfile()` and lowered automatically by `ClassModel.to_classfile()`.
 
-For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names and provide the hierarchy foundation for later control-flow and frame work.
+For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `InheritedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names and provide the hierarchy foundation for later control-flow and frame work.
+
+For descriptor and signature parsing — `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()`, `to_descriptor()`, `slot_size()`, `parameter_slot_count()`, `is_valid_field_descriptor()`, `is_valid_method_descriptor()`, and the structured types `BaseType`, `ObjectType`, `ArrayType`, `MethodDescriptor`, `ClassSignature`, `MethodSignature` — import from `pytecode.descriptors`.
+
+For constant-pool construction and management — `ConstantPoolBuilder` with deduplication, symbol-table lookups, compound-entry auto-creation, and deterministic ordering — import from `pytecode.constant_pool_builder`.
+
+For JVM Modified UTF-8 encoding and decoding of `CONSTANT_Utf8` values — `decode_modified_utf8()` and `encode_modified_utf8()` — import from `pytecode.modified_utf8`.
 
 If you call `resolve_labels()` directly on code that contains single-slot `LdcInsn` values, pass the current `ConstantPoolBuilder` so `LDC` vs `LDC_W` sizing stays exact. `ClassModel.to_classfile()` and `lower_code()` handle that automatically.
 
