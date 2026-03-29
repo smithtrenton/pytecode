@@ -23,9 +23,32 @@ JVM Spec references
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .attributes import (
+    AppendFrameInfo,
+    ChopFrameInfo,
+    DoubleVariableInfo,
+    FloatVariableInfo,
+    FullFrameInfo,
+    IntegerVariableInfo,
+    LongVariableInfo,
+    NullVariableInfo,
+    ObjectVariableInfo,
+    SameFrameExtendedInfo,
+    SameFrameInfo,
+    SameLocals1StackItemFrameExtendedInfo,
+    SameLocals1StackItemFrameInfo,
+    StackMapFrameInfo,
+    StackMapTableAttr,
+    TopVariableInfo,
+    UninitializedThisVariableInfo,
+    UninitializedVariableInfo,
+    VerificationTypeInfo,
+)
+from .constants import VerificationType
 from .descriptors import (
     ArrayType as DescArrayType,
 )
@@ -74,6 +97,7 @@ from .operands import (
 )
 
 if TYPE_CHECKING:
+    from .constant_pool_builder import ConstantPoolBuilder
     from .hierarchy import ClassResolver
     from .model import CodeModel, MethodModel
 
@@ -150,6 +174,8 @@ class VUninitialized:
     """Verification type for an object created by NEW before ``<init>``.
 
     ``new_label`` identifies the NEW instruction that created this value.
+    Analysis inserts synthetic labels for unlabeled ``NEW`` instructions so
+    edited code can still refer to allocation sites precisely.
     """
 
     new_label: Label
@@ -890,10 +916,11 @@ def build_cfg(code: CodeModel) -> ControlFlowGraph:
 
     for i, item in enumerate(items):
         if isinstance(item, Label):
-            pending_labels.append(item)
-            # Map this label to the block that will contain the next instruction.
-            if i in leader_set or (current_block is not None and i in leader_set):
-                pass
+            next_insn = _find_next_insn(items, i + 1)
+            if current_block is not None and (next_insn is None or next_insn not in leader_set):
+                label_to_block_map[item] = current_block
+            else:
+                pending_labels.append(item)
             continue
 
         # item is an InsnInfo
@@ -1063,6 +1090,7 @@ def simulate(
             max_locals=len(entry.locals),
         )
 
+    analysis_code = _prepare_analysis_code(code)
     entry_frame = initial_frame(method, class_name)
 
     entry_states: dict[int, FrameState] = {cfg.entry.id: entry_frame}
@@ -1103,7 +1131,7 @@ def simulate(
                     in_worklist,
                     resolver,
                 )
-            state = _simulate_insn(item, state, code, resolver)
+            state = _simulate_insn(item, state, analysis_code, class_name)
             if state.stack_depth > max_stack:
                 max_stack = state.stack_depth
             if len(state.locals) > max_locals:
@@ -1391,7 +1419,7 @@ def _simulate_insn(
     insn: InsnInfo,
     state: FrameState,
     code: CodeModel,
-    resolver: ClassResolver | None,
+    class_name: str,
 ) -> FrameState:
     """Apply the effect of one instruction to the frame state."""
 
@@ -1410,7 +1438,7 @@ def _simulate_insn(
 
     # --- MethodInsn ---
     if isinstance(insn, MethodInsn):
-        return _simulate_method_insn(insn, state, code)
+        return _simulate_method_insn(insn, state, class_name)
 
     # --- InterfaceMethodInsn ---
     if isinstance(insn, InterfaceMethodInsn):
@@ -1499,7 +1527,7 @@ def _simulate_field_insn(insn: FieldInsn, state: FrameState) -> FrameState:
 def _simulate_method_insn(
     insn: MethodInsn,
     state: FrameState,
-    code: CodeModel,
+    class_name: str,
 ) -> FrameState:
     """Simulate INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC."""
     md = parse_method_descriptor(insn.descriptor)
@@ -1510,8 +1538,11 @@ def _simulate_method_insn(
     # Pop objectref for non-static methods.
     if insn.type != _T.INVOKESTATIC:
         state, (receiver,) = state.pop(1)
-        # Special handling: <init> call converts VUninitialized → VObject.
-        if insn.name == "<init>" and isinstance(receiver, VUninitialized | VUninitializedThis):
+        # Successful constructor calls initialize either ``this`` or the
+        # freshly allocated object referenced by ``receiver``.
+        if insn.name == "<init>" and isinstance(receiver, VUninitializedThis):
+            state = _replace_uninitialized(state, receiver, VObject(class_name))
+        elif insn.name == "<init>" and isinstance(receiver, VUninitialized):
             state = _replace_uninitialized(state, receiver, VObject(insn.owner))
 
     # Push return value.
@@ -1554,11 +1585,10 @@ def _simulate_type_insn(
 ) -> FrameState:
     """Simulate NEW, CHECKCAST, INSTANCEOF, ANEWARRAY."""
     if insn.type == _T.NEW:
-        # Find the Label immediately before (or at) this NEW instruction.
         new_label = _find_label_for_insn(code, insn)
-        if new_label is not None:
-            return state.push(VUninitialized(new_label))
-        return state.push(VObject(insn.class_name))
+        if new_label is None:
+            raise AnalysisError("NEW instruction is missing an analysis label")
+        return state.push(VUninitialized(new_label))
     elif insn.type == _T.CHECKCAST:
         state, _ = state.pop(1)
         return state.push(VObject(insn.class_name))
@@ -1928,12 +1958,45 @@ def _replace_uninitialized(
     return FrameState(new_stack, new_locals)
 
 
+def _prepare_analysis_code(code: CodeModel) -> CodeModel:
+    """Insert transient labels before unlabeled ``NEW`` instructions."""
+    prepared_items: list[CodeItem] = []
+    inserted = False
+    prev_was_label = False
+
+    for item in code.instructions:
+        if isinstance(item, Label):
+            prepared_items.append(item)
+            prev_was_label = True
+            continue
+
+        if isinstance(item, TypeInsn) and item.type == _T.NEW and not prev_was_label:
+            prepared_items.append(Label())
+            inserted = True
+        prepared_items.append(item)
+        prev_was_label = False
+
+    if not inserted:
+        return code
+
+    return type(code)(
+        max_stack=code.max_stack,
+        max_locals=code.max_locals,
+        instructions=prepared_items,
+        exception_handlers=code.exception_handlers,
+        line_numbers=code.line_numbers,
+        local_variables=code.local_variables,
+        local_variable_types=code.local_variable_types,
+        attributes=code.attributes,
+    )
+
+
 def _find_label_for_insn(code: CodeModel, target_insn: InsnInfo) -> Label | None:
     """Find the Label immediately preceding *target_insn* in the code.
 
-    Returns ``None`` if no label precedes the instruction.  This is used
-    by ``NEW`` to associate an ``VUninitialized`` type with its creation
-    point, as required by the JVM verifier.
+    Returns ``None`` if no label precedes the instruction.  Simulation calls
+    this on the analysis-prepared instruction stream, where unlabeled
+    ``NEW`` instructions have already been given a synthetic label.
     """
     prev_label: Label | None = None
     for item in code.instructions:
@@ -1944,6 +2007,295 @@ def _find_label_for_insn(code: CodeModel, target_insn: InsnInfo) -> Label | None
         else:
             prev_label = None
     return None
+
+
+# ===================================================================
+# VType → VerificationTypeInfo conversion
+# ===================================================================
+
+
+def _vtype_to_vti(
+    vtype: VType,
+    cp: ConstantPoolBuilder,
+    label_offsets: dict[Label, int],
+) -> VerificationTypeInfo:
+    """Convert a verification type to a raw ``VerificationTypeInfo``."""
+    if isinstance(vtype, VTop):
+        return TopVariableInfo(VerificationType.TOP)
+    if isinstance(vtype, VInteger):
+        return IntegerVariableInfo(VerificationType.INTEGER)
+    if isinstance(vtype, VFloat):
+        return FloatVariableInfo(VerificationType.FLOAT)
+    if isinstance(vtype, VLong):
+        return LongVariableInfo(VerificationType.LONG)
+    if isinstance(vtype, VDouble):
+        return DoubleVariableInfo(VerificationType.DOUBLE)
+    if isinstance(vtype, VNull):
+        return NullVariableInfo(VerificationType.NULL)
+    if isinstance(vtype, VUninitializedThis):
+        return UninitializedThisVariableInfo(VerificationType.UNINITIALIZED_THIS)
+    if isinstance(vtype, VObject):
+        return ObjectVariableInfo(VerificationType.OBJECT, cp.add_class(vtype.class_name))
+    # VUninitialized
+    offset = label_offsets.get(vtype.new_label)
+    if offset is None:
+        raise ValueError(f"missing bytecode offset for uninitialized NEW site {vtype.new_label!r}")
+    return UninitializedVariableInfo(VerificationType.UNINITIALIZED, offset)
+
+
+def _vtypes_to_vtis(
+    vtypes: tuple[VType, ...],
+    cp: ConstantPoolBuilder,
+    label_offsets: dict[Label, int],
+) -> list[VerificationTypeInfo]:
+    """Convert a tuple of verification types to raw ``VerificationTypeInfo`` list."""
+    return [_vtype_to_vti(vt, cp, label_offsets) for vt in vtypes]
+
+
+def _verification_type_info_size(vti: VerificationTypeInfo) -> int:
+    """Return the serialized size of a ``verification_type_info``."""
+    if isinstance(vti, ObjectVariableInfo | UninitializedVariableInfo):
+        return 3
+    return 1
+
+
+def _stack_map_frame_size(frame: StackMapFrameInfo) -> int:
+    """Return the serialized size of a ``stack_map_frame``."""
+    if isinstance(frame, SameFrameInfo):
+        return 1
+    if isinstance(frame, SameLocals1StackItemFrameInfo):
+        return 1 + _verification_type_info_size(frame.stack)
+    if isinstance(frame, SameLocals1StackItemFrameExtendedInfo):
+        return 3 + _verification_type_info_size(frame.stack)
+    if isinstance(frame, ChopFrameInfo | SameFrameExtendedInfo):
+        return 3
+    if isinstance(frame, AppendFrameInfo):
+        return 3 + sum(_verification_type_info_size(vti) for vti in frame.locals)
+    if isinstance(frame, FullFrameInfo):
+        return (
+            7
+            + sum(_verification_type_info_size(vti) for vti in frame.locals)
+            + sum(_verification_type_info_size(vti) for vti in frame.stack)
+        )
+    raise TypeError(f"unsupported stack map frame type: {type(frame).__name__}")
+
+
+def _stack_map_table_attribute_length(frames: Sequence[StackMapFrameInfo]) -> int:
+    """Return the serialized ``attribute_length`` for a ``StackMapTable``."""
+    return 2 + sum(_stack_map_frame_size(frame) for frame in frames)
+
+
+# ===================================================================
+# Compact frame encoding selection
+# ===================================================================
+
+
+def _select_frame(
+    offset_delta: int,
+    prev_locals: Sequence[VerificationTypeInfo],
+    curr_locals: Sequence[VerificationTypeInfo],
+    curr_stack: Sequence[VerificationTypeInfo],
+) -> StackMapFrameInfo:
+    """Select the most compact StackMapTable frame encoding.
+
+    Follows JVM spec §4.7.4 frame type selection rules.
+    """
+    locals_same = prev_locals == curr_locals
+
+    if locals_same and not curr_stack:
+        # same_frame or same_frame_extended
+        if offset_delta <= 63:
+            return SameFrameInfo(frame_type=offset_delta)
+        return SameFrameExtendedInfo(frame_type=251, offset_delta=offset_delta)
+
+    if locals_same and len(curr_stack) == 1:
+        # same_locals_1_stack_item or extended variant
+        if offset_delta <= 63:
+            return SameLocals1StackItemFrameInfo(
+                frame_type=64 + offset_delta,
+                stack=curr_stack[0],
+            )
+        return SameLocals1StackItemFrameExtendedInfo(
+            frame_type=247,
+            offset_delta=offset_delta,
+            stack=curr_stack[0],
+        )
+
+    if not curr_stack:
+        diff = len(curr_locals) - len(prev_locals)
+
+        # chop_frame: 1–3 fewer locals
+        if -3 <= diff < 0 and curr_locals == prev_locals[:len(curr_locals)]:
+            return ChopFrameInfo(
+                frame_type=251 + diff,  # 248, 249, or 250
+                offset_delta=offset_delta,
+            )
+
+        # append_frame: 1–3 more locals
+        if 0 < diff <= 3 and curr_locals[:len(prev_locals)] == prev_locals:
+            return AppendFrameInfo(
+                frame_type=251 + diff,  # 252, 253, or 254
+                offset_delta=offset_delta,
+                locals=list(curr_locals[len(prev_locals):]),
+            )
+
+    # full_frame
+    return FullFrameInfo(
+        frame_type=255,
+        offset_delta=offset_delta,
+        number_of_locals=len(curr_locals),
+        locals=list(curr_locals),
+        number_of_stack_items=len(curr_stack),
+        stack=list(curr_stack),
+    )
+
+
+# ===================================================================
+# compute_maxs / compute_frames — public API
+# ===================================================================
+
+
+def compute_maxs(
+    code: CodeModel,
+    method: MethodModel,
+    class_name: str,
+    resolver: ClassResolver | None = None,
+) -> tuple[int, int]:
+    """Recompute ``max_stack`` and ``max_locals`` for a method's code.
+
+    Builds a control-flow graph, runs forward dataflow simulation, and
+    returns ``(max_stack, max_locals)``.
+    """
+    cfg = build_cfg(code)
+    result = simulate(cfg, code, method, class_name, resolver)
+    return result.max_stack, result.max_locals
+
+
+@dataclass(frozen=True, slots=True)
+class FrameComputationResult:
+    """Results of frame computation: limits and StackMapTable.
+
+    ``max_stack`` and ``max_locals`` are the recomputed limits.
+    ``stack_map_table`` is ``None`` when no frames are required
+    (e.g. a linear method with no branches or exception handlers).
+    """
+
+    max_stack: int
+    max_locals: int
+    stack_map_table: StackMapTableAttr | None
+
+
+def compute_frames(
+    code: CodeModel,
+    method: MethodModel,
+    class_name: str,
+    cp: ConstantPoolBuilder,
+    label_offsets: dict[Label, int],
+    resolver: ClassResolver | None = None,
+) -> FrameComputationResult:
+    """Recompute ``max_stack``, ``max_locals``, and ``StackMapTable`` frames.
+
+    Builds a CFG, simulates stack/local states, then generates compact
+    StackMapTable entries at every branch/exception-handler target.
+
+    Parameters
+    ----------
+    code:
+        The ``CodeModel`` whose frames to compute.
+    method:
+        The ``MethodModel`` owning this code (used for initial frame).
+    class_name:
+        Internal name of the enclosing class (e.g. ``"com/example/Foo"``).
+    cp:
+        ``ConstantPoolBuilder`` for allocating ``CONSTANT_Class`` entries
+        referenced by ``ObjectVariableInfo``.
+    label_offsets:
+        Mapping from ``Label`` to resolved bytecode offset, as produced
+        by ``resolve_labels()``.
+    resolver:
+        Optional class hierarchy resolver for precise type merging.
+
+    Returns
+    -------
+    FrameComputationResult
+        Contains ``max_stack``, ``max_locals``, and an optional
+        ``StackMapTableAttr`` (``None`` if no frames are needed).
+    """
+    analysis_code = _prepare_analysis_code(code)
+    analysis_label_offsets = label_offsets
+    if analysis_code is not code:
+        from .labels import resolve_labels
+
+        analysis_label_offsets = resolve_labels(list(analysis_code.instructions), cp).label_offsets
+
+    cfg = build_cfg(code)
+    sim = simulate(cfg, analysis_code, method, class_name, resolver)
+
+    if not cfg.blocks:
+        return FrameComputationResult(
+            max_stack=sim.max_stack,
+            max_locals=sim.max_locals,
+            stack_map_table=None,
+        )
+
+    # Identify blocks that need frames: every block except the entry block
+    # that has an entry state (i.e., is reachable).
+    entry_block_id = cfg.entry.id
+    frame_targets: list[tuple[int, int]] = []  # (bytecode_offset, block_id)
+    for block in cfg.blocks:
+        if block.id == entry_block_id:
+            continue
+        if block.id not in sim.entry_states:
+            continue
+        if block.label is None:
+            continue
+        offset = label_offsets.get(block.label)
+        if offset is None:
+            continue
+        frame_targets.append((offset, block.id))
+
+    frame_targets.sort(key=lambda t: t[0])
+
+    if not frame_targets:
+        return FrameComputationResult(
+            max_stack=sim.max_stack,
+            max_locals=sim.max_locals,
+            stack_map_table=None,
+        )
+
+    # Build the initial frame locals as the "previous" frame for delta computation.
+    entry_frame = initial_frame(method, class_name)
+    prev_locals = _vtypes_to_vtis(entry_frame.locals, cp, analysis_label_offsets)
+    prev_offset = -1  # offset_delta for the first frame is (offset - 0)
+
+    frames: list[StackMapFrameInfo] = []
+    for offset, block_id in frame_targets:
+        state = sim.entry_states[block_id]
+        curr_locals = _vtypes_to_vtis(state.locals, cp, analysis_label_offsets)
+        curr_stack = _vtypes_to_vtis(state.stack, cp, analysis_label_offsets)
+
+        # offset_delta = offset - prev_offset - 1 for the first frame,
+        # and offset - prev_offset - 1 for subsequent frames.
+        offset_delta = offset - prev_offset - 1
+
+        frame = _select_frame(offset_delta, prev_locals, curr_locals, curr_stack)
+        frames.append(frame)
+
+        prev_locals = curr_locals
+        prev_offset = offset
+
+    stack_map_table = StackMapTableAttr(
+        attribute_name_index=cp.add_utf8("StackMapTable"),
+        attribute_length=_stack_map_table_attribute_length(frames),
+        number_of_entries=len(frames),
+        entries=frames,
+    )
+
+    return FrameComputationResult(
+        max_stack=sim.max_stack,
+        max_locals=sim.max_locals,
+        stack_map_table=stack_map_table,
+    )
 
 
 # ===================================================================
@@ -1988,4 +2340,8 @@ __all__ = [
     # Simulation
     "SimulationResult",
     "simulate",
+    # Frame computation
+    "FrameComputationResult",
+    "compute_frames",
+    "compute_maxs",
 ]

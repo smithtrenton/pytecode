@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from pytecode import attributes, constants
 from pytecode.analysis import (
     AnalysisError,
     ControlFlowGraph,
+    FrameComputationResult,
     FrameState,
     InvalidLocalError,
     SimulationResult,
@@ -33,6 +36,7 @@ from pytecode.analysis import (
     vtype_from_descriptor,
     vtype_from_field_descriptor_str,
 )
+from pytecode.constant_pool import ClassInfo
 from pytecode.constants import MethodAccessFlag
 from pytecode.descriptors import ArrayType as DescArrayType
 from pytecode.descriptors import BaseType, ObjectType
@@ -476,6 +480,21 @@ class TestBuildCfgBranching:
         entry = cfg.blocks[0]
         # GOTO is unconditional — only 1 successor (the target), no fall-through.
         assert len(entry.successor_ids) == 1
+
+    def test_non_target_mid_block_label_maps_to_current_block(self) -> None:
+        helper = Label("helper")
+        target = Label("target")
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            helper,
+            InsnInfo(InsnInfoType.POP, 1),
+            BranchInsn(InsnInfoType.GOTO, target),
+            target,
+            InsnInfo(InsnInfoType.RETURN, 4),
+        )
+        cfg = build_cfg(code)
+        assert cfg.label_to_block[helper] is cfg.blocks[0]
+        assert cfg.label_to_block[target] is cfg.blocks[1]
 
 
 class TestBuildCfgSwitch:
@@ -1687,3 +1706,775 @@ class TestAnalysisErrors:
 
     def test_type_merge_error_is_analysis_error(self) -> None:
         assert issubclass(TypeMergeError, AnalysisError)
+
+
+# ===================================================================
+# VType → VerificationTypeInfo conversion tests
+# ===================================================================
+
+
+class TestVTypeToVerificationTypeInfo:
+    """Tests for ``_vtype_to_vti`` — converting analysis VTypes to raw attribute types."""
+
+    def setup_method(self) -> None:
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+
+        self.cp = ConstantPoolBuilder()
+        self.label_offsets: dict[Label, int] = {}
+
+    def _convert(
+        self,
+        vtype: VTop | VInteger | VFloat | VLong | VDouble | VNull | VObject | VUninitializedThis | VUninitialized,
+    ) -> attributes.VerificationTypeInfo:
+        from pytecode.analysis import _vtype_to_vti
+
+        return _vtype_to_vti(vtype, self.cp, self.label_offsets)
+
+    def test_top(self) -> None:
+        result = self._convert(VTop())
+        assert isinstance(result, attributes.TopVariableInfo)
+        assert result.tag == constants.VerificationType.TOP
+
+    def test_integer(self) -> None:
+        result = self._convert(VInteger())
+        assert isinstance(result, attributes.IntegerVariableInfo)
+        assert result.tag == constants.VerificationType.INTEGER
+
+    def test_float(self) -> None:
+        result = self._convert(VFloat())
+        assert isinstance(result, attributes.FloatVariableInfo)
+        assert result.tag == constants.VerificationType.FLOAT
+
+    def test_long(self) -> None:
+        result = self._convert(VLong())
+        assert isinstance(result, attributes.LongVariableInfo)
+        assert result.tag == constants.VerificationType.LONG
+
+    def test_double(self) -> None:
+        result = self._convert(VDouble())
+        assert isinstance(result, attributes.DoubleVariableInfo)
+        assert result.tag == constants.VerificationType.DOUBLE
+
+    def test_null(self) -> None:
+        result = self._convert(VNull())
+        assert isinstance(result, attributes.NullVariableInfo)
+        assert result.tag == constants.VerificationType.NULL
+
+    def test_uninitialized_this(self) -> None:
+        result = self._convert(VUninitializedThis())
+        assert isinstance(result, attributes.UninitializedThisVariableInfo)
+        assert result.tag == constants.VerificationType.UNINITIALIZED_THIS
+
+    def test_object(self) -> None:
+        result = self._convert(VObject("java/lang/String"))
+        assert isinstance(result, attributes.ObjectVariableInfo)
+        assert result.tag == constants.VerificationType.OBJECT
+        assert result.cpool_index > 0
+
+    def test_object_allocates_class_entry(self) -> None:
+        self._convert(VObject("com/example/Foo"))
+        # Verify the CP entry was created
+        pool = self.cp.build()
+        found = False
+        for entry in pool:
+            if entry is not None and isinstance(entry, ClassInfo):
+                name = self.cp.resolve_utf8(entry.name_index)
+                if name == "com/example/Foo":
+                    found = True
+                    break
+        assert found
+
+    def test_uninitialized(self) -> None:
+        label = Label()
+        self.label_offsets[label] = 42
+        result = self._convert(VUninitialized(label))
+        assert isinstance(result, attributes.UninitializedVariableInfo)
+        assert result.tag == constants.VerificationType.UNINITIALIZED
+        assert result.offset == 42
+
+    def test_uninitialized_missing_label_raises(self) -> None:
+        label = Label()
+        with pytest.raises(ValueError, match="missing bytecode offset"):
+            self._convert(VUninitialized(label))
+
+
+# ===================================================================
+# Compact frame encoding selection tests
+# ===================================================================
+
+
+class TestSelectFrame:
+    """Tests for ``_select_frame`` — compact StackMapTable encoding selection."""
+
+    def _select(
+        self,
+        offset_delta: int,
+        prev_locals: Sequence[attributes.VerificationTypeInfo],
+        curr_locals: Sequence[attributes.VerificationTypeInfo],
+        curr_stack: Sequence[attributes.VerificationTypeInfo] | None = None,
+    ) -> attributes.StackMapFrameInfo:
+        from pytecode.analysis import _select_frame
+
+        return _select_frame(offset_delta, prev_locals, curr_locals, curr_stack or [])
+
+    def test_same_frame_small_delta(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(5, locals_, locals_)
+        assert isinstance(result, attributes.SameFrameInfo)
+        assert result.frame_type == 5
+
+    def test_same_frame_zero_delta(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(0, locals_, locals_)
+        assert isinstance(result, attributes.SameFrameInfo)
+        assert result.frame_type == 0
+
+    def test_same_frame_max_small_delta(self) -> None:
+        locals_: list[attributes.VerificationTypeInfo] = []
+        result = self._select(63, locals_, locals_)
+        assert isinstance(result, attributes.SameFrameInfo)
+        assert result.frame_type == 63
+
+    def test_same_frame_extended(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(64, locals_, locals_)
+        assert isinstance(result, attributes.SameFrameExtendedInfo)
+        assert result.frame_type == 251
+        assert result.offset_delta == 64
+
+    def test_same_locals_1_stack_item_small_delta(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        stack = [attributes.FloatVariableInfo(constants.VerificationType.FLOAT)]
+        result = self._select(10, locals_, locals_, stack)
+        assert isinstance(result, attributes.SameLocals1StackItemFrameInfo)
+        assert result.frame_type == 74  # 64 + 10
+        assert result.stack == stack[0]
+
+    def test_same_locals_1_stack_item_extended(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        stack = [attributes.FloatVariableInfo(constants.VerificationType.FLOAT)]
+        result = self._select(100, locals_, locals_, stack)
+        assert isinstance(result, attributes.SameLocals1StackItemFrameExtendedInfo)
+        assert result.frame_type == 247
+        assert result.offset_delta == 100
+
+    def test_chop_1_local(self) -> None:
+        prev = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+        ]
+        curr = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.ChopFrameInfo)
+        assert result.frame_type == 250  # 251 + (-1)
+        assert result.offset_delta == 5
+
+    def test_chop_3_locals(self) -> None:
+        prev = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+            attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE),
+            attributes.LongVariableInfo(constants.VerificationType.LONG),
+        ]
+        curr = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.ChopFrameInfo)
+        assert result.frame_type == 248  # 251 + (-3)
+
+    def test_append_1_local(self) -> None:
+        prev = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        curr = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+        ]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.AppendFrameInfo)
+        assert result.frame_type == 252  # 251 + 1
+        assert result.offset_delta == 5
+        assert len(result.locals) == 1
+        assert isinstance(result.locals[0], attributes.FloatVariableInfo)
+
+    def test_append_3_locals(self) -> None:
+        prev = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        curr = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+            attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE),
+            attributes.LongVariableInfo(constants.VerificationType.LONG),
+        ]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.AppendFrameInfo)
+        assert result.frame_type == 254  # 251 + 3
+
+    def test_full_frame_different_locals_with_stack(self) -> None:
+        prev = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        curr = [attributes.FloatVariableInfo(constants.VerificationType.FLOAT)]
+        stack = [attributes.NullVariableInfo(constants.VerificationType.NULL)]
+        result = self._select(5, prev, curr, stack)
+        assert isinstance(result, attributes.FullFrameInfo)
+        assert result.frame_type == 255
+        assert result.number_of_locals == 1
+        assert result.number_of_stack_items == 1
+
+    def test_full_frame_multiple_stack_items(self) -> None:
+        locals_ = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        stack = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+        ]
+        result = self._select(5, locals_, locals_, stack)
+        assert isinstance(result, attributes.FullFrameInfo)
+        assert result.frame_type == 255
+
+    def test_full_frame_chop_more_than_3(self) -> None:
+        """Chopping > 3 locals requires a full_frame."""
+        prev = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+            attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE),
+            attributes.LongVariableInfo(constants.VerificationType.LONG),
+            attributes.NullVariableInfo(constants.VerificationType.NULL),
+        ]
+        curr = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.FullFrameInfo)
+
+    def test_full_frame_append_more_than_3(self) -> None:
+        """Appending > 3 locals requires a full_frame."""
+        prev = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        curr = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+            attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE),
+            attributes.LongVariableInfo(constants.VerificationType.LONG),
+            attributes.NullVariableInfo(constants.VerificationType.NULL),
+        ]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.FullFrameInfo)
+
+    def test_chop_requires_prefix_match(self) -> None:
+        """If the remaining locals differ, fall through to full_frame."""
+        prev = [
+            attributes.IntegerVariableInfo(constants.VerificationType.INTEGER),
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+        ]
+        curr = [attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE)]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.FullFrameInfo)
+
+    def test_append_requires_prefix_match(self) -> None:
+        """If the shared prefix doesn't match, fall through to full_frame."""
+        prev = [attributes.IntegerVariableInfo(constants.VerificationType.INTEGER)]
+        curr = [
+            attributes.FloatVariableInfo(constants.VerificationType.FLOAT),
+            attributes.DoubleVariableInfo(constants.VerificationType.DOUBLE),
+        ]
+        result = self._select(5, prev, curr)
+        assert isinstance(result, attributes.FullFrameInfo)
+
+
+# ===================================================================
+# compute_maxs tests
+# ===================================================================
+
+
+class TestComputeMaxs:
+    """Tests for ``compute_maxs`` — recomputing max_stack/max_locals."""
+
+    def test_simple_return(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        code = _code(InsnInfo(InsnInfoType.RETURN, 0))
+        method = _static_method(descriptor="()V", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms == 0
+        assert ml == 0
+
+    def test_iconst_ireturn(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_1, 0),
+            InsnInfo(InsnInfoType.IRETURN, 1),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms == 1
+        assert ml == 0
+
+    def test_instance_method_has_this_in_locals(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        code = _code(InsnInfo(InsnInfoType.RETURN, 0))
+        method = _method(descriptor="()V", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms == 0
+        assert ml == 1  # slot 0 = this
+
+    def test_method_with_params(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        code = _code(InsnInfo(InsnInfoType.RETURN, 0))
+        method = _static_method(descriptor="(IJD)V", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms == 0
+        assert ml == 5  # int(1) + long(2) + double(2)
+
+    def test_local_store_increases_max_locals(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            VarInsn(InsnInfoType.ISTORE, 5),
+            InsnInfo(InsnInfoType.RETURN, 2),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms == 1
+        assert ml == 6  # slot 5 + 1
+
+    def test_with_branch(self) -> None:
+        from pytecode.analysis import compute_maxs
+
+        label = Label()
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            BranchInsn(InsnInfoType.IFEQ, label),
+            InsnInfo(InsnInfoType.ICONST_1, 1),
+            InsnInfo(InsnInfoType.IRETURN, 2),
+            label,
+            InsnInfo(InsnInfoType.ICONST_0, 3),
+            InsnInfo(InsnInfoType.IRETURN, 4),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        ms, ml = compute_maxs(code, method, "Test")
+        assert ms >= 1
+        assert ml == 0
+
+
+# ===================================================================
+# compute_frames tests
+# ===================================================================
+
+
+
+class TestComputeFrames:
+    """Tests for ``compute_frames`` — StackMapTable generation."""
+
+    def setup_method(self) -> None:
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+
+        self.cp = ConstantPoolBuilder()
+
+    def _compute(
+        self,
+        code: CodeModel,
+        method: MethodModel,
+        class_name: str = "Test",
+    ) -> FrameComputationResult:
+        from pytecode.analysis import compute_frames
+        from pytecode.labels import resolve_labels
+
+        items = list(code.instructions)
+        resolution = resolve_labels(items, self.cp)
+        return compute_frames(code, method, class_name, self.cp, resolution.label_offsets)
+
+    def test_linear_code_no_frames(self) -> None:
+        """A method with no branches should produce no StackMapTable."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            InsnInfo(InsnInfoType.IRETURN, 1),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        result = self._compute(code, method)
+        assert result.max_stack == 1
+        assert result.max_locals == 0
+        assert result.stack_map_table is None
+
+    def test_if_else_branch(self) -> None:
+        """An if/else should produce a frame at the else target."""
+        else_label = Label()
+        end_label = Label()
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            BranchInsn(InsnInfoType.IFEQ, else_label),
+            InsnInfo(InsnInfoType.ICONST_1, 1),
+            BranchInsn(InsnInfoType.GOTO, end_label),
+            else_label,
+            InsnInfo(InsnInfoType.ICONST_0, 3),
+            end_label,
+            InsnInfo(InsnInfoType.IRETURN, 4),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+        assert result.stack_map_table.number_of_entries >= 1
+
+    def test_loop(self) -> None:
+        """A loop should produce a frame at the loop header."""
+        loop_label = Label()
+        end_label = Label()
+        code = _code(
+            loop_label,
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            BranchInsn(InsnInfoType.IFNE, end_label),
+            BranchInsn(InsnInfoType.GOTO, loop_label),
+            end_label,
+            InsnInfo(InsnInfoType.RETURN, 3),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+        assert result.stack_map_table.number_of_entries >= 1
+
+    def test_try_catch(self) -> None:
+        """Exception handler should produce a frame at the handler entry."""
+        start = Label()
+        end = Label()
+        handler = Label()
+        end2 = Label()
+        code = _code(
+            start,
+            # Method invocation can throw — needed for exception propagation
+            MethodInsn(InsnInfoType.INVOKESTATIC, "Foo", "bar", "()V"),
+            BranchInsn(InsnInfoType.GOTO, end2),
+            end,
+            handler,
+            InsnInfo(InsnInfoType.POP, 10),
+            InsnInfo(InsnInfoType.RETURN, 11),
+            end2,
+            InsnInfo(InsnInfoType.RETURN, 12),
+            handlers=[
+                ExceptionHandler(
+                    start=start,
+                    end=end,
+                    handler=handler,
+                    catch_type="java/lang/Exception",
+                ),
+            ],
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+        assert result.stack_map_table.number_of_entries >= 1
+
+    def test_try_catch_null_type(self) -> None:
+        """Exception handler with catch_type=None (finally) should produce frames."""
+        start = Label()
+        end = Label()
+        handler = Label()
+        end2 = Label()
+        code = _code(
+            start,
+            MethodInsn(InsnInfoType.INVOKESTATIC, "Foo", "bar", "()V"),
+            BranchInsn(InsnInfoType.GOTO, end2),
+            end,
+            handler,
+            InsnInfo(InsnInfoType.POP, 10),
+            InsnInfo(InsnInfoType.RETURN, 11),
+            end2,
+            InsnInfo(InsnInfoType.RETURN, 12),
+            handlers=[
+                ExceptionHandler(
+                    start=start,
+                    end=end,
+                    handler=handler,
+                    catch_type=None,
+                ),
+            ],
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+
+    def test_empty_code(self) -> None:
+        """Empty code body should return no frames."""
+        code = CodeModel(max_stack=0, max_locals=0, instructions=[])
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is None
+
+    def test_max_values_correct(self) -> None:
+        """Verify that compute_frames returns correct max_stack and max_locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            InsnInfo(InsnInfoType.ICONST_1, 1),
+            InsnInfo(InsnInfoType.IADD, 2),
+            InsnInfo(InsnInfoType.IRETURN, 3),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        result = self._compute(code, method)
+        assert result.max_stack == 2  # Two ints on stack before IADD
+        assert result.max_locals == 0
+
+    def test_switch_targets_get_frames(self) -> None:
+        """Tableswitch targets should all get frames."""
+        default_label = Label()
+        case0_label = Label()
+        case1_label = Label()
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            TableSwitchInsn(default_label, 0, 1, [case0_label, case1_label]),
+            default_label,
+            InsnInfo(InsnInfoType.RETURN, 10),
+            case0_label,
+            InsnInfo(InsnInfoType.RETURN, 11),
+            case1_label,
+            InsnInfo(InsnInfoType.RETURN, 12),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+        assert result.stack_map_table.number_of_entries >= 2
+
+    def test_instance_method_init(self) -> None:
+        """An <init> method should use VUninitializedThis for slot 0."""
+        label = Label()
+        code = _code(
+            VarInsn(InsnInfoType.ALOAD, 0),
+            MethodInsn(InsnInfoType.INVOKESPECIAL, "java/lang/Object", "<init>", "()V"),
+            BranchInsn(InsnInfoType.GOTO, label),
+            label,
+            InsnInfo(InsnInfoType.RETURN, 10),
+        )
+        method = _method(name="<init>", descriptor="()V", code=code)
+        result = self._compute(code, method, "MyClass")
+        assert result.stack_map_table is not None
+        frame = result.stack_map_table.entries[0]
+        assert isinstance(frame, attributes.FullFrameInfo)
+        obj = frame.locals[0]
+        assert isinstance(obj, attributes.ObjectVariableInfo)
+        entry = self.cp.get(obj.cpool_index)
+        assert isinstance(entry, ClassInfo)
+        assert self.cp.resolve_utf8(entry.name_index) == "MyClass"
+
+    def test_unlabeled_new_branch_tracks_uninitialized_offset(self) -> None:
+        """Frames should preserve unlabeled NEW sites as UNINITIALIZED offsets."""
+        branch_label = Label()
+        code = _code(
+            TypeInsn(InsnInfoType.NEW, "java/lang/Object"),
+            InsnInfo(InsnInfoType.DUP, 3),
+            VarInsn(InsnInfoType.ASTORE, 0),
+            InsnInfo(InsnInfoType.ICONST_0, 4),
+            BranchInsn(InsnInfoType.IFEQ, branch_label),
+            VarInsn(InsnInfoType.ALOAD, 0),
+            MethodInsn(InsnInfoType.INVOKESPECIAL, "java/lang/Object", "<init>", "()V"),
+            InsnInfo(InsnInfoType.RETURN, 10),
+            branch_label,
+            VarInsn(InsnInfoType.ALOAD, 0),
+            MethodInsn(InsnInfoType.INVOKESPECIAL, "java/lang/Object", "<init>", "()V"),
+            InsnInfo(InsnInfoType.RETURN, 20),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = self._compute(code, method)
+        assert result.stack_map_table is not None
+
+        uninitialized_offsets = [
+            local.offset
+            for frame in result.stack_map_table.entries
+            for local in getattr(frame, "locals", [])
+            if isinstance(local, attributes.UninitializedVariableInfo)
+        ]
+        assert uninitialized_offsets == [0]
+
+
+# ===================================================================
+# FrameComputationResult tests
+# ===================================================================
+
+
+class TestFrameComputationResult:
+    def test_importable(self) -> None:
+        from pytecode.analysis import FrameComputationResult
+
+        assert FrameComputationResult is not None
+
+    def test_fields(self) -> None:
+        from pytecode.analysis import FrameComputationResult
+
+        result = FrameComputationResult(max_stack=5, max_locals=3, stack_map_table=None)
+        assert result.max_stack == 5
+        assert result.max_locals == 3
+        assert result.stack_map_table is None
+
+
+# ===================================================================
+# lower_code integration tests
+# ===================================================================
+
+
+class TestLowerCodeRecomputeFrames:
+    """Tests for lower_code() with recompute_frames=True."""
+
+    def test_backwards_compatible_no_params(self) -> None:
+        """lower_code() without new params should work exactly as before."""
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import lower_code
+
+        cp = ConstantPoolBuilder()
+        code = _code(InsnInfo(InsnInfoType.RETURN, 0))
+        result = lower_code(code, cp)
+        assert result.max_stacks == 100  # Uses CodeModel's original value
+        assert result.max_locals == 100
+
+    def test_recompute_frames_updates_maxs(self) -> None:
+        """recompute_frames=True should update max_stack and max_locals."""
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import lower_code
+
+        cp = ConstantPoolBuilder()
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            InsnInfo(InsnInfoType.IRETURN, 1),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        result = lower_code(
+            code, cp,
+            method=method,
+            class_name="Test",
+            recompute_frames=True,
+        )
+        assert result.max_stacks == 1  # Recomputed, not 100
+        assert result.max_locals == 0
+
+    def test_recompute_frames_adds_stack_map_table(self) -> None:
+        """recompute_frames=True with branches should add StackMapTable."""
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import lower_code
+
+        cp = ConstantPoolBuilder()
+        label = Label()
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            BranchInsn(InsnInfoType.IFEQ, label),
+            InsnInfo(InsnInfoType.ICONST_1, 1),
+            InsnInfo(InsnInfoType.IRETURN, 2),
+            label,
+            InsnInfo(InsnInfoType.ICONST_0, 3),
+            InsnInfo(InsnInfoType.IRETURN, 4),
+        )
+        method = _static_method(descriptor="()I", code=code)
+        result = lower_code(
+            code, cp,
+            method=method,
+            class_name="Test",
+            recompute_frames=True,
+        )
+        smt_attrs = [a for a in result.attributes if isinstance(a, attributes.StackMapTableAttr)]
+        assert len(smt_attrs) == 1
+        assert smt_attrs[0].attribute_length > 0
+        assert result.attributes_count == 1
+        assert result.attribute_length > 12 + result.code_length + (8 * result.exception_table_length)
+
+    def test_recompute_frames_removes_stale_stack_map_table(self) -> None:
+        """recompute_frames=True should remove stale StackMapTable attrs when none are needed."""
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import lower_code
+
+        cp = ConstantPoolBuilder()
+        stale = attributes.StackMapTableAttr(
+            attribute_name_index=cp.add_utf8("StackMapTable"),
+            attribute_length=2,
+            number_of_entries=0,
+            entries=[],
+        )
+        code = CodeModel(
+            max_stack=100,
+            max_locals=100,
+            instructions=[InsnInfo(InsnInfoType.RETURN, 0)],
+            attributes=[stale],
+        )
+        method = _static_method(descriptor="()V", code=code)
+        result = lower_code(
+            code, cp,
+            method=method,
+            class_name="Test",
+            recompute_frames=True,
+        )
+        assert not any(isinstance(attr, attributes.StackMapTableAttr) for attr in result.attributes)
+        assert result.attributes_count == 0
+        assert result.attribute_length == 13
+
+    def test_recompute_frames_requires_method_and_class_name(self) -> None:
+        """recompute_frames=True without method/class_name should raise."""
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import lower_code
+
+        cp = ConstantPoolBuilder()
+        code = _code(InsnInfo(InsnInfoType.RETURN, 0))
+        with pytest.raises(ValueError, match="method and class_name are required"):
+            lower_code(code, cp, recompute_frames=True)
+
+
+# ===================================================================
+# to_classfile integration tests
+# ===================================================================
+
+
+class TestToClassfileRecomputeFrames:
+    """Tests for ClassModel.to_classfile() with recompute_frames=True."""
+
+    def test_default_behavior_unchanged(self, tmp_path: Path) -> None:
+        """to_classfile() without recompute_frames should preserve originals."""
+        class_path = compile_java_resource(tmp_path, "HelloWorld.java")
+        cf = ClassModel.from_bytes(class_path.read_bytes())
+        restored = cf.to_classfile()
+        assert restored.magic == 0xCAFEBABE
+
+    def test_recompute_frames_produces_valid_output(self, tmp_path: Path) -> None:
+        """to_classfile(recompute_frames=True) should work end-to-end."""
+        class_path = compile_java_resource(tmp_path, "HelloWorld.java")
+        model = ClassModel.from_bytes(class_path.read_bytes())
+        restored = model.to_classfile(recompute_frames=True)
+        assert restored.magic == 0xCAFEBABE
+        model2 = ClassModel.from_classfile(restored)
+        assert model2.name == model.name
+
+
+# ===================================================================
+# Compiled fixture tests for frame computation
+# ===================================================================
+
+
+class TestComputeFramesWithFixtures:
+    """Test frame computation against compiled Java class files."""
+
+    def test_hello_world_frames(self, tmp_path: Path) -> None:
+        """compute_frames on HelloWorld methods should succeed."""
+        from pytecode.analysis import compute_frames
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import resolve_labels
+
+        class_path = compile_java_resource(tmp_path, "HelloWorld.java")
+        model = ClassModel.from_bytes(class_path.read_bytes())
+        for mm in model.methods:
+            if mm.code is None:
+                continue
+            cp = ConstantPoolBuilder()
+            items = list(mm.code.instructions)
+            resolution = resolve_labels(items, cp)
+            result = compute_frames(
+                mm.code, mm, model.name, cp, resolution.label_offsets,
+            )
+            assert result.max_stack >= 0
+            assert result.max_locals >= 0
+
+    def test_cfg_fixture_frames(self, tmp_path: Path) -> None:
+        """compute_frames on CfgFixture methods should succeed."""
+        from pytecode.analysis import compute_frames
+        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.labels import resolve_labels
+
+        class_path = compile_java_resource(tmp_path, "CfgFixture.java")
+        model = ClassModel.from_bytes(class_path.read_bytes())
+        for mm in model.methods:
+            if mm.code is None:
+                continue
+            cp = ConstantPoolBuilder()
+            items = list(mm.code.instructions)
+            resolution = resolve_labels(items, cp)
+            result = compute_frames(
+                mm.code, mm, model.name, cp, resolution.label_offsets,
+            )
+            assert result.max_stack >= 0
+            assert result.max_locals >= 0

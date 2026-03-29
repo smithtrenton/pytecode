@@ -65,7 +65,8 @@ from .operands import (
 )
 
 if TYPE_CHECKING:
-    from .model import CodeModel
+    from .hierarchy import ClassResolver
+    from .model import CodeModel, MethodModel
 
 _I2_MIN = -(1 << 15)
 _I2_MAX = (1 << 15) - 1
@@ -245,6 +246,15 @@ def _code_attribute_length(
 ) -> int:
     nested_size = sum(_attribute_marshaled_size(attribute) for attribute in attributes)
     return 12 + code_length + (8 * exception_table_length) + nested_size
+
+
+def _refresh_code_attr_metadata(code_attr: CodeAttr) -> None:
+    code_attr.attributes_count = len(code_attr.attributes)
+    code_attr.attribute_length = _code_attribute_length(
+        code_attr.code_length,
+        code_attr.exception_table_length,
+        code_attr.attributes,
+    )
 
 
 def _clone_code_item(item: CodeItem) -> CodeItem:
@@ -705,8 +715,25 @@ def _lower_resolved_code(
     )
 
 
-def lower_code(code: CodeModel, cp: ConstantPoolBuilder) -> CodeAttr:
-    """Lower a label-based ``CodeModel`` into a raw ``CodeAttr``."""
+def lower_code(
+    code: CodeModel,
+    cp: ConstantPoolBuilder,
+    *,
+    method: MethodModel | None = None,
+    class_name: str | None = None,
+    resolver: ClassResolver | None = None,
+    recompute_frames: bool = False,
+) -> CodeAttr:
+    """Lower a label-based ``CodeModel`` into a raw ``CodeAttr``.
+
+    When *recompute_frames* is ``True``, the frame computation pipeline
+    runs automatically: ``max_stack`` and ``max_locals`` are recomputed
+    via stack simulation, and a fresh ``StackMapTable`` attribute is
+    generated and attached to the returned ``CodeAttr``.  This requires
+    *method* and *class_name* to be provided.
+    """
+    if recompute_frames and (method is None or class_name is None):
+        raise ValueError("method and class_name are required when recompute_frames=True")
 
     items = [_clone_code_item(item) for item in code.instructions]
 
@@ -722,7 +749,31 @@ def lower_code(code: CodeModel, cp: ConstantPoolBuilder) -> CodeAttr:
         raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
 
     _lower_resolved_code(code, items, resolution, _clone_constant_pool_builder(cp))
-    return _lower_resolved_code(code, items, resolution, cp)
+    result = _lower_resolved_code(code, items, resolution, cp)
+
+    if recompute_frames:
+        assert method is not None and class_name is not None
+        from .analysis import compute_frames
+        from .attributes import StackMapTableAttr
+
+        frame_result = compute_frames(
+            code, method, class_name, cp, resolution.label_offsets, resolver,
+        )
+        result.max_stacks = frame_result.max_stack
+        result.max_locals = frame_result.max_locals
+        stack_map_index = next(
+            (i for i, attr in enumerate(result.attributes) if isinstance(attr, StackMapTableAttr)),
+            len(result.attributes),
+        )
+        result.attributes = [
+            attr for attr in result.attributes if not isinstance(attr, StackMapTableAttr)
+        ]
+        if frame_result.stack_map_table is not None:
+            insert_at = min(stack_map_index, len(result.attributes))
+            result.attributes.insert(insert_at, frame_result.stack_map_table)
+        _refresh_code_attr_metadata(result)
+
+    return result
 
 
 def resolve_catch_type(cp: ConstantPoolBuilder, catch_type_index: int) -> str | None:

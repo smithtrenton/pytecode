@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .attributes import (
     AttributeInfo,
@@ -82,6 +83,9 @@ from .operands import (
     TypeInsn,
     VarInsn,
 )
+
+if TYPE_CHECKING:
+    from .hierarchy import ClassResolver
 
 
 @dataclass
@@ -217,12 +221,20 @@ class ClassModel:
     # Lowering
     # ------------------------------------------------------------------
 
-    def to_classfile(self) -> ClassFile:
+    def to_classfile(
+        self,
+        *,
+        recompute_frames: bool = False,
+        resolver: ClassResolver | None = None,
+    ) -> ClassFile:
         """Lower this model back to a spec-faithful ``ClassFile``.
 
         Uses the ``ConstantPoolBuilder`` to allocate (or find) constant-pool
         entries for every symbolic reference and reassembles the raw
         ``FieldInfo``/``MethodInfo``/``CodeAttr`` structures.
+
+        When *recompute_frames* is ``True``, ``max_stack``, ``max_locals``,
+        and ``StackMapTable`` are recomputed for every method that has code.
         """
         cp = self.constant_pool
 
@@ -235,7 +247,15 @@ class ClassModel:
         raw_fields = [_field_to_info(fm, cp) for fm in self.fields]
 
         # Lower methods.
-        raw_methods = [_method_to_info(mm, cp) for mm in self.methods]
+        raw_methods = [
+            _method_to_info(
+                mm, cp,
+                class_name=self.name,
+                recompute_frames=recompute_frames,
+                resolver=resolver,
+            )
+            for mm in self.methods
+        ]
 
         pool = cp.build()
 
@@ -302,11 +322,24 @@ def _field_to_info(fm: FieldModel, cp: ConstantPoolBuilder) -> FieldInfo:
     )
 
 
-def _method_to_info(mm: MethodModel, cp: ConstantPoolBuilder) -> MethodInfo:
+def _method_to_info(
+    mm: MethodModel,
+    cp: ConstantPoolBuilder,
+    *,
+    class_name: str | None = None,
+    recompute_frames: bool = False,
+    resolver: ClassResolver | None = None,
+) -> MethodInfo:
     attrs: list[AttributeInfo] = copy.deepcopy(mm.attributes)
 
     if mm.code is not None:
-        code_attr = lower_code(mm.code, cp)
+        code_attr = lower_code(
+            mm.code, cp,
+            method=mm if recompute_frames else None,
+            class_name=class_name if recompute_frames else None,
+            resolver=resolver,
+            recompute_frames=recompute_frames,
+        )
         attrs.insert(0, code_attr)
 
     return MethodInfo(

@@ -57,13 +57,13 @@ Frame calculation depends on more than raw instruction parsing. A control-flow g
 
 This layer is now implemented in `pytecode.hierarchy`. Type merging at control-flow join points still belongs to later analysis work, but the required hierarchy queries now have a pluggable, typed foundation.
 
-#### 7. Max stack and max locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10))
+#### 7. Max stack and max locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done)
 
-These are adjacent to frame computation but distinct enough to deserve explicit roadmap status.
+Now implemented in `pytecode.analysis` via `compute_maxs()` and `compute_frames()`. These are integrated into `lower_code()` and `ClassModel.to_classfile()` as opt-in via `recompute_frames=True`.
 
-#### 8. Version-aware verification rules ([#11](https://github.com/smithtrenton/pytecode/issues/11))
+#### 8. Version-aware verification rules ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 
-The JVM classfile format changes across versions. Validation and emission should understand feature gating and version constraints (e.g., type annotations require classfile version 52+, modules require 53+, records require 60+, sealed classes require 61+).
+Now implemented in `pytecode.verify`. The validation module checks version-aware feature gating and attribute constraints alongside structural classfile validation. See `pytecode/verify.py` for the full set of checks.
 
 #### 9. Round-trip fidelity and compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 
@@ -81,9 +81,9 @@ Round-trip testing distinguishes three levels of fidelity:
 - **Level B — Structural equivalence** (`parse(bytes₁) ≅ parse(bytes₂)`): For modified roundtrips where CP indexes may have shifted. Compares parsed structures with CP references resolved to symbolic values.
 - **Level C — Semantic equivalence** (behavior-preserving): The weakest level — two class files define the same class with the same behavior, even if structural details differ (attribute order, debug attributes, method order).
 
-#### 10. Error and diagnostics model ([#11](https://github.com/smithtrenton/pytecode/issues/11))
+#### 10. Error and diagnostics model ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 
-Manipulation and validation need structured errors, not only parser exceptions. Users will need actionable messages when a transformation creates an invalid class. Errors should carry location context (class name, method, bytecode offset, constant-pool index) and the validation layer should support collecting all diagnostics rather than failing on the first.
+Now implemented in `pytecode.verify`. The `Diagnostic` dataclass carries severity, category, location context (class name, method, CP index, bytecode offset), and a human-readable message. The validation entry points collect all diagnostics by default, with an optional `fail_fast=True` mode that raises `FailFastError` on the first ERROR-severity issue.
 
 #### 11. API shape and extension strategy ([#6](https://github.com/smithtrenton/pytecode/issues/6))
 
@@ -116,8 +116,8 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 9. ~~Add a pluggable class hierarchy resolver.~~ ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 10. ~~Build control-flow graph construction and stack/local simulation.~~ ([#9](https://github.com/smithtrenton/pytecode/issues/9) — done)
 11. ~~Add external-tool differential CFG validation for analysis output.~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
-12. Implement max stack, max locals, and stack map frame recomputation. ([#10](https://github.com/smithtrenton/pytecode/issues/10))
-13. Implement validation with structured diagnostics and version-aware rules. ([#11](https://github.com/smithtrenton/pytecode/issues/11))
+12. ~~Implement max stack, max locals, and stack map frame recomputation.~~ ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done)
+13. ~~Implement validation with structured diagnostics and version-aware rules.~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 14. Add classfile emission with deterministic constant-pool layout. ([#12](https://github.com/smithtrenton/pytecode/issues/12))
 15. Broaden debug info management beyond label rebinding. ([#13](https://github.com/smithtrenton/pytecode/issues/13) — partially addressed)
 16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14))

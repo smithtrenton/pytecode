@@ -198,7 +198,17 @@ Control-flow graph construction and stack/local simulation introduced for issue 
 - **Stack simulation** — `simulate()` performs forward dataflow analysis over the CFG using a worklist algorithm, propagating `FrameState` through each instruction and merging at join points. Returns a `SimulationResult` with per-block entry/exit states, computed `max_stack`, and `max_locals`.
 - **Error types** — `AnalysisError`, `StackUnderflowError`, `InvalidLocalError`, and `TypeMergeError` for structured simulation diagnostics.
 
-The module operates on `CodeModel` (the symbolic editing model) and accepts an optional `ClassResolver` from `pytecode.hierarchy` for reference-type merging at join points, defaulting to conservative `java/lang/Object` collapse when unavailable. It is consumed by future max_stack/max_locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), and validation ([#11](https://github.com/smithtrenton/pytecode/issues/11)).
+The module operates on `CodeModel` (the symbolic editing model) and accepts an optional `ClassResolver` from `pytecode.hierarchy` for reference-type merging at join points, defaulting to conservative `java/lang/Object` collapse when unavailable. It now provides max_stack/max_locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)) and is consumed by the validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11)).
+
+### `pytecode\verify.py`
+
+Structural classfile validation with structured diagnostics, introduced for issue [#11](https://github.com/smithtrenton/pytecode/issues/11). This module validates both the parsed `ClassFile` model and the mutable `ClassModel`:
+
+- **Diagnostics model** — `Diagnostic` dataclass with `severity` (`Severity`: ERROR, WARNING, INFO), `category` (`Category`: MAGIC, VERSION, CONSTANT_POOL, ACCESS_FLAGS, CLASS_STRUCTURE, FIELD, METHOD, CODE, ATTRIBUTE, DESCRIPTOR), `location` (`Location` with optional class name, method/field, CP index, bytecode offset), and a human-readable `message`
+- **Entry points** — `verify_classfile(cf, *, fail_fast=False)` validates a parsed `ClassFile`; `verify_classmodel(cm, *, fail_fast=False)` validates a mutable `ClassModel`. Both return `list[Diagnostic]` collecting all issues by default; with `fail_fast=True` they raise `FailFastError` on the first ERROR-severity diagnostic
+- **Checks performed** — magic number, version range, constant-pool well-formedness (tag validity, index bounds, structural constraints), access flag mutual exclusions, class structure (this_class, super_class, interfaces), field and method constraints, Code attribute validation (branches, exception handlers, CP reference validity), attribute versioning, descriptor validation, and ClassModel-specific label validity
+
+Not exported from `pytecode.__init__`; import directly: `from pytecode.verify import verify_classfile, verify_classmodel`.
 
 ### CFG differential validation infrastructure
 
@@ -259,7 +269,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 ## Test coverage
 
-The test suite provides both integration-level and unit-level coverage (1062 tests total):
+The test suite provides both integration-level and unit-level coverage (1239 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
@@ -278,5 +288,6 @@ The test suite provides both integration-level and unit-level coverage (1062 tes
 - `test_hierarchy.py` — hierarchy-resolution coverage: adapters from parsed `ClassFile` and `ClassModel`, linear superclass walks with an implicit `java/lang/Object` root, supertype traversal through superclass and interface edges, subtype checks, common-superclass lookup, explicit missing-class and cycle failures, and method-override detection across same-package package-private methods, protected/public inheritance, interface methods, and non-overridable final/static/private declarations
 - `test_helpers.py` — persistent Java fixture-cache coverage for `tests/helpers.py`, including cache hits across separate temp directories, invalidation when source contents change, and invalidation when `javac --release` changes.
 - `test_analysis.py` — control-flow graph and simulation coverage: verification type helpers (`vtype_from_descriptor`, `is_category2`, `is_reference`, `merge_vtypes` with and without a resolver), `FrameState` operations (push/pop for category-1 and category-2 types, set_local/get_local with two-slot expansion, stack underflow detection), `initial_frame` for static methods, instance methods, `<init>`, and multi-parameter signatures (including long/double slots), CFG construction (single block, if/else branching, tableswitch, lookupswitch, try-catch exception edges, unconditional GOTO, loops, terminal ATHROW/return blocks), stack simulation for all major opcode families (constants, loads/stores, arithmetic, conversions, comparisons, stack manipulation including DUP/DUP_X1/DUP_X2/DUP2/DUP2_X1/DUP2_X2/SWAP/POP/POP2, field access, method invocations, object creation with NEW→`<init>` uninitialized tracking, type checks, array operations, monitors, IINC, LDC variants), max_stack/max_locals computation, type merging at branch join points, loop convergence via fixed-point iteration, exception-handler pre-instruction state, incompatible join-point merge failures, precise `AALOAD` reference typing, error paths (stack underflow, invalid locals), and integration tests against compiled `CfgFixture.java` methods covering all control-flow patterns.
+- `test_verify.py` — structural validation coverage (122 tests): magic number, version range, constant-pool well-formedness, access flag mutual exclusions, class structure, field and method constraints, Code attribute validation (branches, exception handlers, CP reference validity), attribute versioning, descriptor validation, ClassModel label validity, `fail_fast` mode, and diagnostic severity/category/location accuracy.
 
 Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts. Helper utilities in `tests/helpers.py` compile focused fixtures and small JARs with `javac`, persist those outputs in a content-addressed cache under `.pytest_cache/pytecode-javac`, and only re-run `javac` when the ordered source list, source contents, `--release`, or `javac` identity changes.

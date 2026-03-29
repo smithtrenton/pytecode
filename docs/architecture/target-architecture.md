@@ -76,7 +76,7 @@ This is a cross-cutting concern used by the editing model, frame computation, co
 - optional `ClassResolver` integration for reference-type merging at join points
 - structured error types for stack underflow, invalid locals, and type-merge failures
 
-Max stack/max locals recomputation and StackMapTable generation depend on this layer and are deferred to [#10](https://github.com/smithtrenton/pytecode/issues/10).
+Max stack/max locals recomputation and StackMapTable generation are now implemented on this layer ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done).
 
 ### 4a. Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 
@@ -88,7 +88,7 @@ Max stack/max locals recomputation and StackMapTable generation depend on this l
 - method-override detection (`find_overridden_methods()`)
 - a minimal `ClassResolver` protocol plus the in-memory `MappingClassResolver`
 
-Frame computation still depends on max_stack/max_locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), which build on the now-complete analysis layer.
+Max stack/max locals recomputation and StackMapTable generation are now complete ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done), built on the analysis layer.
 
 ## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 
