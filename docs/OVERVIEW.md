@@ -32,6 +32,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 
 - Automatic `max_stack`/`max_locals` recomputation during lowering and `StackMapTable` generation ([#10](https://github.com/smithtrenton/pytecode/issues/10))
 - Full debug-info and stack-map maintenance after mutation (label rebinding is now implemented, but `StackMapTable` recomputation and higher-level policies remain future work) ([#10](https://github.com/smithtrenton/pytecode/issues/10), [#13](https://github.com/smithtrenton/pytecode/issues/13))
+- External-tool differential validation of CFG output against JVM-side oracles such as ASM's `Analyzer` ([#17](https://github.com/smithtrenton/pytecode/issues/17))
 - Structured validation/diagnostics and binary classfile emission ([#11](https://github.com/smithtrenton/pytecode/issues/11), [#12](https://github.com/smithtrenton/pytecode/issues/12))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 

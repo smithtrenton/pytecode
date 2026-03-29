@@ -12,6 +12,7 @@ Before calling the library a manipulation toolkit, it should have:
 - verifier acceptance tests (generated classes pass `java -verify`)
 - stable emitted bytes for deterministic scenarios
 - structured diagnostic output for all validation failures
+- differential CFG checks against an external oracle for representative compiled fixtures before later frame-computation and validation work depends on that analysis layer
 - Tier 1 (roundtrip) passing for all existing fixtures before any higher tier is attempted
 - Tier 2 (structural verifier) accepting all classes that `javap -v` accepts
 - Tier 3 (javac comparison) showing zero "error"-severity diffs for basic fixtures
@@ -40,6 +41,7 @@ The remaining work is centered on wiring the new analysis layer into mutation wo
 - version-aware validation ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 - classfile writing infrastructure ([#12](https://github.com/smithtrenton/pytecode/issues/12))
 - structured diagnostics
+- external-tool CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17))
 - broader debug info and stack-map management during mutation ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#10](https://github.com/smithtrenton/pytecode/issues/10))
 - round-trip and JVM compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - composable transform pipelines (Phase 2 of [#6](https://github.com/smithtrenton/pytecode/issues/6))
