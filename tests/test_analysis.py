@@ -291,6 +291,12 @@ class TestFrameState:
         assert popped == (VInteger(),)
         assert fs2.stack == ()
 
+    def test_pop_two_slots_returns_top_first(self) -> None:
+        fs = FrameState((VInteger(), VFloat()), ())
+        fs2, popped = fs.pop(2)
+        assert popped == (VFloat(), VInteger())
+        assert fs2.stack == ()
+
     def test_pop_underflow(self) -> None:
         fs = FrameState((), ())
         with pytest.raises(StackUnderflowError):
@@ -1033,12 +1039,15 @@ class TestSimulateArrayOps:
             VarInsn(InsnInfoType.ALOAD, 0),
             InsnInfo(InsnInfoType.ICONST_0, 2),
             InsnInfo(InsnInfoType.AALOAD, 3),
-            InsnInfo(InsnInfoType.ARETURN, 4),
+            VarInsn(InsnInfoType.ASTORE, 1),
+            InsnInfo(InsnInfoType.RETURN, 4),
         )
-        method = _static_method(descriptor="([Ljava/lang/String;)Ljava/lang/String;", code=code)
+        method = _static_method(descriptor="([Ljava/lang/String;)V", code=code)
         cfg = build_cfg(code)
         result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
         assert result.max_stack >= 2
+        assert exit_state.locals[1] == VObject("java/lang/String")
 
     def test_arraylength(self) -> None:
         code = _code(
@@ -1090,16 +1099,17 @@ class TestSimulateExceptionHandler:
 
         code = _code(
             l_try_start,
-            InsnInfo(InsnInfoType.ICONST_1, 0),
-            InsnInfo(InsnInfoType.IRETURN, 1),
+            VarInsn(InsnInfoType.ALOAD, 0),
+            FieldInsn(InsnInfoType.GETFIELD, "Test", "value", "I"),
+            InsnInfo(InsnInfoType.IRETURN, 3),
             l_try_end,
             l_handler,
-            InsnInfo(InsnInfoType.POP, 3),
-            InsnInfo(InsnInfoType.ICONST_M1, 4),
-            InsnInfo(InsnInfoType.IRETURN, 5),
+            InsnInfo(InsnInfoType.POP, 4),
+            InsnInfo(InsnInfoType.ICONST_M1, 5),
+            InsnInfo(InsnInfoType.IRETURN, 6),
             handlers=[ExceptionHandler(l_try_start, l_try_end, l_handler, "java/lang/Exception")],
         )
-        method = _static_method(descriptor="()I", code=code)
+        method = _method(descriptor="()I", code=code)
         cfg = build_cfg(code)
         result = simulate(cfg, code, method, "Test")
         handler_block = cfg.label_to_block[l_handler]
@@ -1115,20 +1125,48 @@ class TestSimulateExceptionHandler:
 
         code = _code(
             l_try_start,
-            InsnInfo(InsnInfoType.RETURN, 0),
+            VarInsn(InsnInfoType.ALOAD, 0),
+            FieldInsn(InsnInfoType.GETFIELD, "Test", "value", "I"),
+            InsnInfo(InsnInfoType.POP, 3),
+            InsnInfo(InsnInfoType.RETURN, 4),
             l_try_end,
             l_handler,
-            InsnInfo(InsnInfoType.POP, 2),
-            InsnInfo(InsnInfoType.RETURN, 3),
+            InsnInfo(InsnInfoType.POP, 5),
+            InsnInfo(InsnInfoType.RETURN, 6),
             handlers=[ExceptionHandler(l_try_start, l_try_end, l_handler, None)],
         )
-        method = _static_method(descriptor="()V", code=code)
+        method = _method(descriptor="()V", code=code)
         cfg = build_cfg(code)
         result = simulate(cfg, code, method, "Test")
         handler_block = cfg.label_to_block[l_handler]
         handler_entry = result.entry_states.get(handler_block.id)
         assert handler_entry is not None
         assert handler_entry.stack[0] == VObject("java/lang/Throwable")
+
+    def test_handler_uses_pre_instruction_locals(self) -> None:
+        l_try_start = Label("try_start")
+        l_try_end = Label("try_end")
+        l_handler = Label("handler")
+
+        code = _code(
+            l_try_start,
+            VarInsn(InsnInfoType.ALOAD, 0),
+            FieldInsn(InsnInfoType.GETFIELD, "Test", "value", "I"),
+            VarInsn(InsnInfoType.ISTORE, 1),
+            InsnInfo(InsnInfoType.RETURN, 4),
+            l_try_end,
+            l_handler,
+            InsnInfo(InsnInfoType.POP, 5),
+            InsnInfo(InsnInfoType.RETURN, 6),
+            handlers=[ExceptionHandler(l_try_start, l_try_end, l_handler, "java/lang/Exception")],
+        )
+        method = _method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        handler_block = cfg.label_to_block[l_handler]
+        handler_entry = result.entry_states[handler_block.id]
+        with pytest.raises(InvalidLocalError):
+            handler_entry.get_local(1)
 
 
 class TestSimulateBranching:
@@ -1157,6 +1195,26 @@ class TestSimulateBranching:
         entry = result.entry_states.get(end_block.id)
         assert entry is not None
         assert entry.stack_depth >= 1
+
+    def test_incompatible_stack_merge_raises(self) -> None:
+        l_true = Label("true")
+        l_end = Label("end")
+
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            BranchInsn(InsnInfoType.IFEQ, l_true),
+            InsnInfo(InsnInfoType.LCONST_0, 3),
+            BranchInsn(InsnInfoType.GOTO, l_end),
+            l_true,
+            InsnInfo(InsnInfoType.ICONST_1, 6),
+            l_end,
+            InsnInfo(InsnInfoType.POP, 7),
+            InsnInfo(InsnInfoType.RETURN, 8),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        with pytest.raises(TypeMergeError, match="Cannot merge incoming frame into block"):
+            simulate(cfg, code, method, "Test")
 
 
 class TestSimulateLoop:

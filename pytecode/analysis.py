@@ -313,7 +313,7 @@ class FrameState:
         if n == 0:
             return self, ()
         remaining = self.stack[:-n]
-        popped = self.stack[-n:]
+        popped = tuple(reversed(self.stack[-n:]))
         return FrameState(remaining, self.locals), popped
 
     def peek(self, depth: int = 0) -> VType:
@@ -755,7 +755,7 @@ class BasicBlock:
 
     id: int
     label: Label | None
-    instructions: list[CodeItem]
+    instructions: list[InsnInfo]
     successor_ids: list[int]
     exception_handler_ids: list[tuple[int, str | None]]
 
@@ -864,7 +864,7 @@ def build_cfg(code: CodeModel) -> ControlFlowGraph:
 
     if not leader_indices:
         # All labels, no real instructions — create a single empty block.
-        empty_block = BasicBlock(id=0, label=None, instructions=list(items), successor_ids=[], exception_handler_ids=[])
+        empty_block = BasicBlock(id=0, label=None, instructions=[], successor_ids=[], exception_handler_ids=[])
         lbl_map: dict[Label, BasicBlock] = {}
         for item in items:
             if isinstance(item, Label):
@@ -950,12 +950,6 @@ def build_cfg(code: CodeModel) -> ControlFlowGraph:
             continue
 
         last_insn = block.instructions[-1]
-        if not isinstance(last_insn, InsnInfo):
-            # Block ends with a non-instruction (shouldn't happen after construction).
-            if idx + 1 < len(blocks):
-                block.successor_ids.append(blocks[idx + 1].id)
-            continue
-
         effect = OPCODE_EFFECTS.get(last_insn.type)
 
         # Branch targets
@@ -1093,11 +1087,22 @@ def simulate(
             continue
 
         state = entry_states[block_id]
+        if state.stack_depth > max_stack:
+            max_stack = state.stack_depth
+        if len(state.locals) > max_locals:
+            max_locals = len(state.locals)
 
         # Simulate all instructions in this block.
         for item in block.instructions:
-            if isinstance(item, Label):
-                continue
+            if block.exception_handler_ids and _instruction_may_throw(item):
+                _propagate_exception_handlers(
+                    block.exception_handler_ids,
+                    state,
+                    entry_states,
+                    worklist,
+                    in_worklist,
+                    resolver,
+                )
             state = _simulate_insn(item, state, code, resolver)
             if state.stack_depth > max_stack:
                 max_stack = state.stack_depth
@@ -1109,15 +1114,6 @@ def simulate(
         # Propagate to successors.
         for succ_id in block.successor_ids:
             _propagate(succ_id, state, entry_states, worklist, in_worklist, resolver)
-
-        # Propagate to exception handlers.
-        for handler_id, catch_type in block.exception_handler_ids:
-            if catch_type is not None:
-                handler_stack = (VObject(catch_type),)
-            else:
-                handler_stack = (_OBJECT_THROWABLE,)
-            handler_state = FrameState(handler_stack, state.locals)
-            _propagate(handler_id, handler_state, entry_states, worklist, in_worklist, resolver)
 
     return SimulationResult(
         entry_states=entry_states,
@@ -1140,8 +1136,10 @@ def _propagate(
         existing = entry_states[target_id]
         try:
             merged = _merge_frames(existing, incoming, resolver)
-        except TypeMergeError:
-            return  # Can't merge — skip this edge.
+        except TypeMergeError as exc:
+            raise TypeMergeError(
+                f"Cannot merge incoming frame into block {target_id}: {exc}"
+            ) from exc
         if merged == existing:
             return  # No change — don't re-process.
         entry_states[target_id] = merged
@@ -1151,6 +1149,223 @@ def _propagate(
     if target_id not in in_worklist:
         worklist.append(target_id)
         in_worklist.add(target_id)
+
+
+_NON_THROWING_RAW_OPCODES: frozenset[InsnInfoType] = frozenset({
+    _T.NOP,
+    _T.ACONST_NULL,
+    _T.ICONST_M1,
+    _T.ICONST_0,
+    _T.ICONST_1,
+    _T.ICONST_2,
+    _T.ICONST_3,
+    _T.ICONST_4,
+    _T.ICONST_5,
+    _T.LCONST_0,
+    _T.LCONST_1,
+    _T.FCONST_0,
+    _T.FCONST_1,
+    _T.FCONST_2,
+    _T.DCONST_0,
+    _T.DCONST_1,
+    _T.BIPUSH,
+    _T.SIPUSH,
+    _T.ILOAD,
+    _T.ILOAD_0,
+    _T.ILOAD_1,
+    _T.ILOAD_2,
+    _T.ILOAD_3,
+    _T.ILOADW,
+    _T.LLOAD,
+    _T.LLOAD_0,
+    _T.LLOAD_1,
+    _T.LLOAD_2,
+    _T.LLOAD_3,
+    _T.LLOADW,
+    _T.FLOAD,
+    _T.FLOAD_0,
+    _T.FLOAD_1,
+    _T.FLOAD_2,
+    _T.FLOAD_3,
+    _T.FLOADW,
+    _T.DLOAD,
+    _T.DLOAD_0,
+    _T.DLOAD_1,
+    _T.DLOAD_2,
+    _T.DLOAD_3,
+    _T.DLOADW,
+    _T.ALOAD,
+    _T.ALOAD_0,
+    _T.ALOAD_1,
+    _T.ALOAD_2,
+    _T.ALOAD_3,
+    _T.ALOADW,
+    _T.ISTORE,
+    _T.ISTORE_0,
+    _T.ISTORE_1,
+    _T.ISTORE_2,
+    _T.ISTORE_3,
+    _T.ISTOREW,
+    _T.LSTORE,
+    _T.LSTORE_0,
+    _T.LSTORE_1,
+    _T.LSTORE_2,
+    _T.LSTORE_3,
+    _T.LSTOREW,
+    _T.FSTORE,
+    _T.FSTORE_0,
+    _T.FSTORE_1,
+    _T.FSTORE_2,
+    _T.FSTORE_3,
+    _T.FSTOREW,
+    _T.DSTORE,
+    _T.DSTORE_0,
+    _T.DSTORE_1,
+    _T.DSTORE_2,
+    _T.DSTORE_3,
+    _T.DSTOREW,
+    _T.ASTORE,
+    _T.ASTORE_0,
+    _T.ASTORE_1,
+    _T.ASTORE_2,
+    _T.ASTORE_3,
+    _T.ASTOREW,
+    _T.POP,
+    _T.POP2,
+    _T.DUP,
+    _T.DUP_X1,
+    _T.DUP_X2,
+    _T.DUP2,
+    _T.DUP2_X1,
+    _T.DUP2_X2,
+    _T.SWAP,
+    _T.IADD,
+    _T.ISUB,
+    _T.IMUL,
+    _T.INEG,
+    _T.ISHL,
+    _T.ISHR,
+    _T.IUSHR,
+    _T.IAND,
+    _T.IOR,
+    _T.IXOR,
+    _T.LADD,
+    _T.LSUB,
+    _T.LMUL,
+    _T.LNEG,
+    _T.LSHL,
+    _T.LSHR,
+    _T.LUSHR,
+    _T.LAND,
+    _T.LOR,
+    _T.LXOR,
+    _T.FADD,
+    _T.FSUB,
+    _T.FMUL,
+    _T.FDIV,
+    _T.FREM,
+    _T.FNEG,
+    _T.DADD,
+    _T.DSUB,
+    _T.DMUL,
+    _T.DDIV,
+    _T.DREM,
+    _T.DNEG,
+    _T.I2L,
+    _T.I2F,
+    _T.I2D,
+    _T.L2I,
+    _T.L2F,
+    _T.L2D,
+    _T.F2I,
+    _T.F2L,
+    _T.F2D,
+    _T.D2I,
+    _T.D2L,
+    _T.D2F,
+    _T.I2B,
+    _T.I2C,
+    _T.I2S,
+    _T.LCMP,
+    _T.FCMPL,
+    _T.FCMPG,
+    _T.DCMPL,
+    _T.DCMPG,
+    _T.IFEQ,
+    _T.IFNE,
+    _T.IFLT,
+    _T.IFGE,
+    _T.IFGT,
+    _T.IFLE,
+    _T.IF_ICMPEQ,
+    _T.IF_ICMPNE,
+    _T.IF_ICMPLT,
+    _T.IF_ICMPGE,
+    _T.IF_ICMPGT,
+    _T.IF_ICMPLE,
+    _T.IF_ACMPEQ,
+    _T.IF_ACMPNE,
+    _T.GOTO,
+    _T.GOTO_W,
+    _T.JSR,
+    _T.JSR_W,
+    _T.RET,
+    _T.RETW,
+    _T.IFNULL,
+    _T.IFNONNULL,
+    _T.TABLESWITCH,
+    _T.LOOKUPSWITCH,
+    _T.IRETURN,
+    _T.LRETURN,
+    _T.FRETURN,
+    _T.DRETURN,
+    _T.ARETURN,
+    _T.RETURN,
+    _T.IINC,
+    _T.IINCW,
+    _T.WIDE,
+})
+
+
+def _instruction_may_throw(insn: InsnInfo) -> bool:
+    """Return whether an instruction may transfer control to an exception handler.
+
+    The analysis stays conservative by treating any opcode outside the
+    well-understood non-throwing set as potentially exceptional.
+    """
+    if isinstance(insn, VarInsn | IIncInsn | BranchInsn | LookupSwitchInsn | TableSwitchInsn):
+        return False
+    if isinstance(
+        insn,
+        FieldInsn
+        | MethodInsn
+        | InterfaceMethodInsn
+        | InvokeDynamicInsn
+        | TypeInsn
+        | MultiANewArrayInsn,
+    ):
+        return True
+    if isinstance(insn, LdcInsn):
+        return False
+    return insn.type not in _NON_THROWING_RAW_OPCODES
+
+
+def _propagate_exception_handlers(
+    handler_edges: list[tuple[int, str | None]],
+    state: FrameState,
+    entry_states: dict[int, FrameState],
+    worklist: deque[int],
+    in_worklist: set[int],
+    resolver: ClassResolver | None,
+) -> None:
+    """Propagate the pre-instruction state to each active exception handler."""
+    for handler_id, catch_type in handler_edges:
+        if catch_type is not None:
+            handler_stack = (VObject(catch_type),)
+        else:
+            handler_stack = (_OBJECT_THROWABLE,)
+        handler_state = FrameState(handler_stack, state.locals)
+        _propagate(handler_id, handler_state, entry_states, worklist, in_worklist, resolver)
 
 
 # ===================================================================
@@ -1255,14 +1470,11 @@ def _simulate_var_insn(insn: VarInsn, state: FrameState) -> FrameState:
     if opcode == _T.ALOAD:
         val = state.get_local(slot)
         return state.push(val)
-    else:
-        # For typed loads, we push the type from the load opcode.
-        vt = _LOAD_TYPE_MAP.get(opcode, _INTEGER)
-        local_val = state.get_local(slot)
-        # Use the actual local value for reference types, but the expected type for primitives.
-        if opcode == _T.ALOAD:
-            return state.push(local_val)
-        return state.push(vt)
+
+    # For typed loads, we push the type from the load opcode.
+    vt = _LOAD_TYPE_MAP.get(opcode, _INTEGER)
+    state.get_local(slot)
+    return state.push(vt)
 
 
 def _simulate_field_insn(insn: FieldInsn, state: FrameState) -> FrameState:
