@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`pytecode` is a Python library for parsing, inspecting, and eventually manipulating JVM class files and bytecode.
+`pytecode` is a Python library for parsing, inspecting, and beginning to manipulate JVM class files and bytecode.
 
-The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library is focused on parsing raw classfile bytes into typed Python objects. The longer-term goal is to support safe classfile transformation, verification, and emission of new `.class` files.
+The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, a mutable symbolic editing model, hierarchy resolution, and control-flow analysis. The longer-term goal is to support safe classfile transformation, verification, and emission of new `.class` files.
 
 ## Current status
 
@@ -20,19 +20,19 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
 - Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, and control-flow/stack simulation (1008 tests)
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, and control-flow/stack simulation (1062 tests)
 - Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
 - Mutable editing model: `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` — mutable dataclasses with symbolic class/field/method references, bidirectional conversion to/from the parsed `ClassFile` model, `ConstantPoolBuilder` integration for raw operand/index passthrough, and label-aware code editing surfaces — see `pytecode/model.py`
 - Label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)): `pytecode/labels.py` introduces `Label`, symbolic branch/switch wrappers, lifted exception/debug metadata, automatic offset recalculation, switch padding recomputation, and wide-branch promotion during lowering
 - Symbolic instruction operand wrappers ([#16](https://github.com/smithtrenton/pytecode/issues/16)): `pytecode/operands.py` introduces nine editing-model wrappers (`FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`) that replace raw constant-pool indexes and local-variable slot encodings. All wrapper types lift automatically in `model.py` during `from_classfile()` and lower back to raw instructions in `labels.py` during `to_classfile()`.
 - Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8)): `pytecode/hierarchy.py` introduces a pluggable `ClassResolver` protocol, in-memory `MappingClassResolver`, typed resolved hierarchy snapshots (`ResolvedClass`, `ResolvedMethod`, `InheritedMethod`), and helper queries for superclass walks, supertype traversal, subtype checks, common-superclass lookup, and method-override detection.
 - Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging for future frame and validation work.
+- CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17)): the test suite now compares `pytecode.analysis.build_cfg()` against a JVM-side ASM oracle across compiled fixture corpora, normalizing instruction-level edges into the same block-level spans, successor sets, and handler sets used by `pytecode`.
 
 ### Not implemented yet
 
 - Automatic `max_stack`/`max_locals` recomputation during lowering and `StackMapTable` generation ([#10](https://github.com/smithtrenton/pytecode/issues/10))
 - Full debug-info and stack-map maintenance after mutation (label rebinding is now implemented, but `StackMapTable` recomputation and higher-level policies remain future work) ([#10](https://github.com/smithtrenton/pytecode/issues/10), [#13](https://github.com/smithtrenton/pytecode/issues/13))
-- External-tool differential validation of CFG output against JVM-side oracles such as ASM's `Analyzer` ([#17](https://github.com/smithtrenton/pytecode/issues/17))
 - Structured validation/diagnostics and binary classfile emission ([#11](https://github.com/smithtrenton/pytecode/issues/11), [#12](https://github.com/smithtrenton/pytecode/issues/12))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 

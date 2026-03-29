@@ -49,7 +49,7 @@ AsmTools' reflexive property is key: if `jdec(our_output)` matches `jdec(javac_o
 
 For control-flow graph validation specifically, see [CFG validation research](cfg-validation-research.md) for a source-backed comparison of ASM, BCEL, and Soot and a recommended differential-testing design based on ASM's `Analyzer`.
 
-That CFG-oracle work is now tracked explicitly in [#17](https://github.com/smithtrenton/pytecode/issues/17). It complements rather than replaces the four emission-validation tiers in this document: the issue is about differential validation of `pytecode.analysis.build_cfg()` output before later frame, verifier, and emission layers depend on it.
+That CFG-oracle work has now landed via [#17](https://github.com/smithtrenton/pytecode/issues/17). It complements rather than replaces the four emission-validation tiers in this document: the implemented oracle suite differentially validates `pytecode.analysis.build_cfg()` output before later frame, verifier, and emission layers depend on it.
 
 ## Tier 1: Binary roundtrip
 

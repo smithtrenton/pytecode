@@ -259,7 +259,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 ## Test coverage
 
-The test suite provides both integration-level and unit-level coverage (1008 tests total):
+The test suite provides both integration-level and unit-level coverage (1062 tests total):
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 

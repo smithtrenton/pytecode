@@ -12,7 +12,7 @@ Before calling the library a manipulation toolkit, it should have:
 - verifier acceptance tests (generated classes pass `java -verify`)
 - stable emitted bytes for deterministic scenarios
 - structured diagnostic output for all validation failures
-- differential CFG checks against an external oracle for representative compiled fixtures before later frame-computation and validation work depends on that analysis layer
+- ~~differential CFG checks against an external oracle for representative compiled fixtures before later frame-computation and validation work depends on that analysis layer~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 - Tier 1 (roundtrip) passing for all existing fixtures before any higher tier is attempted
 - Tier 2 (structural verifier) accepting all classes that `javap -v` accepts
 - Tier 3 (javac comparison) showing zero "error"-severity diffs for basic fixtures
@@ -29,19 +29,18 @@ To keep the scope focused, the project does not need to become:
 
 ## Summary
 
-`pytecode` has a solid parser-oriented foundation — typed models, complete instruction decoding, attribute parsing, JAR integration — and now a mutable editing model (`ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`) with symbolic class references, label-based control-flow editing, lifted exception/debug metadata, bidirectional conversion to/from the parsed `ClassFile`, full symbolic instruction operand wrappers for all major non-control-flow instruction families (`FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`), a pluggable hierarchy-resolution layer in `pytecode.hierarchy`, and a control-flow analysis layer in `pytecode.analysis` for CFG construction, verification-type simulation, and max-stack/max-local estimation. The editing model follows Design A (Mutable Dataclasses), chosen after evaluating five candidate designs and surveying eight additional JVM bytecode libraries; the phased extension plan adds pass-style composition (Phase 2) and an optional streaming visitor layer (Phase 3) on top of the tree model.
+`pytecode` has a solid parser-oriented foundation — typed models, complete instruction decoding, attribute parsing, JAR integration — and now a mutable editing model (`ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`) with symbolic class references, label-based control-flow editing, lifted exception/debug metadata, bidirectional conversion to/from the parsed `ClassFile`, full symbolic instruction operand wrappers for all major non-control-flow instruction families (`FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`), a pluggable hierarchy-resolution layer in `pytecode.hierarchy`, a control-flow analysis layer in `pytecode.analysis` for CFG construction, verification-type simulation, and max-stack/max-local estimation, and JVM-backed differential CFG validation against ASM. The editing model follows Design A (Mutable Dataclasses), chosen after evaluating five candidate designs and surveying eight additional JVM bytecode libraries; the phased extension plan adds pass-style composition (Phase 2) and an optional streaming visitor layer (Phase 3) on top of the tree model.
 
-The test suite has unit-level coverage across all modules (1008 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, Modified UTF-8 behavior, descriptor validation, constant-pool builder safety, binary writer primitives, label/layout lowering, symbolic operand wrapper lifting/lowering, hierarchy resolution, control-flow simulation, and mutable model round-trip verification across all compiled Java source fixtures under `tests/resources/`.
+The test suite has unit-level coverage across all modules (1062 tests), including per-attribute-type parsing, all instruction operand shapes, constant-pool edge cases, Modified UTF-8 behavior, descriptor validation, constant-pool builder safety, binary writer primitives, label/layout lowering, symbolic operand wrapper lifting/lowering, hierarchy resolution, control-flow simulation, CFG oracle comparisons, and mutable model round-trip verification across all compiled Java source fixtures under `tests/resources/`.
 
 A four-tier bytecode validation framework has been designed to verify emission correctness once ClassWriter ([#12](https://github.com/smithtrenton/pytecode/issues/12)) is implemented. The framework covers binary roundtrip fidelity (Tier 1), JVM spec format and static constraint checking (Tier 2), semantic comparison against javac output including CP ordering and instruction selection analysis (Tier 3), and end-to-end JVM loading and execution testing via a verification harness (Tier 4). The constant pool strategy uses preserve-on-roundtrip as the default mode with opt-in javac-compatible ordering for class generation.
 
-The remaining work is centered on wiring the new analysis layer into mutation workflows, plus validation and emission. The roadmap continues with:
+The remaining work is centered on wiring the analysis and editing foundations into mutation workflows, plus validation, emission, and round-trip compatibility work. The roadmap continues with:
 
 - max stack/max locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10))
 - version-aware validation ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 - classfile writing infrastructure ([#12](https://github.com/smithtrenton/pytecode/issues/12))
 - structured diagnostics
-- external-tool CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17))
 - broader debug info and stack-map management during mutation ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#10](https://github.com/smithtrenton/pytecode/issues/10))
 - round-trip and JVM compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - composable transform pipelines (Phase 2 of [#6](https://github.com/smithtrenton/pytecode/issues/6))
