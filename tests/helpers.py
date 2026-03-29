@@ -13,6 +13,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,6 +26,8 @@ TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
 _REPO_ROOT = TEST_RESOURCES.parent.parent
 JAVA_COMPILE_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-javac"
 _JAVA_COMPILE_CACHE_SCHEMA_VERSION = 1
+EXTERNAL_TOOL_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-external"
+_EXTERNAL_TOOL_CACHE_SCHEMA_VERSION = 1
 ORACLE_RESOURCE_ROOT = TEST_RESOURCES / "oracle"
 ORACLE_LIB_ROOT = ORACLE_RESOURCE_ROOT / "lib"
 ORACLE_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-oracle"
@@ -101,15 +104,29 @@ def _jdk_tool(name: str) -> str:
 
 @functools.lru_cache(maxsize=1)
 def _get_javac_identity() -> str:
+    return _get_jdk_tool_identity("javac")
+
+
+@functools.lru_cache(maxsize=1)
+def _get_java_identity() -> str:
+    return _get_jdk_tool_identity("java")
+
+
+@functools.lru_cache(maxsize=1)
+def _get_javap_identity() -> str:
+    return _get_jdk_tool_identity("javap")
+
+
+def _get_jdk_tool_identity(name: str) -> str:
     result = subprocess.run(
-        [_jdk_tool("javac"), "-version"],
+        [_jdk_tool(name), "-version"],
         capture_output=True,
         text=True,
         check=False,
     )
     version_text = (result.stdout or result.stderr).strip()
     if result.returncode != 0 or not version_text:
-        raise AssertionError(version_text or "Failed to determine javac version")
+        raise AssertionError(version_text or f"Failed to determine {name} version")
     return version_text
 
 
@@ -127,6 +144,116 @@ def _path_cache_inputs(paths: tuple[Path, ...]) -> list[dict[str, str]]:
             }
         )
     return cache_inputs
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _external_tool_cache_path(namespace: str, key_payload: object) -> Path:
+    encoded = json.dumps(key_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    cache_key = hashlib.sha256(encoded).hexdigest()
+    return EXTERNAL_TOOL_CACHE_ROOT / namespace / f"{cache_key}.json"
+
+
+def _read_external_tool_cache(namespace: str, key_payload: object) -> object | None:
+    cache_path = _external_tool_cache_path(namespace, key_payload)
+    if not cache_path.is_file():
+        return None
+    return json.loads(cache_path.read_text(encoding="utf-8"))
+
+
+def _write_external_tool_cache(namespace: str, key_payload: object, payload: object) -> None:
+    cache_path = _external_tool_cache_path(namespace, key_payload)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    cache_text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    try:
+        temp_path.write_text(cache_text, encoding="utf-8")
+        temp_path.replace(cache_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _tool_input_signature(path: Path) -> dict[str, str]:
+    resolved = path.resolve(strict=True)
+    return {"sha256": _file_sha256(resolved)}
+
+
+def _classpath_entry_signature(path: Path) -> dict[str, object]:
+    resolved = path.resolve(strict=True)
+    if resolved.is_file():
+        return {"kind": "file", "sha256": _file_sha256(resolved)}
+    if not resolved.is_dir():
+        raise AssertionError(f"Classpath entry {resolved} must be a file or directory")
+    files = sorted(child for child in resolved.rglob("*") if child.is_file())
+    return {
+        "kind": "dir",
+        "entries": [
+            {
+                "path": child.relative_to(resolved).as_posix(),
+                "sha256": _file_sha256(child),
+            }
+            for child in files
+        ],
+    }
+
+
+def _classpath_signature(paths: Sequence[Path] | None) -> list[dict[str, object]]:
+    if not paths:
+        return []
+    return [_classpath_entry_signature(path) for path in paths]
+
+
+def _verifier_cache_key_payload(
+    *,
+    targets: Sequence[Path],
+    execute: bool,
+    class_name: str | None,
+    args: Sequence[str] | None,
+    extra_classpath: Sequence[Path] | None,
+) -> dict[str, object]:
+    return {
+        "args": list(args or []),
+        "class_name": class_name,
+        "execute": execute,
+        "extra_classpath": _classpath_signature(extra_classpath),
+        "java": _get_java_identity(),
+        "schema_version": _EXTERNAL_TOOL_CACHE_SCHEMA_VERSION,
+        "targets": [_tool_input_signature(path) for path in targets],
+        "tool": "verifier_harness",
+        "verifier_harness_source": _file_sha256(VERIFIER_HARNESS_SOURCE),
+    }
+
+
+def _rewrite_javap_output_paths(stdout: str, current_paths: Sequence[Path]) -> str:
+    expected_headers = [f"Classfile {_format_javap_path(path)}" for path in current_paths]
+    rewritten_lines: list[str] = []
+    header_index = 0
+    for line in stdout.splitlines():
+        if line.startswith("Classfile "):
+            if header_index >= len(expected_headers):
+                raise AssertionError("javap output contained more Classfile headers than expected")
+            rewritten_lines.append(expected_headers[header_index])
+            header_index += 1
+        else:
+            rewritten_lines.append(line)
+    if header_index != len(expected_headers):
+        raise AssertionError(
+            f"javap output header count mismatch: expected {len(expected_headers)}, got {header_index}"
+        )
+    rewritten = "\n".join(rewritten_lines)
+    if stdout.endswith("\n"):
+        return rewritten + "\n"
+    return rewritten
+
+
+def _format_javap_path(path: Path) -> str:
+    rendered = path.resolve(strict=True).as_posix()
+    if len(rendered) >= 2 and rendered[1] == ":":
+        return f"/{rendered}"
+    return rendered
 
 
 def _java_compile_cache_key(
@@ -289,15 +416,36 @@ def compile_java_resource(tmp_path: Path, resource_name: str, *, release: int = 
     return classes_dir / Path(resource_name).with_suffix(".class").name
 
 
+def _compiled_class_files(classes_dir: Path, *, resource_name: str) -> tuple[Path, ...]:
+    class_files = tuple(sorted(classes_dir.rglob("*.class"), key=lambda path: str(path.relative_to(classes_dir))))
+    if not class_files:
+        raise AssertionError(f"Java resource {resource_name!r} produced no .class files")
+    return class_files
+
+
+def cached_java_resource_classes_dir(resource_name: str, *, release: int = 8) -> Path:
+    """Return the shared cached classes directory for a Java fixture."""
+
+    source_path = TEST_RESOURCES / Path(resource_name)
+    return _cached_java_classes_dir(
+        _normalize_source_files([source_path]),
+        release=release,
+    )
+
+
+def cached_java_resource_classes(resource_name: str, *, release: int = 8) -> tuple[Path, ...]:
+    """Return generated ``.class`` files for a Java fixture directly from the shared cache."""
+
+    classes_dir = cached_java_resource_classes_dir(resource_name, release=release)
+    return _compiled_class_files(classes_dir, resource_name=resource_name)
+
+
 def compile_java_resource_classes(tmp_path: Path, resource_name: str, *, release: int = 8) -> list[Path]:
     """Compile one Java resource file and return every generated ``.class`` path."""
 
     source_path = TEST_RESOURCES / Path(resource_name)
     classes_dir = compile_java_sources(tmp_path, [source_path], release=release)
-    class_files = sorted(classes_dir.rglob("*.class"), key=lambda path: str(path.relative_to(classes_dir)))
-    if not class_files:
-        raise AssertionError(f"Java resource {resource_name!r} produced no .class files")
-    return class_files
+    return list(_compiled_class_files(classes_dir, resource_name=resource_name))
 
 
 _INFRASTRUCTURE_FIXTURES = frozenset({"VerifierHarness.java"})
@@ -738,30 +886,51 @@ def can_java() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def run_javap(class_path: Path) -> str:
-    """Run ``javap -v -p -c`` and return its stdout."""
-    resolved = class_path.resolve(strict=True)
+def _run_javap_paths(class_paths: Sequence[Path]) -> str:
+    resolved_paths = [path.resolve(strict=True) for path in class_paths]
+    if not resolved_paths:
+        raise AssertionError("Expected at least one class path for javap")
+
     result = subprocess.run(
-        [_jdk_tool("javap"), "-v", "-p", "-c", str(resolved)],
+        [_jdk_tool("javap"), "-v", "-p", "-c", *(str(path) for path in resolved_paths)],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise AssertionError(f"javap failed on {resolved}: {result.stderr or result.stdout}")
+        joined_paths = ", ".join(str(path) for path in resolved_paths)
+        raise AssertionError(f"javap failed on {joined_paths}: {result.stderr or result.stdout}")
     return result.stdout
 
 
-def run_javap_check(class_path: Path) -> bool:
-    """Run ``javap -v -p -c`` and return True if exit code is 0."""
-    resolved = class_path.resolve(strict=True)
-    result = subprocess.run(
-        [_jdk_tool("javap"), "-v", "-p", "-c", str(resolved)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode == 0
+def run_javap(class_path: Path) -> str:
+    """Run ``javap -v -p -c`` and return its stdout."""
+    return run_javap_many([class_path])
+
+
+def run_javap_many(class_paths: Sequence[Path]) -> str:
+    """Run ``javap -v -p -c`` for multiple class files and return combined stdout."""
+    resolved_paths = [path.resolve(strict=True) for path in class_paths]
+    cache_key = {
+        "inputs": [_tool_input_signature(path) for path in resolved_paths],
+        "javap": _get_javap_identity(),
+        "schema_version": _EXTERNAL_TOOL_CACHE_SCHEMA_VERSION,
+        "tool": "javap",
+    }
+    cached_obj = _read_external_tool_cache("javap", cache_key)
+    if cached_obj is not None:
+        if not isinstance(cached_obj, dict):
+            raise AssertionError("Cached javap payload must be a JSON object")
+        cached_payload = cast(dict[str, object], cached_obj)
+        stdout_obj = cached_payload.get("stdout")
+        if not isinstance(stdout_obj, str):
+            raise AssertionError("Cached javap payload must include string stdout")
+        return _rewrite_javap_output_paths(stdout_obj, resolved_paths)
+
+    stdout = _run_javap_paths(resolved_paths)
+    normalized_stdout = _rewrite_javap_output_paths(stdout, resolved_paths)
+    _write_external_tool_cache("javap", cache_key, {"stdout": normalized_stdout})
+    return normalized_stdout
 
 
 # ---------------------------------------------------------------------------
@@ -778,36 +947,15 @@ def _compile_verifier_harness() -> Path:
     )
 
 
-def run_verifier_harness(
-    class_path: Path,
-    *,
-    execute: bool = False,
-    class_name: str | None = None,
-    args: list[str] | None = None,
-    extra_classpath: list[Path] | None = None,
-) -> dict[str, Any]:
-    """Run the JVM VerifierHarness against ``class_path`` and return parsed JSON output."""
+def _verifier_harness_classpath(extra_classpath: Sequence[Path] | None = None) -> str:
     harness_classes = _compile_verifier_harness()
-    resolved = class_path.resolve(strict=True)
-
     cp_entries = [str(harness_classes)]
     if extra_classpath:
-        cp_entries.extend(str(p) for p in extra_classpath)
-    classpath = os.pathsep.join(cp_entries)
+        cp_entries.extend(str(path) for path in extra_classpath)
+    return os.pathsep.join(cp_entries)
 
-    command = [
-        _jdk_tool("java"),
-        "-Xverify:all",
-        "-cp",
-        classpath,
-        "VerifierHarness",
-        str(resolved),
-    ]
-    if execute and class_name:
-        command.extend(["execute", class_name])
-        if args:
-            command.extend(args)
 
+def _run_verifier_harness_command(command: list[str], *, context: str) -> object:
     result = subprocess.run(
         command,
         capture_output=True,
@@ -817,13 +965,136 @@ def run_verifier_harness(
 
     stdout = result.stdout.strip()
     if not stdout:
-        raise AssertionError(f"VerifierHarness produced no output for {resolved}: {result.stderr}")
+        raise AssertionError(f"VerifierHarness produced no output for {context}: {result.stderr}")
 
     try:
-        payload = json.loads(stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise AssertionError(f"VerifierHarness returned invalid JSON: {exc}\nstdout: {stdout}") from exc
 
-    if not isinstance(payload, dict):
+
+def run_verifier_harness(
+    class_path: Path,
+    *,
+    execute: bool = False,
+    class_name: str | None = None,
+    args: list[str] | None = None,
+    extra_classpath: Sequence[Path] | None = None,
+) -> dict[str, Any]:
+    """Run the JVM VerifierHarness against ``class_path`` and return parsed JSON output."""
+    resolved = class_path.resolve(strict=True)
+    cache_key = _verifier_cache_key_payload(
+        targets=[resolved],
+        execute=execute,
+        class_name=class_name,
+        args=args,
+        extra_classpath=extra_classpath,
+    )
+    cached_obj = _read_external_tool_cache("verifier-harness", cache_key)
+    if cached_obj is not None:
+        if not isinstance(cached_obj, dict):
+            raise AssertionError("Cached VerifierHarness payload must be a JSON object")
+        return cast(dict[str, Any], cached_obj)
+
+    command = [
+        _jdk_tool("java"),
+        "-Xverify:all",
+        "-cp",
+        _verifier_harness_classpath(extra_classpath),
+        "VerifierHarness",
+        str(resolved),
+    ]
+    if execute and class_name:
+        command.extend(["execute", class_name])
+        if args:
+            command.extend(args)
+
+    payload_obj = _run_verifier_harness_command(command, context=str(resolved))
+    if not isinstance(payload_obj, dict):
         raise AssertionError("VerifierHarness output must be a JSON object")
-    return cast(dict[str, Any], payload)
+    payload = cast(dict[str, Any], payload_obj)
+    _write_external_tool_cache("verifier-harness", cache_key, payload)
+    return payload
+
+
+def run_verifier_harness_many(
+    class_paths: Sequence[Path],
+    *,
+    extra_classpath: Sequence[Path] | None = None,
+) -> list[dict[str, Any]]:
+    """Run the JVM VerifierHarness in batch mode and return ordered parsed results."""
+
+    resolved_paths = [path.resolve(strict=True) for path in class_paths]
+    if not resolved_paths:
+        raise AssertionError("Expected at least one class path for VerifierHarness batch mode")
+    cache_key = _verifier_cache_key_payload(
+        targets=resolved_paths,
+        execute=False,
+        class_name=None,
+        args=None,
+        extra_classpath=extra_classpath,
+    )
+    cached_obj = _read_external_tool_cache("verifier-harness-batch", cache_key)
+    if cached_obj is not None:
+        if not isinstance(cached_obj, dict):
+            raise AssertionError("Cached VerifierHarness batch payload must be a JSON object")
+        cached_payload = cast(dict[str, object], cached_obj)
+        cached_results_obj = cached_payload.get("results")
+        if not isinstance(cached_results_obj, list):
+            raise AssertionError("Cached VerifierHarness batch payload must include a results list")
+        return _restore_verifier_harness_batch_results(cast(list[object], cached_results_obj), resolved_paths)
+
+    command = [
+        _jdk_tool("java"),
+        "-Xverify:all",
+        "-cp",
+        _verifier_harness_classpath(extra_classpath),
+        "VerifierHarness",
+        "batch",
+        *(str(path) for path in resolved_paths),
+    ]
+
+    payload_obj = _run_verifier_harness_command(
+        command,
+        context=", ".join(str(path) for path in resolved_paths),
+    )
+    if not isinstance(payload_obj, list):
+        raise AssertionError("VerifierHarness batch output must be a JSON array")
+    payload_list = cast(list[object], payload_obj)
+    if len(payload_list) != len(resolved_paths):
+        raise AssertionError(
+            f"VerifierHarness batch output length mismatch: expected {len(resolved_paths)}, got {len(payload_list)}"
+        )
+
+    results = _restore_verifier_harness_batch_results(payload_list, resolved_paths)
+    normalized_results = [{key: value for key, value in item.items() if key != "path"} for item in results]
+    _write_external_tool_cache("verifier-harness-batch", cache_key, {"results": normalized_results})
+    return results
+
+
+def _restore_verifier_harness_batch_results(
+    result_objects: Sequence[object],
+    resolved_paths: Sequence[Path],
+) -> list[dict[str, Any]]:
+    if len(result_objects) != len(resolved_paths):
+        raise AssertionError(
+            f"VerifierHarness batch output length mismatch: expected {len(resolved_paths)}, got {len(result_objects)}"
+        )
+
+    results: list[dict[str, Any]] = []
+    for item_obj, resolved_path in zip(result_objects, resolved_paths, strict=True):
+        if not isinstance(item_obj, dict):
+            raise AssertionError("VerifierHarness batch output items must be JSON objects")
+        item = cast(dict[str, Any], item_obj)
+        result_path_obj = item.get("path")
+        if result_path_obj is not None:
+            if not isinstance(result_path_obj, str):
+                raise AssertionError("VerifierHarness batch output items must include a string path")
+            if result_path_obj != str(resolved_path):
+                raise AssertionError(
+                    f"VerifierHarness batch output path mismatch: expected {resolved_path}, got {result_path_obj!r}"
+                )
+            results.append(item)
+        else:
+            results.append({"path": str(resolved_path), **item})
+    return results

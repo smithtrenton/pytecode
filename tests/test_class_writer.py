@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from pytecode import ClassModel, ClassReader, ClassWriter
@@ -10,7 +8,7 @@ from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFla
 from pytecode.model import FieldModel, MethodModel
 from pytecode.verify import Severity, verify_classfile
 from tests.helpers import (
-    compile_java_resource_classes,
+    cached_java_resource_classes,
     list_java_resources,
     long_entry_bytes,
     make_attribute_blob,
@@ -28,8 +26,8 @@ def _assert_no_error_diagnostics(data: bytes) -> None:
 
 
 @pytest.mark.parametrize("resource_name", ROUNDTRIP_JAVA_RESOURCES)
-def test_writer_and_model_roundtrip_all_java_resources(tmp_path: Path, resource_name: str) -> None:
-    for class_path in compile_java_resource_classes(tmp_path, resource_name):
+def test_writer_and_model_roundtrip_all_java_resources(resource_name: str) -> None:
+    for class_path in cached_java_resource_classes(resource_name):
         original = class_path.read_bytes()
         parsed = ClassReader(original).class_info
 
@@ -65,8 +63,8 @@ def test_writer_roundtrip_preserves_long_gap_slots() -> None:
     assert ClassWriter.write(parsed) == raw
 
 
-def test_writer_roundtrip_preserves_parameter_annotation_attributes(tmp_path: Path) -> None:
-    class_paths = compile_java_resource_classes(tmp_path, "ParameterAnnotations.java")
+def test_writer_roundtrip_preserves_parameter_annotation_attributes() -> None:
+    class_paths = cached_java_resource_classes("ParameterAnnotations.java")
     class_path = next((path for path in class_paths if path.name == "ParameterAnnotations.class"), None)
     assert class_path is not None
 

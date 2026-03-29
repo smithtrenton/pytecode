@@ -13,19 +13,31 @@ import java.nio.file.Path;
  * Usage:
  *   java -Xverify:all VerifierHarness &lt;path.class&gt;
  *   java -Xverify:all VerifierHarness &lt;path.class&gt; execute &lt;className&gt; [args...]
+ *   java -Xverify:all VerifierHarness batch &lt;path.class&gt;...
  *
  * Output (one JSON line):
  *   {"status":"VERIFY_OK"}
  *   {"status":"VERIFY_OK","stdout":"..."}          (execute mode)
  *   {"status":"VERIFY_FAIL","message":"..."}
  *   {"status":"FORMAT_FAIL","message":"..."}
+ *   [{"path":"...","status":"VERIFY_OK"}, ...]     (batch mode)
  */
 public class VerifierHarness {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.out.println("{\"status\":\"FORMAT_FAIL\",\"message\":\"usage: VerifierHarness <path.class> [execute <className> [args...]]\"}");
+            System.out.println("{\"status\":\"FORMAT_FAIL\",\"message\":\"usage: VerifierHarness <path.class> [execute <className> [args...]] | VerifierHarness batch <path.class>...\"}");
             System.exit(1);
+        }
+
+        if ("batch".equals(args[0])) {
+            if (args.length < 2) {
+                System.out.println("{\"status\":\"FORMAT_FAIL\",\"message\":\"usage: VerifierHarness batch <path.class>...\"}");
+                System.exit(1);
+                return;
+            }
+            System.out.println(verifyBatch(args));
+            return;
         }
 
         Path classFilePath = Path.of(args[0]);
@@ -33,9 +45,12 @@ public class VerifierHarness {
 
         boolean executeMode = args.length >= 3 && "execute".equals(args[1]);
         String className;
+        String[] execArgs = new String[0];
 
         if (executeMode) {
             className = args[2];
+            execArgs = new String[args.length - 3];
+            System.arraycopy(args, 3, execArgs, 0, execArgs.length);
         } else {
             className = extractClassName(classBytes);
             if (className == null) {
@@ -45,6 +60,40 @@ public class VerifierHarness {
             }
         }
 
+        System.out.println(verifyClass(classFilePath, classBytes, className, executeMode, execArgs, false));
+    }
+
+    private static String verifyBatch(String[] args) {
+        StringBuilder out = new StringBuilder("[");
+        for (int i = 1; i < args.length; i++) {
+            if (i > 1) {
+                out.append(",");
+            }
+            Path classFilePath = Path.of(args[i]);
+            try {
+                byte[] classBytes = Files.readAllBytes(classFilePath);
+                String className = extractClassName(classBytes);
+                if (className == null) {
+                    out.append(resultJson(classFilePath, "FORMAT_FAIL", "cannot extract class name from constant pool", null, null, true));
+                } else {
+                    out.append(verifyClass(classFilePath, classBytes, className, false, new String[0], true));
+                }
+            } catch (Exception e) {
+                out.append(resultJson(classFilePath, "VERIFY_FAIL", e.toString(), null, null, true));
+            }
+        }
+        out.append("]");
+        return out.toString();
+    }
+
+    private static String verifyClass(
+        Path classFilePath,
+        byte[] classBytes,
+        String className,
+        boolean executeMode,
+        String[] execArgs,
+        boolean includePath
+    ) {
         String dotClassName = className.replace('/', '.');
 
         try {
@@ -61,9 +110,6 @@ public class VerifierHarness {
             Class<?> clazz = loader.loadClass(dotClassName);
 
             if (executeMode) {
-                String[] execArgs = new String[args.length - 3];
-                System.arraycopy(args, 3, execArgs, 0, execArgs.length);
-
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 PrintStream capture = new PrintStream(baos);
                 PrintStream originalOut = System.out;
@@ -76,22 +122,50 @@ public class VerifierHarness {
                     capture.flush();
                 }
                 String stdout = baos.toString("UTF-8");
-                System.out.println("{\"status\":\"VERIFY_OK\",\"stdout\":" + jsonEscape(stdout) + "}");
+                return resultJson(classFilePath, "VERIFY_OK", null, stdout, null, includePath);
             } else {
-                System.out.println("{\"status\":\"VERIFY_OK\"}");
+                return resultJson(classFilePath, "VERIFY_OK", null, null, null, includePath);
             }
         } catch (VerifyError e) {
-            System.out.println("{\"status\":\"VERIFY_FAIL\",\"message\":" + jsonEscape(e.getMessage()) + "}");
+            return resultJson(classFilePath, "VERIFY_FAIL", e.getMessage(), null, null, includePath);
         } catch (ClassFormatError e) {
-            System.out.println("{\"status\":\"FORMAT_FAIL\",\"message\":" + jsonEscape(e.getMessage()) + "}");
+            return resultJson(classFilePath, "FORMAT_FAIL", e.getMessage(), null, null, includePath);
+        } catch (LinkageError e) {
+            return resultJson(classFilePath, "VERIFY_FAIL", e.toString(), null, null, includePath);
         } catch (Exception e) {
             if (executeMode) {
                 // Execution failed but class loaded (verification passed)
-                System.out.println("{\"status\":\"VERIFY_OK\",\"exec_error\":" + jsonEscape(e.toString()) + "}");
+                return resultJson(classFilePath, "VERIFY_OK", null, null, e.toString(), includePath);
             } else {
-                System.out.println("{\"status\":\"VERIFY_FAIL\",\"message\":" + jsonEscape(e.toString()) + "}");
+                return resultJson(classFilePath, "VERIFY_FAIL", e.toString(), null, null, includePath);
             }
         }
+    }
+
+    private static String resultJson(
+        Path classFilePath,
+        String status,
+        String message,
+        String stdout,
+        String execError,
+        boolean includePath
+    ) {
+        StringBuilder sb = new StringBuilder("{");
+        if (includePath) {
+            sb.append("\"path\":").append(jsonEscape(classFilePath.toString())).append(",");
+        }
+        sb.append("\"status\":").append(jsonEscape(status));
+        if (message != null) {
+            sb.append(",\"message\":").append(jsonEscape(message));
+        }
+        if (stdout != null) {
+            sb.append(",\"stdout\":").append(jsonEscape(stdout));
+        }
+        if (execError != null) {
+            sb.append(",\"exec_error\":").append(jsonEscape(execError));
+        }
+        sb.append("}");
+        return sb.toString();
     }
 
     /**

@@ -1,17 +1,9 @@
-"""Multi-release, multi-tier validation tests for pytecode classfile emission.
+"""Multi-release validation tests for pytecode classfile emission.
 
-Runs all four validation tiers in a single parametrized test per (fixture, release):
-
-- **Tier 1 — Roundtrip**: byte-for-byte ``ClassWriter.write()`` and
-  ``ClassModel.to_bytes()`` roundtrips.
-- **Tier 2 — Structural**: ``verify_classfile()`` + ``javap -v -p -c`` exit-code check.
-  Compares diagnostics against the gold (javac) class so pre-existing javac
-  quirks are not counted as regressions.
-- **Tier 3 — Semantic**: full javap parse + CP-aware semantic diff between gold
-  (javac) and roundtripped output.
-- **Tier 4 — JVM loading**: ``VerifierHarness`` with ``-Xverify:all``.  The
-  compilation output directory is placed on the classpath so that companion /
-  inner classes are resolvable.
+For each ``(fixture, release)`` pair, the suite requires byte-for-byte
+roundtrip identity, preserves cheap in-process verification coverage, and
+then runs external acceptance checks on the emitted bytes with ``javap`` and,
+when available, the JVM verifier harness.
 
 All tests skip gracefully when ``javac``/``java`` are unavailable.
 """
@@ -23,16 +15,16 @@ from pathlib import Path
 import pytest
 
 from pytecode import ClassModel, ClassReader, ClassWriter
+from pytecode.info import ClassFile
 from pytecode.verify import Severity, verify_classfile
 from tests.helpers import (
+    cached_java_resource_classes,
+    cached_java_resource_classes_dir,
     can_java,
     can_javac,
-    compile_java_resource_classes,
-    run_javap,
-    run_javap_check,
+    run_javap_many,
 )
-from tests.javap_parser import DiffSeverity, parse_javap, semantic_diff
-from tests.jvm_harness import execute_class, verify_class
+from tests.jvm_harness import execute_class, verify_classes
 from tests.validation_fixtures import validation_matrix
 
 _requires_javac = pytest.mark.skipif(not can_javac(), reason="javac not available")
@@ -41,10 +33,10 @@ _requires_java = pytest.mark.skipif(not can_java(), reason="java not available")
 _MATRIX = validation_matrix()
 
 
-def _error_messages(data: bytes) -> set[str]:
+def _error_messages(cf: ClassFile) -> set[str]:
     """Return the set of ERROR-level diagnostic messages from ``verify_classfile``."""
-    diags = verify_classfile(ClassReader(data).class_info)
-    return {d.message for d in diags if d.severity is Severity.ERROR}
+    diags = verify_classfile(cf)
+    return {diag.message for diag in diags if diag.severity is Severity.ERROR}
 
 
 def _roundtrip_class_bytes(original: bytes) -> bytes:
@@ -56,12 +48,10 @@ def _roundtrip_class_bytes(original: bytes) -> bytes:
 @_requires_javac
 @pytest.mark.parametrize("fixture_name,release", _MATRIX, ids=[f"{f}@{r}" for f, r in _MATRIX])
 def test_all_tiers(tmp_path: Path, fixture_name: str, release: int) -> None:
-    """Run Tiers 1–4 on every .class file produced by (fixture, release)."""
-    class_paths = compile_java_resource_classes(tmp_path, fixture_name, release=release)
-    # The compilation root is always tmp_path / "classes" (set by compile_java_sources).
-    # This is needed as extra classpath for Tier 4 so companion / inner / packaged
-    # classes are resolvable by the JVM.
-    compilation_root = tmp_path / "classes"
+    """Run roundtrip plus external acceptance checks on every generated class."""
+    compilation_root = cached_java_resource_classes_dir(fixture_name, release=release)
+    class_paths = cached_java_resource_classes(fixture_name, release=release)
+    roundtripped_paths: list[Path] = []
 
     for class_path in class_paths:
         original = class_path.read_bytes()
@@ -72,46 +62,36 @@ def test_all_tiers(tmp_path: Path, fixture_name: str, release: int) -> None:
         emitted = ClassWriter.write(parsed)
         assert emitted == original, f"ClassWriter roundtrip failed for {class_path.name}"
 
+        emitted_parsed = ClassReader(emitted).class_info
+        gold_errors = _error_messages(parsed)
+        our_errors = _error_messages(emitted_parsed)
+        new_errors = our_errors - gold_errors
+        assert not new_errors, f"verify_classfile new errors for {class_path.name}: {new_errors}"
+
         model = ClassModel.from_classfile(parsed)
         lowered = model.to_bytes()
         assert lowered == original, f"ClassModel roundtrip failed for {class_path.name}"
 
-        # ── Tier 2: Structural ────────────────────────────────────────
-        # Compare verify_classfile diagnostics: only fail if the roundtrip
-        # INTRODUCES new errors not present in the gold (javac) class.
-        gold_errors = _error_messages(original)
-        our_errors = _error_messages(emitted)
-        new_errors = our_errors - gold_errors
-        assert not new_errors, f"verify_classfile new errors for {class_path.name}: {new_errors}"
-
-        ClassReader(emitted)  # re-parse must not raise
-
-        # Write roundtripped bytes to temp file for external tool checks
         roundtripped_path = tmp_path / f"roundtripped_{class_path.name}"
         roundtripped_path.write_bytes(emitted)
+        roundtripped_paths.append(roundtripped_path)
 
-        if can_javac():
-            assert run_javap_check(roundtripped_path), f"javap rejected roundtripped {class_path.name}"
+    # Byte-for-byte identity makes a separate gold-file javap comparison
+    # redundant; one batched javap pass still proves the emitted files remain
+    # externally readable.
+    run_javap_many(roundtripped_paths)
 
-        # ── Tier 3: Semantic diff ─────────────────────────────────────
-        if can_javac():
-            gold_output = run_javap(class_path)
-            our_output = run_javap(roundtripped_path)
-
-            gold_parsed = parse_javap(gold_output)
-            our_parsed = parse_javap(our_output)
-
-            diffs = semantic_diff(gold_parsed, our_parsed)
-            errors = [d for d in diffs if d.severity is DiffSeverity.ERROR]
-            assert errors == [], f"Semantic diff errors for {class_path.name}@{release}: {errors}"
-
-        # ── Tier 4: JVM loading ───────────────────────────────────────
-        if can_java():
-            result = verify_class(
-                roundtripped_path,
-                extra_classpath=[compilation_root],
-            )
-            assert result.ok, f"JVM rejected roundtripped {class_path.name}: {result.message}"
+    if can_java():
+        results = verify_classes(
+            roundtripped_paths,
+            extra_classpath=[compilation_root],
+        )
+        failures = [
+            f"{path.name}: {result.message or result.status}"
+            for path, result in zip(roundtripped_paths, results, strict=True)
+            if not result.ok
+        ]
+        assert failures == [], "JVM rejected roundtripped classes:\n" + "\n".join(failures)
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +119,8 @@ def test_execution(
     expected: str,
 ) -> None:
     """Verify that roundtripped classes produce correct runtime output."""
-    class_paths = compile_java_resource_classes(tmp_path, fixture_name, release=release)
-    compilation_root = tmp_path / "classes"
+    compilation_root = cached_java_resource_classes_dir(fixture_name, release=release)
+    class_paths = cached_java_resource_classes(fixture_name, release=release)
 
     # Find the main class file
     main_path: Path | None = None

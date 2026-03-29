@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 
 import pytest
 
@@ -72,7 +71,7 @@ from pytecode.verify import (
     verify_classfile,
     verify_classmodel,
 )
-from tests.helpers import compile_java_resource, list_java_resources
+from tests.helpers import cached_java_resource_classes, list_java_resources
 
 # ── Test helpers ──────────────────────────────────────────────────────
 
@@ -1843,14 +1842,11 @@ JAVA_RESOURCES = list_java_resources()
 
 
 @pytest.mark.parametrize("resource", JAVA_RESOURCES, ids=JAVA_RESOURCES)
-def test_compiled_fixture_zero_errors(tmp_path: Path, resource: str) -> None:
+def test_compiled_fixture_zero_errors(resource: str) -> None:
     """Every compiled Java fixture should pass verification with zero ERRORs."""
     from pytecode import ClassModel, ClassReader
 
-    class_path = compile_java_resource(tmp_path, resource)
-    classes_dir = class_path.parent
-
-    for class_file in classes_dir.rglob("*.class"):
+    for class_file in cached_java_resource_classes(resource):
         reader = ClassReader.from_file(str(class_file))
         cf = reader.class_info
 

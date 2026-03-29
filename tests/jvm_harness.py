@@ -6,10 +6,11 @@ entry points and result dataclasses.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.helpers import run_verifier_harness
+from tests.helpers import run_verifier_harness, run_verifier_harness_many
 
 
 @dataclass
@@ -47,6 +48,21 @@ def verify_class(class_path: Path, *, extra_classpath: list[Path] | None = None)
         status=raw.get("status", "UNKNOWN"),
         message=raw.get("message"),
     )
+
+
+def verify_classes(class_paths: Sequence[Path], *, extra_classpath: list[Path] | None = None) -> list[VerifyResult]:
+    """Verify multiple ``.class`` files using one JVM harness invocation."""
+
+    raws = run_verifier_harness_many(class_paths, extra_classpath=extra_classpath)
+    return [
+        VerifyResult(
+            status=raw.get("status", "UNKNOWN"),
+            message=raw.get("message"),
+            stdout=raw.get("stdout"),
+            exec_error=raw.get("exec_error"),
+        )
+        for raw in raws
+    ]
 
 
 def execute_class(

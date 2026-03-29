@@ -15,9 +15,9 @@ from pytecode.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchIns
 from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.modified_utf8 import decode_modified_utf8
 from tests.helpers import (
+    cached_java_resource_classes,
     class_entry_bytes,
     compile_java_resource,
-    compile_java_resource_classes,
     integer_entry_bytes,
     list_java_resources,
     minimal_classfile,
@@ -675,10 +675,10 @@ class TestRoundTrip:
         assert restored.constant_pool[0] is None
 
     @pytest.mark.parametrize("resource_name", ROUNDTRIP_JAVA_RESOURCES)
-    def test_roundtrip_all_java_resources(self, tmp_path: Path, resource_name: str) -> None:
+    def test_roundtrip_all_java_resources(self, resource_name: str) -> None:
         """Every Java source fixture should round-trip across all generated classes."""
 
-        for class_path in compile_java_resource_classes(tmp_path, resource_name):
+        for class_path in cached_java_resource_classes(resource_name):
             self._assert_roundtrip(class_path)
 
     def test_roundtrip_from_scratch(self) -> None:
