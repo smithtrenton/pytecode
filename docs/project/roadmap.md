@@ -65,12 +65,12 @@ Now implemented in `pytecode.analysis` via `compute_maxs()` and `compute_frames(
 
 Now implemented in `pytecode.verify`. The validation module checks version-aware feature gating and attribute constraints alongside structural classfile validation. See `pytecode/verify.py` for the full set of checks.
 
-#### 9. Round-trip fidelity and compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed)
+#### 9. Round-trip fidelity and compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 
 To be a practical ASM/BCEL alternative, the project should prove:
 
 - parse → emit → parse stability (idempotent round-trips)
-- compatibility across representative Java compiler outputs (javac 8, 11, 17, 21)
+- compatibility across representative Java compiler outputs (javac 8, 11, 17, 21, 25)
 - verifier acceptance of generated classes (run through `java -verify`)
 - preservation of unknown or unsupported attributes where possible
 - deterministic emission for reproducible builds
@@ -81,7 +81,12 @@ Round-trip testing distinguishes three levels of fidelity:
 - **Level B — Structural equivalence** (`parse(bytes₁) ≅ parse(bytes₂)`): For modified roundtrips where CP indexes may have shifted. Compares parsed structures with CP references resolved to symbolic values.
 - **Level C — Semantic equivalence** (behavior-preserving): The weakest level — two class files define the same class with the same behavior, even if structural details differ (attribute order, debug attributes, method order).
 
-Tier 1 is now implemented for the current fixture corpus: `tests/test_class_writer.py` exercises byte-for-byte `ClassWriter.write()` roundtrips across compiled Java fixtures, byte-for-byte `ClassModel.to_bytes()` roundtrips across the same corpus, and raw edge cases such as unknown attributes and double-slot constant-pool gaps. The broader compatibility tiers remain future work.
+All four validation tiers are now implemented in `tests/test_validation.py`, covering a comprehensive fixture corpus compiled at `--release 8, 11, 17, 21, 25` via JDK 25:
+
+- **Tier 1 — Byte-for-byte roundtrip**: `ClassWriter.write()` and `ClassModel.to_bytes()` identity checks.
+- **Tier 2 — Structural verification**: `verify_classfile()` regression (no new errors vs gold) plus `javap -v -p -c` exit-code validation.
+- **Tier 3 — Semantic diff**: Full `javap` output parser (`tests/javap_parser.py`) with CP-aware comparison — zero error-severity diffs between gold and roundtripped output.
+- **Tier 4 — JVM loading**: Custom `VerifierHarness.java` classloader with `-Xverify:all`.
 
 #### 10. Error and diagnostics model ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 
@@ -135,6 +140,6 @@ track the supported API rather than transient internal helpers.
 13. ~~Implement validation with structured diagnostics and version-aware rules.~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 14. ~~Add classfile emission with deterministic constant-pool layout.~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
 15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13) — done; explicit stale-state modeling moved to [#18](https://github.com/smithtrenton/pytecode/issues/18))
-16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed; broader tiers pending)
+16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 17. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 18. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))

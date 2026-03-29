@@ -99,6 +99,14 @@ uv run pytest -q -m oracle
 
 The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
 
+Run the multi-release four-tier validation suite only:
+
+```powershell
+uv run pytest -q -m validation
+```
+
+The `validation`-marked tests compile 13 Java fixtures across `--release 8, 11, 17, 21, 25` via JDK 25 and run four tiers on each: byte-for-byte roundtrip (T1), structural verification via `verify_classfile()` and `javap` (T2), CP-aware semantic diff (T3), and JVM loading with `-Xverify:all` (T4). These tests require `javac` and `java` on `PATH`; they skip gracefully when unavailable.
+
 ## Script validation
 
 `run.py` is a manual smoke-test helper for the checked-in `225.jar` sample. Running it writes extracted output under `output\225` for inspection or comparison.

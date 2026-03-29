@@ -33,6 +33,23 @@ ASM_ARTIFACTS = ("asm", "asm-tree", "asm-analysis", "asm-util")
 ASM_DOWNLOAD_ROOT = ORACLE_CACHE_ROOT / "downloads" / ASM_VERSION
 ORACLE_SOURCE_PATH = ORACLE_RESOURCE_ROOT / "RecordingAnalyzer.java"
 
+VALIDATION_RELEASES = (8, 11, 17, 21, 25)
+VERIFIER_HARNESS_SOURCE = TEST_RESOURCES / "VerifierHarness.java"
+VERIFIER_HARNESS_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-verifier"
+
+# Minimum --release level required for each fixture that needs > 8.
+# Fixtures not listed here default to 8.
+FIXTURE_MIN_RELEASES: dict[str, int] = {
+    "StaticInterfaceMethods.java": 9,
+    "StringConcat.java": 9,
+    "NestAccess.java": 11,
+    "SwitchExpressions.java": 14,
+    "RecordClass.java": 16,
+    "SealedHierarchy.java": 17,
+    "PatternMatching.java": 21,
+    "Java25Features.java": 25,
+}
+
 
 def _remove_path(path: Path) -> None:
     if not path.exists():
@@ -70,10 +87,22 @@ def _normalize_classpath_entries(classpath: list[Path] | None) -> tuple[Path, ..
     return _normalize_existing_files(classpath, item_label="Classpath entry", require_non_empty=False)
 
 
+def _jdk_tool(name: str) -> str:
+    """Return the path to a JDK tool, preferring ``JAVA_HOME/bin/<name>`` when set."""
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        bin_dir = Path(java_home) / "bin"
+        for suffix in ("", ".exe"):
+            candidate = bin_dir / (name + suffix)
+            if candidate.exists():
+                return str(candidate)
+    return name
+
+
 @functools.lru_cache(maxsize=1)
 def _get_javac_identity() -> str:
     result = subprocess.run(
-        ["javac", "-version"],
+        [_jdk_tool("javac"), "-version"],
         capture_output=True,
         text=True,
         check=False,
@@ -125,7 +154,7 @@ def _compile_java_sources_uncached(
     classpath: tuple[Path, ...] = (),
 ) -> None:
     classes_dir.mkdir(parents=True, exist_ok=True)
-    command = ["javac", "--release", str(release)]
+    command = [_jdk_tool("javac"), "--release", str(release)]
     if classpath:
         command.extend(["-cp", os.pathsep.join(str(path) for path in classpath)])
     command.extend(["-d", str(classes_dir), *(str(path) for path in source_files)])
@@ -271,13 +300,22 @@ def compile_java_resource_classes(tmp_path: Path, resource_name: str, *, release
     return class_files
 
 
-def list_java_resources() -> list[str]:
-    """Return Java source fixtures under ``tests/resources`` excluding oracle helpers."""
+_INFRASTRUCTURE_FIXTURES = frozenset({"VerifierHarness.java"})
+
+
+def list_java_resources(*, max_release: int = 8) -> list[str]:
+    """Return Java source fixtures under ``tests/resources``.
+
+    Excludes oracle helpers, infrastructure files, and fixtures whose minimum
+    ``--release`` exceeds *max_release*.
+    """
 
     return sorted(
-        path.relative_to(TEST_RESOURCES).as_posix()
+        rel
         for path in TEST_RESOURCES.rglob("*.java")
-        if not path.is_relative_to(ORACLE_RESOURCE_ROOT)
+        if not path.is_relative_to(ORACLE_RESOURCE_ROOT) and path.name not in _INFRASTRUCTURE_FIXTURES
+        for rel in (path.relative_to(TEST_RESOURCES).as_posix(),)
+        if FIXTURE_MIN_RELEASES.get(path.name, 8) <= max_release
     )
 
 
@@ -372,7 +410,7 @@ def run_oracle(class_file: Path, method_name: str | None = None) -> dict[str, An
     with tempfile.TemporaryDirectory() as temp_dir:
         classes_dir = compile_oracle(Path(temp_dir))
         classpath = os.pathsep.join(str(path) for path in (*asm_jars, classes_dir))
-        command = ["java", "-cp", classpath, "RecordingAnalyzer", str(resolved_class_file)]
+        command = [_jdk_tool("java"), "-cp", classpath, "RecordingAnalyzer", str(resolved_class_file)]
         if method_name is not None:
             command.append(method_name)
 
@@ -658,3 +696,134 @@ def attr_reader(attr_name: str, payload: bytes) -> ClassReader:
     cp_list: list[cp_module.ConstantPoolInfo | None] = [None, make_utf8_info(1, attr_name)]
     blob = make_attribute_blob(1, payload)
     return class_reader_with_cp(blob, cp_list)
+
+
+# ---------------------------------------------------------------------------
+# JDK availability checks
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def can_javac() -> bool:
+    """Return True if ``javac`` is available (preferring JAVA_HOME)."""
+    try:
+        result = subprocess.run(
+            [_jdk_tool("javac"), "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def can_java() -> bool:
+    """Return True if ``java`` is available (preferring JAVA_HOME)."""
+    try:
+        result = subprocess.run(
+            [_jdk_tool("java"), "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# javap helpers
+# ---------------------------------------------------------------------------
+
+
+def run_javap(class_path: Path) -> str:
+    """Run ``javap -v -p -c`` and return its stdout."""
+    resolved = class_path.resolve(strict=True)
+    result = subprocess.run(
+        [_jdk_tool("javap"), "-v", "-p", "-c", str(resolved)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"javap failed on {resolved}: {result.stderr or result.stdout}")
+    return result.stdout
+
+
+def run_javap_check(class_path: Path) -> bool:
+    """Run ``javap -v -p -c`` and return True if exit code is 0."""
+    resolved = class_path.resolve(strict=True)
+    result = subprocess.run(
+        [_jdk_tool("javap"), "-v", "-p", "-c", str(resolved)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# JVM verifier harness helpers
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def _compile_verifier_harness() -> Path:
+    """Compile VerifierHarness.java and return the classes directory (cached)."""
+    return _cached_java_classes_dir(
+        _normalize_source_files([VERIFIER_HARNESS_SOURCE]),
+        release=11,
+    )
+
+
+def run_verifier_harness(
+    class_path: Path,
+    *,
+    execute: bool = False,
+    class_name: str | None = None,
+    args: list[str] | None = None,
+    extra_classpath: list[Path] | None = None,
+) -> dict[str, Any]:
+    """Run the JVM VerifierHarness against ``class_path`` and return parsed JSON output."""
+    harness_classes = _compile_verifier_harness()
+    resolved = class_path.resolve(strict=True)
+
+    cp_entries = [str(harness_classes)]
+    if extra_classpath:
+        cp_entries.extend(str(p) for p in extra_classpath)
+    classpath = os.pathsep.join(cp_entries)
+
+    command = [
+        _jdk_tool("java"),
+        "-Xverify:all",
+        "-cp",
+        classpath,
+        "VerifierHarness",
+        str(resolved),
+    ]
+    if execute and class_name:
+        command.extend(["execute", class_name])
+        if args:
+            command.extend(args)
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise AssertionError(f"VerifierHarness produced no output for {resolved}: {result.stderr}")
+
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"VerifierHarness returned invalid JSON: {exc}\nstdout: {stdout}") from exc
+
+    if not isinstance(payload, dict):
+        raise AssertionError("VerifierHarness output must be a JSON object")
+    return cast(dict[str, Any], payload)
