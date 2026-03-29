@@ -49,9 +49,9 @@ re-implementing descriptor logic ad hoc.
 
 Frame calculation depends on more than raw instruction parsing. A control-flow graph and stack/local simulation layer will likely be necessary for correctness. The simulator must be type-aware (tracking category sizes for long/double, handling null as any reference type) and must understand exception handler entry assumptions (1 value on stack for caught exception type).
 
-#### 5a. Differential CFG validation against external oracles ([#17](https://github.com/smithtrenton/pytecode/issues/17))
+#### 5a. Differential CFG validation against external oracles ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 
-Now that `pytecode.analysis.build_cfg()` exists, the project should validate its graph shape against a JVM-side oracle instead of relying only on coarse fixture assertions. The recommended design is an ASM `Analyzer`-based differential suite that records normal and exceptional instruction-level edges, normalizes them into `pytecode` block spans / successor sets / handler sets, and uses BCEL only as an optional slower second opinion. This gives the roadmap an explicit place to track confidence in CFG correctness before later work builds on that analysis layer.
+`pytecode.analysis.build_cfg()` is now validated against a JVM-side ASM oracle instead of relying only on coarse fixture assertions. The implemented test infrastructure compiles a small `RecordingAnalyzer` helper against ASM, records instruction-level normal and exceptional edges plus try/catch metadata, normalizes them into `pytecode` block spans / successor sets / handler sets, and compares both the broad `CfgFixture.java` corpus and the targeted `CfgEdgeCaseFixture.java` corpus against the Python CFG builder.
 
 #### 6. Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 
@@ -115,7 +115,7 @@ The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 cla
 8. ~~Add symbolic instruction operand wrappers for non-control-flow instructions.~~ ([#16](https://github.com/smithtrenton/pytecode/issues/16) — done)
 9. ~~Add a pluggable class hierarchy resolver.~~ ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 10. ~~Build control-flow graph construction and stack/local simulation.~~ ([#9](https://github.com/smithtrenton/pytecode/issues/9) — done)
-11. Add external-tool differential CFG validation for analysis output. ([#17](https://github.com/smithtrenton/pytecode/issues/17))
+11. ~~Add external-tool differential CFG validation for analysis output.~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 12. Implement max stack, max locals, and stack map frame recomputation. ([#10](https://github.com/smithtrenton/pytecode/issues/10))
 13. Implement validation with structured diagnostics and version-aware rules. ([#11](https://github.com/smithtrenton/pytecode/issues/11))
 14. Add classfile emission with deterministic constant-pool layout. ([#12](https://github.com/smithtrenton/pytecode/issues/12))

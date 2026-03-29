@@ -200,6 +200,14 @@ Control-flow graph construction and stack/local simulation introduced for issue 
 
 The module operates on `CodeModel` (the symbolic editing model) and accepts an optional `ClassResolver` from `pytecode.hierarchy` for reference-type merging at join points, defaulting to conservative `java/lang/Object` collapse when unavailable. It is consumed by future max_stack/max_locals recomputation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)), and validation ([#11](https://github.com/smithtrenton/pytecode/issues/11)).
 
+### CFG differential validation infrastructure
+
+Issue [#17](https://github.com/smithtrenton/pytecode/issues/17) added a JVM-backed differential validation layer for `build_cfg()` in the test suite:
+
+- **`tests\resources\oracle\RecordingAnalyzer.java`** compiles against ASM 9.7.1 (`asm`, `asm-tree`, `asm-analysis`, `asm-util`) and records instruction-level normal edges, exceptional edges, and try/catch table entries as JSON.
+- **`tests\cfg_oracle.py`** parses that JSON and normalizes both ASM output and `pytecode.analysis.ControlFlowGraph` instances into the same block-level comparison model: block spans, normal successor sets, exception handler sets, and entry block identity.
+- **`tests\test_cfg_oracle.py`** differentially validates both `tests\resources\CfgFixture.java` and `tests\resources\CfgEdgeCaseFixture.java`. The suite uses the `oracle` pytest marker, skips cleanly when the JVM or ASM jars are unavailable, and caches downloaded ASM jars under `.pytest_cache\pytecode-oracle` while also honoring `tests\resources\oracle\lib`.
+
 ### `pytecode\jar.py`
 
 JAR container support. This is currently a convenience layer around archive reading plus class parsing: it separates `.class` entries from non-class resources and parses each class via `ClassReader`. JAR rewrite support remains future work ([#15](https://github.com/smithtrenton/pytecode/issues/15)).

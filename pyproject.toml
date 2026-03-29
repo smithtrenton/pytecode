@@ -58,6 +58,9 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+  "oracle: JVM-backed differential CFG validation against the ASM oracle",
+]
 
 [tool.uv]
 required-version = ">=0.10.12"

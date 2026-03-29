@@ -5,12 +5,16 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import os
 import shutil
 import struct
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 from pytecode import constant_pool as cp_module
 from pytecode.bytes_utils import BytesReader
@@ -21,6 +25,13 @@ TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
 _REPO_ROOT = TEST_RESOURCES.parent.parent
 JAVA_COMPILE_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-javac"
 _JAVA_COMPILE_CACHE_SCHEMA_VERSION = 1
+ORACLE_RESOURCE_ROOT = TEST_RESOURCES / "oracle"
+ORACLE_LIB_ROOT = ORACLE_RESOURCE_ROOT / "lib"
+ORACLE_CACHE_ROOT = _REPO_ROOT / ".pytest_cache" / "pytecode-oracle"
+ASM_VERSION = "9.7.1"
+ASM_ARTIFACTS = ("asm", "asm-tree", "asm-analysis", "asm-util")
+ASM_DOWNLOAD_ROOT = ORACLE_CACHE_ROOT / "downloads" / ASM_VERSION
+ORACLE_SOURCE_PATH = ORACLE_RESOURCE_ROOT / "RecordingAnalyzer.java"
 
 
 def _remove_path(path: Path) -> None:
@@ -32,17 +43,31 @@ def _remove_path(path: Path) -> None:
         path.unlink()
 
 
-def _normalize_source_files(source_files: list[Path]) -> tuple[Path, ...]:
-    if not source_files:
-        raise AssertionError("Expected at least one Java source file")
-
+def _normalize_existing_files(
+    paths: list[Path],
+    *,
+    item_label: str,
+    require_non_empty: bool,
+) -> tuple[Path, ...]:
+    if require_non_empty and not paths:
+        raise AssertionError(f"Expected at least one {item_label}")
     normalized: list[Path] = []
-    for source_path in source_files:
+    for path in paths:
         try:
-            normalized.append(source_path.resolve(strict=True))
+            normalized.append(path.resolve(strict=True))
         except FileNotFoundError as exc:
-            raise AssertionError(f"Java source {source_path} does not exist") from exc
+            raise AssertionError(f"{item_label} {path} does not exist") from exc
     return tuple(normalized)
+
+
+def _normalize_source_files(source_files: list[Path]) -> tuple[Path, ...]:
+    return _normalize_existing_files(source_files, item_label="Java source", require_non_empty=True)
+
+
+def _normalize_classpath_entries(classpath: list[Path] | None) -> tuple[Path, ...]:
+    if classpath is None:
+        return ()
+    return _normalize_existing_files(classpath, item_label="Classpath entry", require_non_empty=False)
 
 
 @functools.lru_cache(maxsize=1)
@@ -59,9 +84,9 @@ def _get_javac_identity() -> str:
     return version_text
 
 
-def _source_cache_inputs(source_files: tuple[Path, ...]) -> list[dict[str, str]]:
+def _path_cache_inputs(paths: tuple[Path, ...]) -> list[dict[str, str]]:
     cache_inputs: list[dict[str, str]] = []
-    for source_path in source_files:
+    for source_path in paths:
         try:
             source_id = source_path.relative_to(_REPO_ROOT).as_posix()
         except ValueError:
@@ -75,8 +100,14 @@ def _source_cache_inputs(source_files: tuple[Path, ...]) -> list[dict[str, str]]
     return cache_inputs
 
 
-def _java_compile_cache_key(source_inputs: list[dict[str, str]], *, release: int) -> str:
+def _java_compile_cache_key(
+    source_inputs: list[dict[str, str]],
+    *,
+    release: int,
+    classpath_inputs: list[dict[str, str]],
+) -> str:
     payload = {
+        "classpath": classpath_inputs,
         "javac": _get_javac_identity(),
         "release": release,
         "schema_version": _JAVA_COMPILE_CACHE_SCHEMA_VERSION,
@@ -86,11 +117,21 @@ def _java_compile_cache_key(source_inputs: list[dict[str, str]], *, release: int
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _compile_java_sources_uncached(classes_dir: Path, source_files: tuple[Path, ...], *, release: int = 8) -> None:
+def _compile_java_sources_uncached(
+    classes_dir: Path,
+    source_files: tuple[Path, ...],
+    *,
+    release: int = 8,
+    classpath: tuple[Path, ...] = (),
+) -> None:
     classes_dir.mkdir(parents=True, exist_ok=True)
+    command = ["javac", "--release", str(release)]
+    if classpath:
+        command.extend(["-cp", os.pathsep.join(str(path) for path in classpath)])
+    command.extend(["-d", str(classes_dir), *(str(path) for path in source_files)])
 
     result = subprocess.run(
-        ["javac", "--release", str(release), "-d", str(classes_dir), *(str(path) for path in source_files)],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -111,11 +152,18 @@ def _is_valid_cache_entry(entry_dir: Path) -> bool:
     return _cache_entry_manifest_path(entry_dir).is_file() and _cache_entry_classes_dir(entry_dir).is_dir()
 
 
-def _write_cache_manifest(entry_dir: Path, source_inputs: list[dict[str, str]], *, release: int) -> None:
+def _write_cache_manifest(
+    entry_dir: Path,
+    source_inputs: list[dict[str, str]],
+    *,
+    release: int,
+    classpath_inputs: list[dict[str, str]],
+) -> None:
     classes_dir = _cache_entry_classes_dir(entry_dir)
     class_files = sorted(path.relative_to(classes_dir).as_posix() for path in classes_dir.rglob("*.class"))
     manifest = {
         "class_files": class_files,
+        "classpath": classpath_inputs,
         "javac": _get_javac_identity(),
         "release": release,
         "schema_version": _JAVA_COMPILE_CACHE_SCHEMA_VERSION,
@@ -125,9 +173,15 @@ def _write_cache_manifest(entry_dir: Path, source_inputs: list[dict[str, str]], 
     _cache_entry_manifest_path(entry_dir).write_text(manifest_text, encoding="utf-8")
 
 
-def _cached_java_classes_dir(source_files: tuple[Path, ...], *, release: int = 8) -> Path:
-    source_inputs = _source_cache_inputs(source_files)
-    cache_key = _java_compile_cache_key(source_inputs, release=release)
+def _cached_java_classes_dir(
+    source_files: tuple[Path, ...],
+    *,
+    release: int = 8,
+    classpath: tuple[Path, ...] = (),
+) -> Path:
+    source_inputs = _path_cache_inputs(source_files)
+    classpath_inputs = _path_cache_inputs(classpath)
+    cache_key = _java_compile_cache_key(source_inputs, release=release, classpath_inputs=classpath_inputs)
     entry_dir = JAVA_COMPILE_CACHE_ROOT / cache_key
     if _is_valid_cache_entry(entry_dir):
         return _cache_entry_classes_dir(entry_dir)
@@ -140,14 +194,33 @@ def _cached_java_classes_dir(source_files: tuple[Path, ...], *, release: int = 8
     staging_root.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f"{cache_key}-", dir=staging_root))
     try:
-        _compile_java_sources_uncached(_cache_entry_classes_dir(staging_dir), source_files, release=release)
-        _write_cache_manifest(staging_dir, source_inputs, release=release)
+        if classpath:
+            _compile_java_sources_uncached(
+                _cache_entry_classes_dir(staging_dir),
+                source_files,
+                release=release,
+                classpath=classpath,
+            )
+        else:
+            _compile_java_sources_uncached(
+                _cache_entry_classes_dir(staging_dir),
+                source_files,
+                release=release,
+            )
+        _write_cache_manifest(staging_dir, source_inputs, release=release, classpath_inputs=classpath_inputs)
         try:
             staging_dir.rename(entry_dir)
-        except OSError as exc:
-            if not _is_valid_cache_entry(entry_dir):
-                raise AssertionError(f"Cache entry {entry_dir} was created incompletely") from exc
-            _remove_path(staging_dir)
+        except OSError:
+            if _is_valid_cache_entry(entry_dir):
+                _remove_path(staging_dir)
+            else:
+                if entry_dir.exists():
+                    _remove_path(entry_dir)
+                try:
+                    shutil.copytree(staging_dir, entry_dir)
+                except OSError as copy_exc:
+                    raise AssertionError(f"Cache entry {entry_dir} was created incompletely") from copy_exc
+                _remove_path(staging_dir)
         if not _is_valid_cache_entry(entry_dir):
             raise AssertionError(f"Failed to publish cached Java compilation {cache_key}")
         return _cache_entry_classes_dir(entry_dir)
@@ -162,10 +235,20 @@ def _materialize_cached_classes(cache_classes_dir: Path, classes_dir: Path) -> N
     shutil.copytree(cache_classes_dir, classes_dir)
 
 
-def compile_java_sources(tmp_path: Path, source_files: list[Path], *, release: int = 8) -> Path:
+def compile_java_sources(
+    tmp_path: Path,
+    source_files: list[Path],
+    *,
+    release: int = 8,
+    classpath: list[Path] | None = None,
+) -> Path:
     """Compile Java source files into `tmp_path\\classes` and return that directory."""
     classes_dir = tmp_path / "classes"
-    cache_classes_dir = _cached_java_classes_dir(_normalize_source_files(source_files), release=release)
+    cache_classes_dir = _cached_java_classes_dir(
+        _normalize_source_files(source_files),
+        release=release,
+        classpath=_normalize_classpath_entries(classpath),
+    )
     _materialize_cached_classes(cache_classes_dir, classes_dir)
     return classes_dir
 
@@ -189,9 +272,13 @@ def compile_java_resource_classes(tmp_path: Path, resource_name: str, *, release
 
 
 def list_java_resources() -> list[str]:
-    """Return all Java source fixtures under ``tests/resources`` as relative paths."""
+    """Return Java source fixtures under ``tests/resources`` excluding oracle helpers."""
 
-    return sorted(path.relative_to(TEST_RESOURCES).as_posix() for path in TEST_RESOURCES.rglob("*.java"))
+    return sorted(
+        path.relative_to(TEST_RESOURCES).as_posix()
+        for path in TEST_RESOURCES.rglob("*.java")
+        if not path.is_relative_to(ORACLE_RESOURCE_ROOT)
+    )
 
 
 def make_compiled_jar(
@@ -213,6 +300,100 @@ def make_compiled_jar(
             zf.writestr(filename, data)
 
     return jar_path
+
+
+def _asm_jar_name(artifact: str) -> str:
+    return f"{artifact}-{ASM_VERSION}.jar"
+
+
+def _asm_jar_url(artifact: str) -> str:
+    return f"https://repo1.maven.org/maven2/org/ow2/asm/{artifact}/{ASM_VERSION}/{_asm_jar_name(artifact)}"
+
+
+def _download_file(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": "pytecode-tests"})
+    temp_path = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read()
+    except urllib.error.URLError as exc:
+        raise AssertionError(f"Failed to download {url}: {exc}") from exc
+
+    if not data:
+        raise AssertionError(f"Download from {url} returned no data")
+
+    try:
+        temp_path.write_bytes(data)
+        temp_path.replace(destination)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+@functools.lru_cache(maxsize=1)
+def ensure_asm_jars() -> tuple[Path, ...]:
+    """Return the cached ASM 9.7.1 jars required by the CFG oracle."""
+
+    jars: list[Path] = []
+    for artifact in ASM_ARTIFACTS:
+        local_path = ORACLE_LIB_ROOT / _asm_jar_name(artifact)
+        cached_path = ASM_DOWNLOAD_ROOT / _asm_jar_name(artifact)
+        if local_path.is_file():
+            jars.append(local_path.resolve(strict=True))
+            continue
+        if not cached_path.is_file():
+            _download_file(_asm_jar_url(artifact), cached_path)
+        jars.append(cached_path.resolve(strict=True))
+    return tuple(jars)
+
+
+def compile_oracle(tmp_path: Path) -> Path:
+    """Compile ``RecordingAnalyzer.java`` against the cached ASM jars."""
+
+    classes_dir = compile_java_sources(
+        tmp_path,
+        [ORACLE_SOURCE_PATH],
+        release=8,
+        classpath=list(ensure_asm_jars()),
+    )
+    oracle_class = classes_dir / "RecordingAnalyzer.class"
+    if not oracle_class.is_file():
+        raise AssertionError("RecordingAnalyzer.java did not produce RecordingAnalyzer.class")
+    return classes_dir
+
+
+def run_oracle(class_file: Path, method_name: str | None = None) -> dict[str, Any]:
+    """Run the ASM oracle against ``class_file`` and return its parsed JSON output."""
+
+    resolved_class_file = class_file.resolve(strict=True)
+    asm_jars = ensure_asm_jars()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        classes_dir = compile_oracle(Path(temp_dir))
+        classpath = os.pathsep.join(str(path) for path in (*asm_jars, classes_dir))
+        command = ["java", "-cp", classpath, "RecordingAnalyzer", str(resolved_class_file)]
+        if method_name is not None:
+            command.append(method_name)
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    if result.returncode != 0:
+        raise AssertionError(result.stderr or result.stdout or "Oracle execution failed")
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"Oracle returned invalid JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise AssertionError("Oracle output must be a JSON object")
+    return cast(dict[str, Any], payload)
 
 
 # ---------------------------------------------------------------------------

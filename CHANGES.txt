@@ -1,2 +1,3 @@
 v0.0.1, #TODO -- Initial release.
 - Add pluggable class hierarchy resolution utilities in `pytecode.hierarchy` (#8).
+- Add ASM-backed differential CFG validation for `pytecode.analysis.build_cfg()`, including exact fixture assertions, targeted edge-case Java fixtures, and normalized oracle comparisons against JVM bytecode analysis (#17).

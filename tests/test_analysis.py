@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from pytecode.analysis import (
     AnalysisError,
+    ControlFlowGraph,
     FrameState,
     InvalidLocalError,
     SimulationResult,
@@ -1247,6 +1249,13 @@ class TestSimulateLoop:
 # ===================================================================
 
 
+@dataclass(frozen=True, slots=True)
+class ExpectedCfgBlock:
+    terminator: InsnInfoType
+    successor_ids: frozenset[int]
+    exception_handler_ids: frozenset[tuple[int, str | None]] = frozenset()
+
+
 @pytest.fixture
 def cfg_model(tmp_path: Path) -> ClassModel:
     """Compile CfgFixture.java and return its ClassModel."""
@@ -1263,86 +1272,247 @@ class TestCfgFixtureIntegration:
                 return m
         raise AssertionError(f"Method {name!r} not found")
 
+    def _assert_cfg_shape(self, cfg: ControlFlowGraph, expected_blocks: tuple[ExpectedCfgBlock, ...]) -> None:
+        assert len(cfg.blocks) == len(expected_blocks)
+        assert cfg.entry is cfg.blocks[0]
+        for block, expected in zip(cfg.blocks, expected_blocks, strict=True):
+            assert block.instructions
+            assert block.instructions[-1].type is expected.terminator
+            assert frozenset(block.successor_ids) == expected.successor_ids
+            assert frozenset(block.exception_handler_ids) == expected.exception_handler_ids
+
     def test_straight_line_single_block(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "straightLine")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Straight-line code should have few blocks (may have >1 due to labels).
-        assert len(cfg.blocks) >= 1
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_empty_method_single_block(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "emptyMethod")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        assert len(cfg.blocks) >= 1
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.RETURN, frozenset()),
+            ),
+        )
 
     def test_if_else_has_branch(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "ifElse")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Should have at least 2 blocks (true/false branches).
-        assert len(cfg.blocks) >= 2
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.IFEQ, frozenset({1, 2})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
+
+    def test_if_no_else_has_fallthrough_merge(self, cfg_model: ClassModel) -> None:
+        method = self._find_method(cfg_model, "ifNoElse")
+        assert method.code is not None
+        cfg = build_cfg(method.code)
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.IFLE, frozenset({1, 2})),
+                ExpectedCfgBlock(InsnInfoType.ISTORE, frozenset({2})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_for_loop_has_backedge(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "forLoop")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Loop should create a back-edge.
-        assert len(cfg.blocks) >= 2
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.ISTORE, frozenset({1})),
+                ExpectedCfgBlock(InsnInfoType.IF_ICMPGE, frozenset({2, 3})),
+                ExpectedCfgBlock(InsnInfoType.GOTO, frozenset({1})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
+
+    def test_while_loop_has_backedge(self, cfg_model: ClassModel) -> None:
+        method = self._find_method(cfg_model, "whileLoop")
+        assert method.code is not None
+        cfg = build_cfg(method.code)
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.ISTORE, frozenset({1})),
+                ExpectedCfgBlock(InsnInfoType.IFLE, frozenset({2, 3})),
+                ExpectedCfgBlock(InsnInfoType.GOTO, frozenset({1})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_dense_switch_has_cases(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "denseSwitch")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Switch should have multiple successors.
-        assert len(cfg.blocks) >= 3
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.TABLESWITCH, frozenset({1, 2, 3, 4, 5})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_sparse_switch_has_cases(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "sparseSwitch")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        assert len(cfg.blocks) >= 3
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.LOOKUPSWITCH, frozenset({1, 2, 3, 4, 5})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_try_catch_has_handler_edges(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "tryCatchSingle")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Should have exception handler edges.
-        has_exception_edges = any(len(b.exception_handler_ids) > 0 for b in cfg.blocks)
-        assert has_exception_edges
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(
+                    InsnInfoType.IDIV,
+                    frozenset({1}),
+                    frozenset({(2, "java/lang/ArithmeticException")}),
+                ),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_multiple_handlers(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "tryCatchMultiple")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        has_exception_edges = any(len(b.exception_handler_ids) > 0 for b in cfg.blocks)
-        assert has_exception_edges
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(
+                    InsnInfoType.INVOKEVIRTUAL,
+                    frozenset({1}),
+                    frozenset(
+                        {
+                            (2, "java/lang/NullPointerException"),
+                            (3, "java/lang/RuntimeException"),
+                        }
+                    ),
+                ),
+                ExpectedCfgBlock(InsnInfoType.ARETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.ARETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.ARETURN, frozenset()),
+            ),
+        )
 
     def test_try_catch_finally(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "tryCatchFinally")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        assert len(cfg.blocks) >= 3
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(
+                    InsnInfoType.ISTORE,
+                    frozenset({1}),
+                    frozenset({(2, "java/lang/ArithmeticException"), (4, None)}),
+                ),
+                ExpectedCfgBlock(InsnInfoType.GOTO, frozenset({6})),
+                ExpectedCfgBlock(
+                    InsnInfoType.ISTORE,
+                    frozenset({3}),
+                    frozenset({(4, None)}),
+                ),
+                ExpectedCfgBlock(InsnInfoType.GOTO, frozenset({6})),
+                ExpectedCfgBlock(
+                    InsnInfoType.ASTORE,
+                    frozenset({5}),
+                    frozenset({(4, None)}),
+                ),
+                ExpectedCfgBlock(InsnInfoType.ATHROW, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_nested_try_catch(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "nestedTryCatch")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        assert len(cfg.blocks) >= 3
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(
+                    InsnInfoType.IDIV,
+                    frozenset({1}),
+                    frozenset(
+                        {
+                            (2, "java/lang/ArithmeticException"),
+                            (4, "java/lang/ArithmeticException"),
+                        }
+                    ),
+                ),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(
+                    InsnInfoType.IDIV,
+                    frozenset({3}),
+                    frozenset({(4, "java/lang/ArithmeticException")}),
+                ),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_multiple_returns(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "multipleReturns")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        # Count terminal blocks (no successors).
-        terminal_count = sum(1 for b in cfg.blocks if not b.successor_ids)
-        assert terminal_count >= 2
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.IFGE, frozenset({1, 2})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IFNE, frozenset({3, 4})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IF_ICMPLE, frozenset({5, 6})),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
+            ),
+        )
 
     def test_athrow_method(self, cfg_model: ClassModel) -> None:
         method = self._find_method(cfg_model, "throwException")
         assert method.code is not None
         cfg = build_cfg(method.code)
-        assert len(cfg.blocks) >= 1
+        self._assert_cfg_shape(
+            cfg,
+            (
+                ExpectedCfgBlock(InsnInfoType.ATHROW, frozenset()),
+            ),
+        )
 
 
 class TestSimulationFixtureIntegration:

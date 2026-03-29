@@ -75,6 +75,14 @@ Run the validation suite:
 uv run pytest -q
 ```
 
+Run the JVM-backed CFG oracle suite only:
+
+```powershell
+uv run pytest -q -m oracle
+```
+
+The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
+
 ## Script validation
 
 `run.py` is a manual smoke-test helper for the checked-in `225.jar` sample. Running it writes extracted output under `output\225` for inspection or comparison.
