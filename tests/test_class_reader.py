@@ -323,3 +323,116 @@ def test_entry_after_long():
     cf = ClassReader.from_bytes(data).class_info
     assert isinstance(cf.constant_pool[7], cp_module.Utf8Info)
     assert cf.constant_pool[7].str_bytes == b"after"
+
+
+# ---------------------------------------------------------------------------
+# Truncation and corruption edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_truncated_constant_pool_utf8():
+    """Truncate a UTF-8 CP entry mid-way through its declared length."""
+    # Build header + CP that declares a UTF-8 entry with 10 bytes but
+    # the file ends after only 5 bytes of string data.
+    magic = u4(0xCAFEBABE)
+    version = u2(0) + u2(52)
+    # CP has 5 real entries (indices 1-4) plus one truncated UTF-8 at index 5
+    cp_count = u2(6)
+    cp_entries = (
+        utf8_entry_bytes("TestClass")
+        + class_entry_bytes(1)
+        + utf8_entry_bytes("java/lang/Object")
+        + class_entry_bytes(3)
+    )
+    tag_and_length = u1(1) + u2(10)  # tag=1, length=10
+    partial_string = b"hello"  # only 5 bytes instead of 10
+    truncated = magic + version + cp_count + cp_entries + tag_and_length + partial_string
+    with pytest.raises((struct.error, MalformedClassException)):
+        ClassReader.from_bytes(truncated)
+
+
+def test_truncated_constant_pool_fieldref():
+    """Truncate in the middle of a Fieldref CP entry (needs 4 bytes, give 2)."""
+    # Build header + CP that declares a Fieldref but the file ends after
+    # only the class_index (2 bytes), missing the name_and_type_index.
+    magic = u4(0xCAFEBABE)
+    version = u2(0) + u2(52)
+    cp_count = u2(6)
+    cp_entries = (
+        utf8_entry_bytes("TestClass")
+        + class_entry_bytes(1)
+        + utf8_entry_bytes("java/lang/Object")
+        + class_entry_bytes(3)
+    )
+    tag = u1(9)  # Fieldref tag
+    partial = u2(2)  # class_index only, missing name_and_type_index
+    truncated = magic + version + cp_count + cp_entries + tag + partial
+    with pytest.raises((struct.error, MalformedClassException)):
+        ClassReader.from_bytes(truncated)
+
+
+def test_truncated_before_access_flags():
+    """File ends right after constant pool — no access_flags, this_class, etc."""
+    # Build just magic + version + a valid minimal CP, but nothing after.
+    magic = u4(0xCAFEBABE)
+    version = u2(0) + u2(52)
+    cp_count = u2(5)
+    cp_entries = (
+        utf8_entry_bytes("TestClass")
+        + class_entry_bytes(1)
+        + utf8_entry_bytes("java/lang/Object")
+        + class_entry_bytes(3)
+    )
+    truncated = magic + version + cp_count + cp_entries
+    with pytest.raises(struct.error):
+        ClassReader.from_bytes(truncated)
+
+
+def test_truncated_method_attributes():
+    """Method declares 1 attribute but the attribute data is missing."""
+    extra_cp = utf8_entry_bytes("myMethod") + utf8_entry_bytes("()V")
+    # Method header: access=PUBLIC, name=5, desc=6, attrs_count=1
+    # But no attribute bytes follow.
+    method_bytes = u2(0x0001) + u2(5) + u2(6) + u2(1)
+    data = minimal_classfile(
+        extra_cp_bytes=extra_cp,
+        extra_cp_count=2,
+        methods_count=1,
+        methods_bytes=method_bytes,
+    )
+    with pytest.raises((struct.error, MalformedClassException)):
+        ClassReader.from_bytes(data)
+
+
+def test_truncated_code_attribute_body():
+    """Code attribute declares code_length=10 but provides fewer bytes."""
+    extra_cp = utf8_entry_bytes("foo") + utf8_entry_bytes("()V") + utf8_entry_bytes("Code")
+    # Code attribute: name_index=7 (the "Code" utf8), length=large, max_stack, max_locals, code_length=10
+    code_attr_name = u2(7)
+    code_attr_len = u4(20)  # declared attr length
+    max_stack = u2(1)
+    max_locals = u2(1)
+    code_length = u4(10)
+    code_bytes = b"\xb1" * 3  # only 3 bytes instead of 10
+    code_attr = code_attr_name + code_attr_len + max_stack + max_locals + code_length + code_bytes
+    method_bytes = u2(0x0001) + u2(5) + u2(6) + u2(1) + code_attr
+    data = minimal_classfile(
+        extra_cp_bytes=extra_cp,
+        extra_cp_count=3,
+        methods_count=1,
+        methods_bytes=method_bytes,
+    )
+    with pytest.raises((struct.error, MalformedClassException)):
+        ClassReader.from_bytes(data)
+
+
+def test_empty_file():
+    """A zero-length file should fail immediately."""
+    with pytest.raises((struct.error, MalformedClassException)):
+        ClassReader.from_bytes(b"")
+
+
+def test_only_magic():
+    """File has magic number but nothing else."""
+    with pytest.raises(struct.error):
+        ClassReader.from_bytes(b"\xca\xfe\xba\xbe")

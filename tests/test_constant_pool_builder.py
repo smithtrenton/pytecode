@@ -960,3 +960,36 @@ def test_entry_tag(method_name: str, args: tuple[object, ...], tag: int):
     entry = b.get(idx)
     assert entry is not None
     assert entry.tag == tag
+
+
+# ---------------------------------------------------------------------------
+# Max-size boundary edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_exact_boundary_single_slot():
+    """Adding entry at index 65534 (count becomes 65535) should succeed."""
+    b = fresh()
+    b._next_index = 65534
+    b._pool.extend([None] * (65534 - 1))
+    # This should succeed — index 65534, count = 65535 (the max)
+    idx = b.add_utf8("boundary")
+    assert idx == 65534
+
+
+def test_double_slot_at_65533():
+    """Long/Double at index 65533 takes slots 65533+65534, count=65535 — should succeed."""
+    b = fresh()
+    b._next_index = 65533
+    b._pool.extend([None] * (65533 - 1))
+    idx = b.add_long(0, 0)
+    assert idx == 65533
+
+
+def test_double_slot_at_65534_overflows():
+    """Long/Double at index 65534 would need slot 65535 (count=65536) — must fail."""
+    b = fresh()
+    b._next_index = 65534
+    b._pool.extend([None] * (65534 - 1))
+    with pytest.raises(ValueError, match="overflow"):
+        b.add_long(0, 0)

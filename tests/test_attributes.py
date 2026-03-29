@@ -816,7 +816,7 @@ def test_annotation_default_const():
 def test_runtime_visible_parameter_annotations():
     # 2 parameters: first has 1 annotation (type_index=2, 0 pairs), second has 0
     ann_bytes = u2(2) + u2(0)
-    payload = u2(2) + u2(1) + ann_bytes + u2(0)
+    payload = u1(2) + u2(1) + ann_bytes + u2(0)
     reader = attr_reader("RuntimeVisibleParameterAnnotations", payload)
     attr = reader.read_attribute()
     assert isinstance(attr, attributes.RuntimeVisibleParameterAnnotationsAttr)
@@ -831,7 +831,7 @@ def test_runtime_visible_parameter_annotations():
 
 def test_runtime_invisible_parameter_annotations():
     # 1 parameter with 0 annotations
-    payload = u2(1) + u2(0)
+    payload = u1(1) + u2(0)
     reader = attr_reader("RuntimeInvisibleParameterAnnotations", payload)
     attr = reader.read_attribute()
     assert isinstance(attr, attributes.RuntimeInvisibleParameterAnnotationsAttr)

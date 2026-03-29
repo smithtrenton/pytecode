@@ -274,7 +274,7 @@ def _write_attribute_payload(writer: BytesWriter, attr: attributes.AttributeInfo
             attributes.RuntimeInvisibleParameterAnnotationsAttr,
         ),
     ):
-        writer.write_u2(len(attr.parameter_annotations))
+        writer.write_u1(len(attr.parameter_annotations))
         for parameter in attr.parameter_annotations:
             writer.write_u2(len(parameter.annotations))
             for annotation in parameter.annotations:

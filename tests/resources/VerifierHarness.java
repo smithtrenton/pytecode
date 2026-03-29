@@ -149,12 +149,14 @@ public class VerifierHarness {
 
         // access_flags at offset, this_class at offset+2
         int thisClassIndex = readU2(bytes, offset + 2);
-        if (thisClassIndex <= 0 || thisClassIndex >= cpCount || cpTags[thisClassIndex] != 7) {
+        if (thisClassIndex <= 0 || thisClassIndex >= cpCount
+                || cpOffsets[thisClassIndex] == 0 || cpTags[thisClassIndex] != 7) {
             return null;
         }
 
         int nameIndex = readU2(bytes, cpOffsets[thisClassIndex] + 1);
-        if (nameIndex <= 0 || nameIndex >= cpCount || cpTags[nameIndex] != 1) {
+        if (nameIndex <= 0 || nameIndex >= cpCount
+                || cpOffsets[nameIndex] == 0 || cpTags[nameIndex] != 1) {
             return null;
         }
 

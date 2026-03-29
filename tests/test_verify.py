@@ -1883,3 +1883,208 @@ class TestClassModelFailFast:
         )
         with pytest.raises(FailFastError):
             verify_classmodel(cm, fail_fast=True)
+
+
+class TestMalformedConstantPool:
+    """Edge cases for constant pool validation."""
+
+    def test_cp_ref_to_gap_slot(self) -> None:
+        """ClassInfo.name_index pointing to a Long/Double gap slot."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            _long(5),
+            None,
+            _class(7, 6),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("references invalid index 6" in e.message for e in cp_errs)
+
+    def test_cp_ref_out_of_bounds(self) -> None:
+        """ClassInfo.name_index pointing beyond constant pool."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            _class(5, 999),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("references invalid index 999" in e.message for e in cp_errs)
+
+    def test_cp_ref_wrong_type(self) -> None:
+        """ClassInfo.name_index pointing to Integer instead of Utf8."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            _integer(5, 42),
+            _class(6, 5),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("expected Utf8Info" in e.message for e in cp_errs)
+
+    def test_long_followed_by_non_none(self) -> None:
+        """Long entry must be followed by a gap (None) slot."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            _long(5),
+            _utf8(6, "not_a_gap"),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("Long/Double" in e.message and "not empty" in e.message for e in cp_errs)
+
+    def test_none_without_preceding_long_double(self) -> None:
+        """None entry not preceded by Long/Double should warn."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            None,
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_warns = _by_cat(_warnings(diags), Category.CONSTANT_POOL)
+        assert any("None" in w.message and "not Long/Double" in w.message for w in cp_warns)
+
+    def test_method_handle_invalid_reference_kind(self) -> None:
+        """MethodHandle with reference_kind=0 (invalid, must be 1-9)."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            MethodHandleInfo(index=5, offset=0, tag=15, reference_kind=0, reference_index=1),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("invalid reference_kind" in e.message for e in cp_errs)
+
+    def test_method_handle_reference_kind_10(self) -> None:
+        """MethodHandle with reference_kind=10 (above valid range 1-9)."""
+        cp = _make_cp(
+            _utf8(1, "TestClass"),
+            _class(2, 1),
+            _utf8(3, "java/lang/Object"),
+            _class(4, 3),
+            MethodHandleInfo(index=5, offset=0, tag=15, reference_kind=10, reference_index=1),
+        )
+        cf = _make_classfile(constant_pool=cp, constant_pool_count=len(cp))
+        diags = verify_classfile(cf)
+        cp_errs = _by_cat(_errors(diags), Category.CONSTANT_POOL)
+        assert any("invalid reference_kind" in e.message for e in cp_errs)
+
+
+class TestExceptionHandlerBoundaries:
+    """Edge cases for exception handler validation in Code attributes."""
+
+    def _make_method_with_handler(self, start_pc: int, end_pc: int, handler_pc: int, catch_type: int) -> ClassFile:
+        """Build a ClassFile with one method containing an exception handler."""
+        cp = _base_cp() + [_utf8(5, "foo"), _utf8(6, "()V")]
+        insns = [
+            InsnInfo(InsnInfoType.ACONST_NULL, 0),
+            InsnInfo(InsnInfoType.ATHROW, 1),
+            InsnInfo(InsnInfoType.RETURN, 2),
+        ]
+        handler = ExceptionInfo(start_pc=start_pc, end_pc=end_pc, handler_pc=handler_pc, catch_type=catch_type)
+        code = _simple_code(insns=insns, code_length=3, exception_table=[handler])
+        return _make_classfile(
+            constant_pool=cp,
+            constant_pool_count=7,
+            methods_count=1,
+            methods=[
+                MethodInfo(
+                    access_flags=MethodAccessFlag.PUBLIC,
+                    name_index=5,
+                    descriptor_index=6,
+                    attributes_count=1,
+                    attributes=[code],
+                ),
+            ],
+        )
+
+    def test_start_pc_equals_end_pc(self) -> None:
+        """start_pc must be strictly less than end_pc."""
+        cf = self._make_method_with_handler(start_pc=0, end_pc=0, handler_pc=2, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert any("start_pc" in e.message and "end_pc" in e.message for e in code_errs)
+
+    def test_start_pc_greater_than_end_pc(self) -> None:
+        """start_pc > end_pc should also be flagged."""
+        cf = self._make_method_with_handler(start_pc=2, end_pc=1, handler_pc=0, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert any("start_pc" in e.message and "end_pc" in e.message for e in code_errs)
+
+    def test_handler_pc_outside_code(self) -> None:
+        """handler_pc pointing beyond the code range."""
+        cf = self._make_method_with_handler(start_pc=0, end_pc=1, handler_pc=99, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert any("handler_pc" in e.message for e in code_errs)
+
+    def test_start_pc_invalid_offset(self) -> None:
+        """start_pc not aligned to a valid instruction offset."""
+        cf = self._make_method_with_handler(start_pc=99, end_pc=100, handler_pc=0, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert any("start_pc" in e.message for e in code_errs)
+
+    def test_catch_type_not_class_info(self) -> None:
+        """catch_type pointing to a non-Class CP entry (an Integer)."""
+        cp = _base_cp() + [_utf8(5, "foo"), _utf8(6, "()V"), _integer(7, 42)]
+        insns = [
+            InsnInfo(InsnInfoType.ACONST_NULL, 0),
+            InsnInfo(InsnInfoType.ATHROW, 1),
+            InsnInfo(InsnInfoType.RETURN, 2),
+        ]
+        handler = ExceptionInfo(start_pc=0, end_pc=1, handler_pc=2, catch_type=7)
+        code = _simple_code(insns=insns, code_length=3, exception_table=[handler])
+        cf = _make_classfile(
+            constant_pool=cp,
+            constant_pool_count=len(cp),
+            methods_count=1,
+            methods=[
+                MethodInfo(
+                    access_flags=MethodAccessFlag.PUBLIC,
+                    name_index=5,
+                    descriptor_index=6,
+                    attributes_count=1,
+                    attributes=[code],
+                ),
+            ],
+        )
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert any("catch_type" in e.message for e in code_errs)
+
+    def test_catch_type_zero_is_valid(self) -> None:
+        """catch_type=0 means catch-all (finally), which is valid."""
+        cf = self._make_method_with_handler(start_pc=0, end_pc=1, handler_pc=2, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert not any("catch_type" in e.message for e in code_errs)
+
+    def test_valid_exception_handler(self) -> None:
+        """A well-formed handler should produce no code-level errors."""
+        cf = self._make_method_with_handler(start_pc=0, end_pc=1, handler_pc=2, catch_type=0)
+        diags = verify_classfile(cf)
+        code_errs = _by_cat(_errors(diags), Category.CODE)
+        assert not code_errs

@@ -513,6 +513,45 @@ def _diff_instructions(
             )
 
 
+def _diff_exception_tables(
+    gold_code: JavapCodeBlock,
+    ours_code: JavapCodeBlock,
+    method_key: str,
+    diffs: list[SemanticDiff],
+) -> None:
+    """Compare exception tables for one method, appending to *diffs*."""
+    g = gold_code.exception_table
+    o = ours_code.exception_table
+    if len(g) != len(o):
+        diffs.append(
+            SemanticDiff(
+                DiffSeverity.ERROR,
+                "exception-table",
+                f"{method_key}: exception table count differs ({len(g)} vs {len(o)})",
+            )
+        )
+        return
+
+    for i, (ge, oe) in enumerate(zip(g, o)):
+        if (ge.from_pc, ge.to_pc, ge.target, ge.type) != (
+            oe.from_pc,
+            oe.to_pc,
+            oe.target,
+            oe.type,
+        ):
+            diffs.append(
+                SemanticDiff(
+                    DiffSeverity.ERROR,
+                    "exception-table",
+                    (
+                        f"{method_key}: exception handler {i} differs: "
+                        f"({ge.from_pc}, {ge.to_pc}, {ge.target}, {ge.type!r}) vs "
+                        f"({oe.from_pc}, {oe.to_pc}, {oe.target}, {oe.type!r})"
+                    ),
+                )
+            )
+
+
 def semantic_diff(gold: JavapClass, ours: JavapClass) -> list[SemanticDiff]:
     """CP-aware semantic comparison of two parsed javap outputs."""
     diffs: list[SemanticDiff] = []
@@ -608,6 +647,7 @@ def semantic_diff(gold: JavapClass, ours: JavapClass) -> list[SemanticDiff]:
             )
         if gm.code is not None and om.code is not None:
             _diff_instructions(gm.code, om.code, gold_cp, ours_cp, label, diffs)
+            _diff_exception_tables(gm.code, om.code, label, diffs)
         elif (gm.code is None) != (om.code is None):
             who = "gold" if gm.code is not None else "ours"
             diffs.append(

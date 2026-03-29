@@ -67,13 +67,7 @@ def test_all_tiers(tmp_path: Path, fixture_name: str, release: int) -> None:
         original = class_path.read_bytes()
 
         # ── Tier 1: Roundtrip ─────────────────────────────────────────
-        try:
-            parsed = ClassReader(original).class_info
-        except ValueError:
-            # Pre-existing ClassReader limitation (e.g., unsupported annotation
-            # element value tags in record classes).  Skip this class file —
-            # not a validation regression.
-            continue
+        parsed = ClassReader(original).class_info
 
         emitted = ClassWriter.write(parsed)
         assert emitted == original, f"ClassWriter roundtrip failed for {class_path.name}"

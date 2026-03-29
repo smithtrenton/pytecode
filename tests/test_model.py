@@ -933,3 +933,143 @@ class TestOuterClassModel:
         model = ClassModel.from_bytes(outer_class.read_bytes())
         inner_attr = next(a for a in model.attributes if isinstance(a, InnerClassesAttr))
         assert inner_attr.number_of_classes >= 1
+
+
+# ===========================================================================
+# Empty collections roundtrip — verify model handles edge-case class shapes
+# ===========================================================================
+
+
+class TestEmptyCollectionsRoundtrip:
+    """Roundtrip tests for classes with zero methods, fields, interfaces, etc."""
+
+    def test_zero_methods_roundtrip(self) -> None:
+        """A class with no methods should roundtrip through to_classfile."""
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            name="com/example/NoMethods",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[
+                FieldModel(
+                    access_flags=FieldAccessFlag.PUBLIC,
+                    name="x",
+                    descriptor="I",
+                    attributes=[],
+                ),
+            ],
+            methods=[],
+            attributes=[],
+        )
+        cf = cls.to_classfile()
+        assert cf.methods_count == 0
+        assert cf.methods == []
+        assert cf.fields_count == 1
+
+    def test_zero_fields_roundtrip(self) -> None:
+        """A class with no fields should roundtrip through to_classfile."""
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.ABSTRACT,
+            name="com/example/NoFields",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[
+                MethodModel(
+                    access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.ABSTRACT,
+                    name="doIt",
+                    descriptor="()V",
+                    code=None,
+                    attributes=[],
+                ),
+            ],
+            attributes=[],
+        )
+        cf = cls.to_classfile()
+        assert cf.fields_count == 0
+        assert cf.fields == []
+        assert cf.methods_count == 1
+
+    def test_zero_interfaces_roundtrip(self) -> None:
+        """A class with no interfaces should roundtrip through to_classfile."""
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            name="com/example/NoIfaces",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[],
+            attributes=[],
+        )
+        cf = cls.to_classfile()
+        assert cf.interfaces_count == 0
+        assert cf.interfaces == []
+
+    def test_zero_everything_roundtrip(self) -> None:
+        """A class with zero fields, methods, interfaces, and attributes."""
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            name="com/example/Bare",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[],
+            attributes=[],
+        )
+        cf = cls.to_classfile()
+        assert cf.magic == 0xCAFEBABE
+        assert cf.fields_count == 0
+        assert cf.methods_count == 0
+        assert cf.interfaces_count == 0
+        assert cf.attributes_count == 0
+
+    def test_zero_everything_byte_roundtrip(self) -> None:
+        """Bare class should survive to_bytes → ClassReader → to_classfile."""
+        from pytecode.class_reader import ClassReader
+
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            name="com/example/Bare",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[],
+            attributes=[],
+        )
+        raw = cls.to_bytes()
+        reparsed = ClassReader(raw).class_info
+        assert reparsed.magic == 0xCAFEBABE
+        assert reparsed.fields_count == 0
+        assert reparsed.methods_count == 0
+        assert reparsed.interfaces_count == 0
+
+    def test_abstract_method_no_code_roundtrip(self) -> None:
+        """An abstract method (no Code attribute) should roundtrip cleanly."""
+        cls = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.ABSTRACT,
+            name="com/example/Abstract",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[
+                MethodModel(
+                    access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.ABSTRACT,
+                    name="run",
+                    descriptor="()V",
+                    code=None,
+                    attributes=[],
+                ),
+            ],
+            attributes=[],
+        )
+        cf = cls.to_classfile()
+        assert cf.methods_count == 1
+        # Abstract method should have no Code attribute
+        method = cf.methods[0]
+        assert not any(isinstance(a, CodeAttr) for a in method.attributes)

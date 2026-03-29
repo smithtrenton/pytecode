@@ -428,7 +428,7 @@ class ClassReader(BytesReader):
             return attributes.RuntimeInvisibleAnnotationsAttr(name_index, length, num_annotations, annotation_list)
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_VISIBLE_PARAMETER_ANNOTATIONS:
-            num_parameters = self.read_u2()
+            num_parameters = self.read_u1()
             parameter_annotations: list[attributes.ParameterAnnotationInfo] = []
             for _ in range(num_parameters):
                 num_annotations = self.read_u2()
@@ -439,7 +439,7 @@ class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_INVISIBLE_PARAMETER_ANNOTATIONS:
-            num_parameters = self.read_u2()
+            num_parameters = self.read_u1()
             parameter_annotations_list: list[attributes.ParameterAnnotationInfo] = []
             for _ in range(num_parameters):
                 num_annotations = self.read_u2()
