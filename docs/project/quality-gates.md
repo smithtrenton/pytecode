@@ -11,6 +11,7 @@ Before calling the library a manipulation toolkit, it should have:
 - ~~negative tests for malformed transformations and invalid classfile inputs~~
 - verifier acceptance tests (generated classes pass `java -verify`)
 - stable emitted bytes for deterministic scenarios
+- generated API reference docs covering the supported public surface, with no undocumented public entry points
 - ~~structured diagnostic output for all validation failures~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 - ~~differential CFG checks against an external oracle for representative compiled fixtures before later frame-computation and validation work depends on that analysis layer~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 - Tier 1 (roundtrip) passing for all existing fixtures before any higher tier is attempted
@@ -40,3 +41,4 @@ The remaining work is centered on broader validation and mutation workflows now 
 - optional first-class stale-state modeling for debug metadata beyond the landed preserve/strip policies ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 - broader round-trip and JVM compatibility testing beyond the landed Tier 1 suite ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - composable transform pipelines (Phase 2 of [#6](https://github.com/smithtrenton/pytecode/issues/6))
+- generated API reference docs with full public-surface coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))

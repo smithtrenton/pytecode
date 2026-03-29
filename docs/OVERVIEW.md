@@ -39,6 +39,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - First-class stale-state modeling for debug metadata after mutation beyond the landed preserve/strip policies ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 - Broader external validation tiers beyond the landed Tier 1 roundtrip suite (`javap` cross-checks, semantic javac comparisons, JVM verifier harnesses) ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
+- Generated API reference docs with full coverage of the supported public surface ([#19](https://github.com/smithtrenton/pytecode/issues/19))
 
 ## Documentation guide
 

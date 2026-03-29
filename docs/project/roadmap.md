@@ -107,6 +107,17 @@ What remains future work is a richer first-class stale-state model for debug met
 
 The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 classfiles) are now handled by the opcode table, lowering layer, and analysis/test coverage. They remain a niche compatibility path rather than a modern workflow, because classfiles with version ≥ 51 cannot use them on current JVMs.
 
+#### 14. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+
+As the user-facing surface grows, the project should generate API reference
+documentation from Python docstrings/signatures instead of relying only on
+narrative guides. "Full coverage" should mean every supported public module,
+class, function, method, and convenience entry point appears in the generated
+reference output, with a workflow that flags newly introduced undocumented
+public APIs. This work should stay aligned with the public-surface decisions in
+[#6](https://github.com/smithtrenton/pytecode/issues/6) so the generated docs
+track the supported API rather than transient internal helpers.
+
 ## Recommended implementation order
 
 1. ~~Fix the known parser bugs.~~ ([#1](https://github.com/smithtrenton/pytecode/issues/1) — done)
@@ -126,3 +137,4 @@ The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Jav
 15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13) — done; explicit stale-state modeling moved to [#18](https://github.com/smithtrenton/pytecode/issues/18))
 16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed; broader tiers pending)
 17. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))
+18. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))
