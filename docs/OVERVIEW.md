@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`pytecode` is a Python library for parsing, inspecting, and beginning to manipulate JVM class files and bytecode.
+`pytecode` is a Python library for parsing, inspecting, manipulating, and emitting JVM class files and bytecode.
 
-The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, a mutable symbolic editing model, hierarchy resolution, and control-flow analysis. The longer-term goal is to support safe classfile transformation, verification, and emission of new `.class` files.
+The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, hierarchy resolution, and control-flow analysis. The longer-term goal is to broaden compatibility validation and support richer transformation workflows.
 
 ## Current status
 
@@ -20,6 +20,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
 - Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
+- Deterministic classfile serialization via `pytecode.class_writer`: `ClassWriter.write()` emits parsed or lowered `ClassFile` trees back to `.class` bytes, and `ClassModel.to_bytes()` provides a thin lowering-plus-emission convenience path
 - Structural classfile validation with structured diagnostics: `pytecode/verify.py` validates magic number, version, constant-pool well-formedness, access flag mutual exclusions, class structure, field/method constraints, Code attribute (branches, exception handlers, CP refs), attribute versioning, descriptor validity, and ClassModel label validity — see `pytecode/verify.py`
 - Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, control-flow/stack simulation, frame recomputation, and validation
 - Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
@@ -30,11 +31,12 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging for future frame and validation work.
 - CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17)): the test suite now compares `pytecode.analysis.build_cfg()` against a JVM-side ASM oracle across compiled fixture corpora, normalizing instruction-level edges into the same block-level spans, successor sets, and handler sets used by `pytecode`.
 - Max stack/max locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)): `pytecode/analysis.py` now exposes `compute_maxs()` and `compute_frames()` for opt-in recomputation of `max_stack`, `max_locals`, and `StackMapTable` entries. `lower_code()` and `ClassModel.to_classfile()` support `recompute_frames=True` for end-to-end integration. All seven compact StackMapTable frame encodings are supported.
+- Tier 1 roundtrip coverage for emission: `tests/test_class_writer.py` now exercises byte-for-byte `ClassWriter.write()` roundtrips over compiled Java fixtures and `ClassModel.to_bytes()` roundtrips over the same corpus, plus raw edge cases such as unknown attributes and double-slot constant-pool gaps
 
 ### Not implemented yet
 
 - Full debug-info maintenance after mutation (label rebinding is implemented, but higher-level policies remain future work) ([#13](https://github.com/smithtrenton/pytecode/issues/13))
-- Binary classfile serialization back to `.class` bytes ([#12](https://github.com/smithtrenton/pytecode/issues/12))
+- Broader external validation tiers beyond the landed Tier 1 roundtrip suite (`javap` cross-checks, semantic javac comparisons, JVM verifier harnesses) ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 
 ## Documentation guide

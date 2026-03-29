@@ -1,14 +1,15 @@
 # pytecode
 
-`pytecode` is a Python 3.14+ library for parsing, inspecting, and beginning to manipulate JVM class files, bytecode, and JAR files.
+`pytecode` is a Python 3.14+ library for parsing, inspecting, manipulating, and emitting JVM class files, bytecode, and JAR files.
 
 See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current parser + label-aware editing model and the roadmap toward a full classfile manipulation library.
 
 ## Current public API
 
 - `pytecode.ClassReader` parses `.class` bytes eagerly into an `info.ClassFile` tree.
+- `pytecode.ClassWriter` serializes an `info.ClassFile` tree back to `.class` bytes.
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, and parses classes via `ClassReader`.
-- `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references.
+- `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path.
 
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, and `LabelResolution`, import directly from `pytecode.labels`.
 
@@ -27,6 +28,8 @@ For constant-pool construction and management — `ConstantPoolBuilder` with ded
 For JVM Modified UTF-8 encoding and decoding of `CONSTANT_Utf8` values — `decode_modified_utf8()` and `encode_modified_utf8()` — import from `pytecode.modified_utf8`.
 
 If you call `resolve_labels()` directly on code that contains single-slot `LdcInsn` values, pass the current `ConstantPoolBuilder` so `LDC` vs `LDC_W` sizing stays exact. `ClassModel.to_classfile()` and `lower_code()` handle that automatically.
+
+For direct classfile emission, call `ClassWriter.write(classfile)`. `ClassModel.to_bytes()` is a thin convenience wrapper over `to_classfile()` plus `ClassWriter.write()`.
 
 ## Requirements
 

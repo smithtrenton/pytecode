@@ -1,6 +1,6 @@
 # Current architecture
 
-The codebase is currently organized as a parser pipeline with a strongly typed read model.
+The codebase is currently organized as a parser/lowering/emission pipeline with a strongly typed read model.
 
 ## Runtime and packaging
 
@@ -15,6 +15,10 @@ The codebase is currently organized as a parser pipeline with a strongly typed r
   - Constructed directly from classfile bytes, or via `ClassReader.from_bytes()` / `ClassReader.from_file()`
   - Parses eagerly during initialization
   - Produces `class_info`, an `info.ClassFile` dataclass tree
+- `pytecode.ClassWriter`
+  - Stateless serializer for `info.ClassFile`
+  - Writes classfile structures back to bytes in JVM spec order
+  - Recomputes emitted lengths/counts from the live dataclass tree and preserves unknown attribute payloads verbatim
 - `pytecode.JarFile`
   - Reads the contents of a JAR
   - Separates `.class` entries from non-class resources
@@ -24,15 +28,15 @@ The codebase is currently organized as a parser pipeline with a strongly typed r
   - Mutable editing model for JVM class files
   - Uses symbolic (resolved) references instead of raw constant-pool indexes
   - Constructed from a parsed `ClassFile` via `ClassModel.from_classfile()` or from raw bytes via `ClassModel.from_bytes()`
-  - Produces a spec-faithful `ClassFile` via `to_classfile()` for lowering and future emission
+  - Produces a spec-faithful `ClassFile` via `to_classfile()` and can serialize directly via `to_bytes()`
 
-At the moment, these are the only public exports in `pytecode.__init__`.
+These are the current public exports in `pytecode.__init__`.
 
 ## Module responsibilities
 
 ### `pytecode\bytes_utils.py`
 
-Low-level big-endian binary I/O primitives for both reading and writing. This is the I/O foundation for class parsing and future classfile emission.
+Low-level big-endian binary I/O primitives for both reading and writing. This is the I/O foundation for class parsing and classfile emission.
 
 **Read side**: Standalone `_read_u1/i1/u2/i2/u4/i4/_read_bytes` helper functions and a stateful `BytesReader` that tracks a cursor offset.
 
@@ -63,6 +67,16 @@ This module is the current orchestration layer for nearly all parsing logic.
 When constant-pool-backed names are interpreted (for example, attribute names),
 they are decoded using the shared JVM Modified UTF-8 helpers rather than plain
 UTF-8.
+
+### `pytecode\class_writer.py`
+
+Deterministic classfile emission introduced for issue [#12](https://github.com/smithtrenton/pytecode/issues/12). This module provides:
+
+- **`ClassWriter.write()`** — serializes an `info.ClassFile` back to raw `.class` bytes
+- **Spec-order serialization** — writes header, constant pool, class metadata, fields, methods, and attributes in JVM classfile order
+- **Full dataclass-surface support** — handles all parsed constant-pool entries, raw instructions, stack map frames, annotations/type annotations, module metadata, record components, and preserved unknown attributes
+- **Derived metadata recomputation** — emits attribute lengths, code lengths, and count fields from the current in-memory structure rather than trusting stale counters
+- **Roundtrip fidelity focus** — preserves imported constant-pool ordering and, together with `ClassModel.to_bytes()`, now underpins the landed Tier 1 byte-for-byte roundtrip tests
 
 ### `pytecode\constant_pool.py`
 
@@ -133,12 +147,12 @@ Constant-pool management utilities for building and editing JVM constant pools. 
 
 Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four core types form the user-facing editing layer, with label-specific helpers delegated to `pytecode\labels.py`:
 
-- **`ClassModel`** — top-level mutable representation of a class file. Fields use symbolic (resolved) references: `name: str`, `super_name: str | None`, `interfaces: list[str]`, along with `access_flags`, `version: tuple[int, int]`, lists of `FieldModel` and `MethodModel`, class-level attributes, and a `ConstantPoolBuilder`. Provides `from_classfile()` and `from_bytes()` factory methods for construction, and `to_classfile()` for lowering back to a spec-faithful `ClassFile`.
+- **`ClassModel`** — top-level mutable representation of a class file. Fields use symbolic (resolved) references: `name: str`, `super_name: str | None`, `interfaces: list[str]`, along with `access_flags`, `version: tuple[int, int]`, lists of `FieldModel` and `MethodModel`, class-level attributes, and a `ConstantPoolBuilder`. Provides `from_classfile()` and `from_bytes()` factory methods for construction, `to_classfile()` for lowering back to a spec-faithful `ClassFile`, and `to_bytes()` for direct emission via `ClassWriter`.
 - **`MethodModel`** — mutable representation of a method with resolved `name: str` and `descriptor: str`, `access_flags`, an optional `CodeModel` (`None` for abstract/native methods), and non-Code attributes. The raw `Code` attribute is lifted out of the attribute list into the dedicated `code` field.
 - **`FieldModel`** — mutable representation of a field with resolved `name: str` and `descriptor: str`, `access_flags`, and attributes.
 - **`CodeModel`** — wraps a mixed instruction stream (`InsnInfo` plus `Label` pseudo-instructions), symbolic exception handlers, lifted line/local-variable debug tables, `max_stack`, `max_locals`, and residual nested Code attributes. During `from_classfile()`, all supported instruction families are lifted to symbolic wrappers: branch/switch instructions become `BranchInsn`/`LookupSwitchInsn`/`TableSwitchInsn`; field/method/type/LDC/invoke-dynamic/multianewarray constant-pool instructions become their corresponding operand wrappers from `pytecode.operands`; local-variable slot instructions (including all implicit `ILOAD_0`–`ASTORE_3` variants and WIDE forms) become `VarInsn`. All symbolic wrappers lower back to spec-shaped raw instructions during `to_classfile()`.
 
-The model carries a `ConstantPoolBuilder` seeded from the original constant pool so that raw attributes and any still-raw instruction operands remain valid through editing. Symbolic references are resolved during `from_classfile()` and re-allocated during `to_classfile()`. Both conversion directions use deep copies for all mutable raw structures they retain (attribute lists, instruction records, and constant-pool-backed payloads) so the `ClassModel` owns its data independently from the source `ClassFile` — consistent with the defensive-copy convention already used by `ConstantPoolBuilder`.
+ The model carries a `ConstantPoolBuilder` seeded from the original constant pool so that raw attributes and any still-raw instruction operands remain valid through editing. Symbolic references are resolved during `from_classfile()` and re-allocated during `to_classfile()`. Both conversion directions use deep copies for all mutable raw structures they retain (attribute lists, instruction records, and constant-pool-backed payloads) so the `ClassModel` owns its data independently from the source `ClassFile` — consistent with the defensive-copy convention already used by `ConstantPoolBuilder`. `CodeModel` also preserves nested `Code`-attribute ordering metadata so unmodified `ClassModel.to_bytes()` roundtrips can remain byte-identical.
 
 For the design rationale behind this editing model, see [editing model design rationale](../design/editing-model.md).
 

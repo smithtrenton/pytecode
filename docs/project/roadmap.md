@@ -14,9 +14,9 @@ others remain future work.
 
 ### Capabilities that should stay explicit in the roadmap
 
-#### 1. A bytecode/classfile writer ([#4](https://github.com/smithtrenton/pytecode/issues/4), [#12](https://github.com/smithtrenton/pytecode/issues/12))
+#### 1. A bytecode/classfile writer ([#4](https://github.com/smithtrenton/pytecode/issues/4), [#12](https://github.com/smithtrenton/pytecode/issues/12)) — done
 
-Generation is mentioned, but it is worth calling out explicitly as a major subsystem. Writing new class files is more than a final `to_bytes()` method; it requires a full serialization pipeline including instruction offset resolution, constant-pool layout, attribute length computation, and `WIDE` instruction insertion when operands exceed single-byte range.
+This layer is now implemented via `pytecode.class_writer`. `ClassWriter.write()` serializes `ClassFile` structures back to bytes in spec order, and `ClassModel.to_bytes()` exposes the direct lowering-plus-emission path for the mutable editing model. Emission recomputes derived lengths/counts from the live dataclass tree, preserves imported constant-pool ordering by default, and preserves unknown attribute payloads verbatim.
 
 #### 2. Constant-pool management ([#5](https://github.com/smithtrenton/pytecode/issues/5)) — implemented foundation
 
@@ -65,7 +65,7 @@ Now implemented in `pytecode.analysis` via `compute_maxs()` and `compute_frames(
 
 Now implemented in `pytecode.verify`. The validation module checks version-aware feature gating and attribute constraints alongside structural classfile validation. See `pytecode/verify.py` for the full set of checks.
 
-#### 9. Round-trip fidelity and compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14))
+#### 9. Round-trip fidelity and compatibility testing ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed)
 
 To be a practical ASM/BCEL alternative, the project should prove:
 
@@ -80,6 +80,8 @@ Round-trip testing distinguishes three levels of fidelity:
 - **Level A — Byte-for-byte identity** (`bytes₁ == bytes₂`): The gold standard for no-modification roundtrips. Achievable because `ConstantPoolBuilder.from_pool()` preserves original indexes and `lower_code()` handles instruction encoding selection. This is the default expectation for unmodified roundtrips.
 - **Level B — Structural equivalence** (`parse(bytes₁) ≅ parse(bytes₂)`): For modified roundtrips where CP indexes may have shifted. Compares parsed structures with CP references resolved to symbolic values.
 - **Level C — Semantic equivalence** (behavior-preserving): The weakest level — two class files define the same class with the same behavior, even if structural details differ (attribute order, debug attributes, method order).
+
+Tier 1 is now implemented for the current fixture corpus: `tests/test_class_writer.py` exercises byte-for-byte `ClassWriter.write()` roundtrips across compiled Java fixtures, byte-for-byte `ClassModel.to_bytes()` roundtrips across the same corpus, and raw edge cases such as unknown attributes and double-slot constant-pool gaps. The broader compatibility tiers remain future work.
 
 #### 10. Error and diagnostics model ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 
@@ -118,7 +120,7 @@ The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Jav
 11. ~~Add external-tool differential CFG validation for analysis output.~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 12. ~~Implement max stack, max locals, and stack map frame recomputation.~~ ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done)
 13. ~~Implement validation with structured diagnostics and version-aware rules.~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
-14. Add classfile emission with deterministic constant-pool layout. ([#12](https://github.com/smithtrenton/pytecode/issues/12))
+14. ~~Add classfile emission with deterministic constant-pool layout.~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
 15. Broaden debug info management beyond label rebinding. ([#13](https://github.com/smithtrenton/pytecode/issues/13) — partially addressed)
-16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14))
+16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed; broader tiers pending)
 17. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))

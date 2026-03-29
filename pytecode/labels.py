@@ -272,6 +272,49 @@ def _lifted_debug_attrs(attributes: list[AttributeInfo]) -> list[AttributeInfo]:
     ]
 
 
+def _ordered_nested_code_attributes(
+    code: CodeModel,
+    line_number_attr: LineNumberTableAttr | None,
+    local_variable_attr: LocalVariableTableAttr | None,
+    local_variable_type_attr: LocalVariableTypeTableAttr | None,
+) -> list[AttributeInfo]:
+    other_attrs = copy.deepcopy(_lifted_debug_attrs(code.attributes))
+    if not code._nested_attribute_layout:
+        attrs = other_attrs
+        for debug_attr in (line_number_attr, local_variable_attr, local_variable_type_attr):
+            if debug_attr is not None:
+                attrs.append(debug_attr)
+        return attrs
+
+    attrs: list[AttributeInfo] = []
+    other_index = 0
+    debug_attrs: dict[str, AttributeInfo | None] = {
+        "line_numbers": line_number_attr,
+        "local_variables": local_variable_attr,
+        "local_variable_types": local_variable_type_attr,
+    }
+
+    for token in code._nested_attribute_layout:
+        if token == "other":
+            if other_index < len(other_attrs):
+                attrs.append(other_attrs[other_index])
+                other_index += 1
+            continue
+
+        debug_attr = debug_attrs.get(token)
+        if debug_attr is not None:
+            attrs.append(debug_attr)
+            debug_attrs[token] = None
+
+    attrs.extend(other_attrs[other_index:])
+    for token in ("line_numbers", "local_variables", "local_variable_types"):
+        debug_attr = debug_attrs[token]
+        if debug_attr is not None:
+            attrs.append(debug_attr)
+
+    return attrs
+
+
 def _clone_constant_pool_builder(cp: ConstantPoolBuilder) -> ConstantPoolBuilder:
     return ConstantPoolBuilder.from_pool(cp.build())
 
@@ -688,14 +731,12 @@ def _lower_resolved_code(
     ]
     exception_table = _lower_exception_handlers(code.exception_handlers, resolution.label_offsets, cp)
 
-    attributes = copy.deepcopy(_lifted_debug_attrs(code.attributes))
-    for debug_attr in (
+    attributes = _ordered_nested_code_attributes(
+        code,
         _build_line_number_attribute(code.line_numbers, resolution.label_offsets, cp),
         _build_local_variable_attribute(code.local_variables, resolution.label_offsets, cp),
         _build_local_variable_type_attribute(code.local_variable_types, resolution.label_offsets, cp),
-    ):
-        if debug_attr is not None:
-            attributes.append(debug_attr)
+    )
 
     return CodeAttr(
         attribute_name_index=cp.add_utf8("Code"),

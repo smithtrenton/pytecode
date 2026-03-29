@@ -72,6 +72,8 @@ Three levels of fidelity apply (see [round-trip fidelity](../project/roadmap.md#
 
 Apply roundtrip tests to every Java fixture in `tests/resources/` using parametrized pytest tests. Level A is the default expectation for unmodified roundtrips.
 
+Tier 1 is now implemented in `tests/test_class_writer.py`: the suite covers byte-for-byte `ClassWriter.write()` roundtrips over the compiled fixture corpus, byte-for-byte `ClassModel.to_bytes()` roundtrips over the same corpus, and raw edge cases such as unknown attributes and double-slot constant-pool gaps.
+
 ## Tier 2: Structural verification
 
 Verify that emitted output satisfies JVM spec format checking (§4.8) and static constraints (§4.9.1).
@@ -183,9 +185,9 @@ Pytest markers (`@pytest.mark.tier1` through `@pytest.mark.tier4`) enable runnin
 
 ## Prerequisites and phasing
 
-- **Issue #12 (ClassWriter)**: Binary emission must exist before any validation tier can be tested.
+- **Issue #12 (ClassWriter)**: Implemented. Tier 1 can now be exercised end-to-end.
 - **Issue #10 (StackMapTable computation)**: Required for Tier 4 JVM verification of *generated* (non-roundtrip) classes.
-- **Phase 1**: Implement Tier 1 (roundtrip) — cheapest, fastest, catches most serialization bugs.
+- **Phase 1**: Implement Tier 1 (roundtrip) — done.
 - **Phase 2**: Implement Tier 2 (structural verifier + javap cross-check).
 - **Phase 3**: Implement Tier 3 (javap parser + semantic diff engine).
 - **Phase 4**: Implement Tier 4 (VerifierHarness + execution tests).

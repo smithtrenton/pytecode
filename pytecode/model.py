@@ -12,6 +12,7 @@ from .attributes import (
     LocalVariableTypeTableAttr,
 )
 from .class_reader import ClassReader
+from .class_writer import ClassWriter
 from .constant_pool import (
     ClassInfo,
     DoubleInfo,
@@ -105,6 +106,7 @@ class CodeModel:
     local_variables: list[LocalVariableEntry] = field(default_factory=list)
     local_variable_types: list[LocalVariableTypeEntry] = field(default_factory=list)
     attributes: list[AttributeInfo] = field(default_factory=list)
+    _nested_attribute_layout: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
 
 @dataclass
@@ -277,6 +279,15 @@ class ClassModel:
             attributes_count=len(self.attributes),
             attributes=copy.deepcopy(self.attributes),
         )
+
+    def to_bytes(
+        self,
+        *,
+        recompute_frames: bool = False,
+        resolver: ClassResolver | None = None,
+    ) -> bytes:
+        """Lower this model and serialize the resulting ``ClassFile`` to bytes."""
+        return ClassWriter.write(self.to_classfile(recompute_frames=recompute_frames, resolver=resolver))
 
 
 # ------------------------------------------------------------------
@@ -581,14 +592,17 @@ def _lift_nested_code_attributes(
     list[LocalVariableEntry],
     list[LocalVariableTypeEntry],
     list[AttributeInfo],
+    tuple[str, ...],
 ]:
     line_numbers: list[LineNumberEntry] = []
     local_variables: list[LocalVariableEntry] = []
     local_variable_types: list[LocalVariableTypeEntry] = []
     attributes: list[AttributeInfo] = []
+    layout: list[str] = []
 
     for attribute in code_attr.attributes:
         if isinstance(attribute, LineNumberTableAttr):
+            layout.append("line_numbers")
             line_numbers.extend(
                 LineNumberEntry(
                     label=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -597,6 +611,7 @@ def _lift_nested_code_attributes(
                 for entry in attribute.line_number_table
             )
         elif isinstance(attribute, LocalVariableTableAttr):
+            layout.append("local_variables")
             local_variables.extend(
                 LocalVariableEntry(
                     start=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -608,6 +623,7 @@ def _lift_nested_code_attributes(
                 for entry in attribute.local_variable_table
             )
         elif isinstance(attribute, LocalVariableTypeTableAttr):
+            layout.append("local_variable_types")
             local_variable_types.extend(
                 LocalVariableTypeEntry(
                     start=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -619,14 +635,15 @@ def _lift_nested_code_attributes(
                 for entry in attribute.local_variable_type_table
             )
         else:
+            layout.append("other")
             attributes.append(copy.deepcopy(attribute))
 
-    return line_numbers, local_variables, local_variable_types, attributes
+    return line_numbers, local_variables, local_variable_types, attributes, tuple(layout)
 
 
 def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder) -> CodeModel:
     labels_by_offset = _collect_labels(attr)
-    line_numbers, local_variables, local_variable_types, attributes = _lift_nested_code_attributes(
+    line_numbers, local_variables, local_variable_types, attributes, layout = _lift_nested_code_attributes(
         attr,
         labels_by_offset,
         cp,
@@ -640,6 +657,7 @@ def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder) -> CodeModel:
         local_variables=local_variables,
         local_variable_types=local_variable_types,
         attributes=attributes,
+        _nested_attribute_layout=layout,
     )
 
 
