@@ -29,9 +29,9 @@ Responsibilities:
 
 This is the layer you already have today.
 
-## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6))
+## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phase 1 landed)
 
-Add a higher-level object model for safe manipulation. This should not force users to hand-edit raw constant-pool indexes and branch offsets.
+Phase 1 of this layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, giving pytecode a higher-level object model for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, and `ConstantPoolBuilder`.
 
 Responsibilities:
 
@@ -45,13 +45,13 @@ Responsibilities:
 - transparent `WIDE` instruction handling (users should never need to think about wide-form variants)
 - preservation of unknown attributes through transformations
 
-This layer is the core missing capability behind the requested "API to manipulate the classfiles."
+This layer is now the core user-facing manipulation surface behind the requested "API to manipulate the classfiles." The remaining work in issue [#6](https://github.com/smithtrenton/pytecode/issues/6) is higher-level transform composition and extension helpers on top of this foundation.
 
 After evaluating five candidate designs — **(A)** direct mutable dataclasses, **(B)** builder objects (BCEL-style), **(C)** visitor/transformer pattern (ASM-style), **(D)** pass pipelines, and **(E)** dual tree+visitor — **Design A (Mutable Dataclasses)** was chosen as the primary editing API. The tree model is designed so that pass-style composition (Design D) can be layered on top, and a visitor layer (Design E) can be added later if streaming becomes necessary. See [editing model design rationale](../design/editing-model.md) for the full analysis, comparative feature matrix, library survey, and phased implementation plan.
 
 ### 3a. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 
-Add utilities for parsing and constructing JVM type descriptors and method signatures.
+Descriptor and signature utilities are now implemented in `pytecode.descriptors`.
 
 Responsibilities:
 
@@ -90,9 +90,9 @@ Max stack/max locals recomputation and StackMapTable generation are now implemen
 
 Max stack/max locals recomputation and StackMapTable generation are now complete ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done), built on the analysis layer.
 
-## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11))
+## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; Tier 2+ in [#14](https://github.com/smithtrenton/pytecode/issues/14))
 
-Add explicit validation that can run before emission, organized as a four-tier framework. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
+Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is organized as a four-tier framework. Tier 1 is landed today; the higher external-tool tiers remain future work. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|
@@ -116,9 +116,9 @@ Responsibilities across all tiers:
 
 The detailed design for each tier is in the [bytecode validation framework](../design/validation-framework.md).
 
-## 6. Emission layer ([#12](https://github.com/smithtrenton/pytecode/issues/12))
+## 6. Emission layer ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
 
-Add deterministic classfile serialization.
+Deterministic classfile serialization is now implemented via `ClassWriter.write()` and `ClassModel.to_bytes()`.
 
 Responsibilities:
 
@@ -129,7 +129,7 @@ Responsibilities:
 
 ## 7. JAR rewrite layer ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 
-Once class emission exists, add archive-level rewrite support.
+Now that class emission exists, the remaining archive-level architecture work is optional JAR rewrite support.
 
 Responsibilities:
 

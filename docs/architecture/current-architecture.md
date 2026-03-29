@@ -277,9 +277,9 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 ### Current constraints
 
 - Parsing is eager and tightly coupled to `ClassReader`
-- Most parser behavior lives in one large module (`class_reader.py`, ~653 lines), which will become harder to evolve once emission is added
+- Most parser behavior lives in one large module (`class_reader.py`), so parsing remains a maintenance hotspot even though emission now lives in `class_writer.py`
 - The editing model now uses labels for control flow, exception ranges, and debug scopes, and symbolic operand wrappers for all major non-control-flow instruction families; only raw pass-through instructions (`BIPUSH`, `SIPUSH`, `NEWARRAY`, and zero-operand `InsnInfo`) remain in their spec-shaped form
-- There is no classfile emission layer yet — `ClassModel.to_classfile()` produces a spec-model `ClassFile` but binary serialization requires issue [#12](https://github.com/smithtrenton/pytecode/issues/12)
+- Binary classfile emission is implemented via `ClassWriter.write()` and `ClassModel.to_bytes()`, but archive rewrite support and broader external compatibility tiers remain future work ([#15](https://github.com/smithtrenton/pytecode/issues/15), [#14](https://github.com/smithtrenton/pytecode/issues/14))
 
 ## Test coverage
 
