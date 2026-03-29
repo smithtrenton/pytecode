@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from pytecode import ClassModel, ClassReader, ClassWriter
+from pytecode.attributes import RuntimeInvisibleParameterAnnotationsAttr, RuntimeVisibleParameterAnnotationsAttr
 from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
 from pytecode.model import FieldModel, MethodModel
 from pytecode.verify import Severity, verify_classfile
@@ -62,6 +63,40 @@ def test_writer_roundtrip_preserves_long_gap_slots() -> None:
 
     parsed = ClassReader(raw).class_info
     assert ClassWriter.write(parsed) == raw
+
+
+def test_writer_roundtrip_preserves_parameter_annotation_attributes(tmp_path: Path) -> None:
+    class_paths = compile_java_resource_classes(tmp_path, "ParameterAnnotations.java")
+    class_path = next((path for path in class_paths if path.name == "ParameterAnnotations.class"), None)
+    assert class_path is not None
+
+    original = class_path.read_bytes()
+    parsed = ClassReader(original).class_info
+
+    parameter_annotation_attrs = [
+        attr
+        for method in parsed.methods
+        for attr in method.attributes
+        if isinstance(
+            attr,
+            (RuntimeVisibleParameterAnnotationsAttr, RuntimeInvisibleParameterAnnotationsAttr),
+        )
+    ]
+
+    assert {type(attr) for attr in parameter_annotation_attrs} == {
+        RuntimeVisibleParameterAnnotationsAttr,
+        RuntimeInvisibleParameterAnnotationsAttr,
+    }
+    assert {attr.num_parameters for attr in parameter_annotation_attrs} == {2}
+    assert all(len(attr.parameter_annotations) == 2 for attr in parameter_annotation_attrs)
+
+    emitted = ClassWriter.write(parsed)
+    assert emitted == original
+    _assert_no_error_diagnostics(emitted)
+
+    lowered = ClassModel.from_classfile(parsed).to_bytes()
+    assert lowered == original
+    _assert_no_error_diagnostics(lowered)
 
 
 def test_model_to_bytes_from_scratch_is_deterministic_and_valid() -> None:
