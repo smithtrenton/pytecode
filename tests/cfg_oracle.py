@@ -207,6 +207,8 @@ def normalize_to_blocks(oracle: OracleMethodCfg) -> NormalizedCfg:
 def normalize_pytecode_cfg(cfg: ControlFlowGraph) -> NormalizedCfg:
     """Convert ``pytecode`` CFG blocks into the normalized instruction-index form."""
 
+    # build_cfg guarantees every block (including entry) has at least one
+    # instruction, so empty-block filtering is purely defensive.
     non_empty_blocks = [block for block in cfg.blocks if block.instructions]
     if not non_empty_blocks:
         return NormalizedCfg(blocks=tuple(), entry_first_insn=0)
@@ -225,9 +227,12 @@ def normalize_pytecode_cfg(cfg: ControlFlowGraph) -> NormalizedCfg:
     for block in non_empty_blocks:
         first_insn_index = instruction_index_by_identity[id(block.instructions[0])]
         last_insn_index = instruction_index_by_identity[id(block.instructions[-1])]
+        # Successors/handlers always point to non-empty blocks because
+        # build_cfg only creates blocks that start at leader instructions.
         normal_successors = frozenset(
             instruction_index_by_identity[id(block_by_id[successor_id].instructions[0])]
             for successor_id in block.successor_ids
+            if successor_id in block_by_id
         )
         exception_handlers = frozenset(
             (
@@ -235,6 +240,7 @@ def normalize_pytecode_cfg(cfg: ControlFlowGraph) -> NormalizedCfg:
                 catch_type,
             )
             for handler_id, catch_type in block.exception_handler_ids
+            if handler_id in block_by_id
         )
         normalized_blocks.append(
             NormalizedBlock(

@@ -5,6 +5,7 @@ Provides analysis infrastructure for JVM bytecode in the editing model:
 - **Verification type system** (``VType``) mirroring JVM spec §4.10.1.2
 - **Control-flow graph** construction from ``CodeModel`` instructions
 - **Stack and local variable simulation** with forward dataflow analysis
+- **Frame recomputation** for ``max_stack``, ``max_locals``, and ``StackMapTable``
 - **Type merging** at control-flow join points using the class hierarchy
 
 All result types are frozen dataclasses — safe to share across threads.
@@ -1634,6 +1635,9 @@ def _simulate_branch_insn(insn: BranchInsn, state: FrameState) -> FrameState:
     effect = OPCODE_EFFECTS.get(insn.type)
     if effect is not None and effect.pops > 0:
         state, _ = state.pop(effect.pops)
+    # JSR/JSR_W pushes a return address onto the stack.
+    if insn.type in {_T.JSR, _T.JSR_W}:
+        return state.push(_INTEGER)
     return state
 
 
@@ -1829,9 +1833,8 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
                 return state.push(VObject(component[1:-1]))
             elif component.startswith("["):
                 return state.push(VObject(component))
-            else:
-                # Primitive array component — push as VObject for the descriptor.
-                return state.push(vtype_from_field_descriptor_str(component))
+            # Primitive component (e.g. "[I") — invalid bytecode for AALOAD
+            # (should use IALOAD/FALOAD/etc.), fall through to Object default.
         return state.push(_OBJECT_OBJECT)
 
     # --- Array stores ---

@@ -2478,3 +2478,499 @@ class TestComputeFramesWithFixtures:
             )
             assert result.max_stack >= 0
             assert result.max_locals >= 0
+
+
+# ===================================================================
+# JSR / RET coverage
+# ===================================================================
+
+
+class TestBuildCfgJsrRet:
+    """CFG construction for the deprecated JSR/RET subroutine opcodes."""
+
+    def test_jsr_creates_branch_edge(self) -> None:
+        """JSR should create an edge to the subroutine target label."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        cfg = build_cfg(code)
+
+        entry = cfg.blocks[0]
+        sub_block = cfg.label_to_block[l_sub]
+        assert sub_block.id in entry.successor_ids
+
+    def test_jsr_is_unconditional(self) -> None:
+        """JSR is unconditional — the fall-through after JSR starts a new block."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        cfg = build_cfg(code)
+
+        # Entry block contains only the JSR instruction.
+        entry = cfg.blocks[0]
+        assert len(entry.instructions) == 1
+        assert entry.instructions[0].type == InsnInfoType.JSR
+
+    def test_ret_is_terminal(self) -> None:
+        """RET terminates its block with no successors (return target is dynamic)."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        cfg = build_cfg(code)
+
+        sub_block = cfg.label_to_block[l_sub]
+        assert sub_block.successor_ids == []
+
+    def test_jsr_w_creates_branch_edge(self) -> None:
+        """JSR_W behaves the same as JSR for CFG construction."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR_W, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 5),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        cfg = build_cfg(code)
+
+        entry = cfg.blocks[0]
+        sub_block = cfg.label_to_block[l_sub]
+        assert sub_block.id in entry.successor_ids
+        assert sub_block.successor_ids == []
+
+
+class TestSimulateJsrRet:
+    """Stack simulation for JSR/RET opcodes."""
+
+    def test_jsr_pushes_return_address(self) -> None:
+        """JSR pushes a return address (modelled as integer) onto the stack."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        sub_block = cfg.label_to_block[l_sub]
+        entry_state = result.entry_states[sub_block.id]
+        assert entry_state.peek(0) == VInteger()
+
+    def test_jsr_w_pushes_return_address(self) -> None:
+        """JSR_W also pushes a return address."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR_W, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 5),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        sub_block = cfg.label_to_block[l_sub]
+        entry_state = result.entry_states[sub_block.id]
+        assert entry_state.peek(0) == VInteger()
+
+    def test_ret_terminates_simulation(self) -> None:
+        """RET terminates the block — exit state should show the stored return address."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        sub_block = cfg.label_to_block[l_sub]
+        exit_state = result.exit_states[sub_block.id]
+        assert exit_state.get_local(1) == VInteger()
+        assert exit_state.stack_depth == 0
+
+    def test_jsr_subroutine_with_work(self) -> None:
+        """JSR → subroutine that does stack work before RET."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            InsnInfo(InsnInfoType.ICONST_1, 5),
+            VarInsn(InsnInfoType.ISTORE, 2),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        sub_block = cfg.label_to_block[l_sub]
+        exit_state = result.exit_states[sub_block.id]
+        assert exit_state.get_local(1) == VInteger()
+        assert exit_state.get_local(2) == VInteger()
+        assert exit_state.stack_depth == 0
+
+    def test_jsr_max_stack_includes_return_address(self) -> None:
+        """max_stack should account for the return address pushed by JSR."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 1),
+            VarInsn(InsnInfoType.RET, 1),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        assert result.max_stack >= 1
+
+
+# ===================================================================
+# WIDE instruction coverage
+# ===================================================================
+
+
+class TestBuildCfgWide:
+    """CFG construction with WIDE-prefixed instructions."""
+
+    def test_wide_load_store_single_block(self) -> None:
+        """WIDE load/store (via VarInsn with high slot) stay in one basic block."""
+        code = _code(
+            VarInsn(InsnInfoType.ILOAD, 300),
+            VarInsn(InsnInfoType.ISTORE, 400),
+            InsnInfo(InsnInfoType.RETURN, 10),
+        )
+        cfg = build_cfg(code)
+        assert len(cfg.blocks) == 1
+        assert len(cfg.blocks[0].instructions) == 3
+
+    def test_wide_branch_after_wide_store(self) -> None:
+        """Branching after a WIDE store correctly splits blocks."""
+        l_target = Label("target")
+
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            VarInsn(InsnInfoType.ISTORE, 500),
+            VarInsn(InsnInfoType.ILOAD, 500),
+            BranchInsn(InsnInfoType.IFEQ, l_target),
+            InsnInfo(InsnInfoType.RETURN, 12),
+            l_target,
+            InsnInfo(InsnInfoType.RETURN, 13),
+        )
+        cfg = build_cfg(code)
+        assert len(cfg.blocks) >= 2
+
+    def test_wide_ret_is_terminal(self) -> None:
+        """VarInsn(RET, slot=300) is terminal (uses WIDE encoding when lowered)."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 300),
+            VarInsn(InsnInfoType.RET, 300),
+        )
+        cfg = build_cfg(code)
+        sub_block = cfg.label_to_block[l_sub]
+        assert sub_block.successor_ids == []
+
+
+class TestSimulateWide:
+    """Stack/local simulation with WIDE-encoded instructions (high-index locals)."""
+
+    def test_wide_iload_istore(self) -> None:
+        """ILOAD/ISTORE at slot 300 correctly track integer locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_5, 0),
+            VarInsn(InsnInfoType.ISTORE, 300),
+            VarInsn(InsnInfoType.ILOAD, 300),
+            InsnInfo(InsnInfoType.IRETURN, 10),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(300) == VInteger()
+
+    def test_wide_lload_lstore(self) -> None:
+        """LLOAD/LSTORE at high slot correctly handles category-2 (long) locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.LCONST_0, 0),
+            VarInsn(InsnInfoType.LSTORE, 400),
+            VarInsn(InsnInfoType.LLOAD, 400),
+            InsnInfo(InsnInfoType.LRETURN, 10),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(400) == VLong()
+        assert exit_state.locals[401] == VTop()
+
+    def test_wide_dload_dstore(self) -> None:
+        """DLOAD/DSTORE at high slot correctly handles category-2 (double) locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.DCONST_0, 0),
+            VarInsn(InsnInfoType.DSTORE, 500),
+            VarInsn(InsnInfoType.DLOAD, 500),
+            InsnInfo(InsnInfoType.DRETURN, 10),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(500) == VDouble()
+        assert exit_state.locals[501] == VTop()
+
+    def test_wide_fload_fstore(self) -> None:
+        """FLOAD/FSTORE at high slot correctly track float locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.FCONST_0, 0),
+            VarInsn(InsnInfoType.FSTORE, 256),
+            VarInsn(InsnInfoType.FLOAD, 256),
+            InsnInfo(InsnInfoType.FRETURN, 10),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(256) == VFloat()
+
+    def test_wide_aload_astore(self) -> None:
+        """ALOAD/ASTORE at high slot correctly track reference locals."""
+        code = _code(
+            InsnInfo(InsnInfoType.ACONST_NULL, 0),
+            VarInsn(InsnInfoType.ASTORE, 1000),
+            VarInsn(InsnInfoType.ALOAD, 1000),
+            InsnInfo(InsnInfoType.ARETURN, 10),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(1000) == VNull()
+
+    def test_wide_iinc(self) -> None:
+        """IIncInsn at a high slot (>255) does not change the stack."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            VarInsn(InsnInfoType.ISTORE, 300),
+            IIncInsn(300, 42),
+            VarInsn(InsnInfoType.ILOAD, 300),
+            InsnInfo(InsnInfoType.IRETURN, 12),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(300) == VInteger()
+        assert exit_state.stack_depth == 0
+
+    def test_wide_ret_simulation(self) -> None:
+        """RET at a high slot (>255) terminates the block correctly."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            VarInsn(InsnInfoType.ASTORE, 300),
+            VarInsn(InsnInfoType.RET, 300),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        sub_block = cfg.label_to_block[l_sub]
+        exit_state = result.exit_states[sub_block.id]
+        assert exit_state.get_local(300) == VInteger()
+        assert exit_state.stack_depth == 0
+
+    def test_wide_max_locals_includes_high_slots(self) -> None:
+        """max_locals should account for high-index WIDE slots."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_0, 0),
+            VarInsn(InsnInfoType.ISTORE, 600),
+            InsnInfo(InsnInfoType.RETURN, 6),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        assert result.max_locals >= 601
+
+    def test_wide_category2_max_locals(self) -> None:
+        """max_locals should account for double-width locals at high WIDE slots."""
+        code = _code(
+            InsnInfo(InsnInfoType.LCONST_1, 0),
+            VarInsn(InsnInfoType.LSTORE, 65534),
+            InsnInfo(InsnInfoType.RETURN, 8),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        assert result.max_locals >= 65536
+
+    def test_wide_multiple_types_in_sequence(self) -> None:
+        """Multiple WIDE load/store of different types in a single block."""
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_1, 0),
+            VarInsn(InsnInfoType.ISTORE, 256),
+            InsnInfo(InsnInfoType.FCONST_1, 2),
+            VarInsn(InsnInfoType.FSTORE, 257),
+            InsnInfo(InsnInfoType.LCONST_1, 4),
+            VarInsn(InsnInfoType.LSTORE, 258),
+            InsnInfo(InsnInfoType.DCONST_1, 6),
+            VarInsn(InsnInfoType.DSTORE, 260),
+            InsnInfo(InsnInfoType.RETURN, 14),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.get_local(256) == VInteger()
+        assert exit_state.get_local(257) == VFloat()
+        assert exit_state.get_local(258) == VLong()
+        assert exit_state.get_local(260) == VDouble()
+
+
+class TestSimulateWideRaw:
+    """Simulation of raw (non-lifted) WIDE opcode InsnInfo objects.
+
+    When reading pre-compiled classfiles that are not lifted to the editing
+    model, WIDE-prefixed instructions appear as raw ``InsnInfo`` with types
+    like ``ILOADW``, ``ISTOREW``, etc.  These go through
+    ``_simulate_raw_insn`` rather than ``_simulate_var_insn``.
+    """
+
+    def test_raw_iloadw(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.ICONST_1, 0),
+            InsnInfo(InsnInfoType.ISTOREW, 1),
+            InsnInfo(InsnInfoType.ILOADW, 4),
+            InsnInfo(InsnInfoType.IRETURN, 7),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_lloadw_lstorew(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.LCONST_0, 0),
+            InsnInfo(InsnInfoType.LSTOREW, 1),
+            InsnInfo(InsnInfoType.LLOADW, 4),
+            InsnInfo(InsnInfoType.LRETURN, 7),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_floadw_fstorew(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.FCONST_0, 0),
+            InsnInfo(InsnInfoType.FSTOREW, 1),
+            InsnInfo(InsnInfoType.FLOADW, 4),
+            InsnInfo(InsnInfoType.FRETURN, 7),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_dloadw_dstorew(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.DCONST_0, 0),
+            InsnInfo(InsnInfoType.DSTOREW, 1),
+            InsnInfo(InsnInfoType.DLOADW, 4),
+            InsnInfo(InsnInfoType.DRETURN, 7),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_aloadw_astorew(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.ACONST_NULL, 0),
+            InsnInfo(InsnInfoType.ASTOREW, 1),
+            InsnInfo(InsnInfoType.ALOADW, 4),
+            InsnInfo(InsnInfoType.ARETURN, 7),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_iincw(self) -> None:
+        code = _code(
+            InsnInfo(InsnInfoType.IINCW, 0),
+            InsnInfo(InsnInfoType.RETURN, 6),
+        )
+        method = _static_method(descriptor="()V", code=code)
+        cfg = build_cfg(code)
+        result = simulate(cfg, code, method, "Test")
+        exit_state = result.exit_states[cfg.entry.id]
+        assert exit_state.stack_depth == 0
+
+    def test_raw_retw_is_terminal(self) -> None:
+        """RETW (raw) should terminate the block like RET."""
+        l_sub = Label("subroutine")
+
+        code = _code(
+            BranchInsn(InsnInfoType.JSR, l_sub),
+            InsnInfo(InsnInfoType.RETURN, 3),
+            l_sub,
+            InsnInfo(InsnInfoType.ASTOREW, 4),
+            InsnInfo(InsnInfoType.RETW, 7),
+        )
+        cfg = build_cfg(code)
+        sub_block = cfg.label_to_block[l_sub]
+        assert sub_block.successor_ids == []

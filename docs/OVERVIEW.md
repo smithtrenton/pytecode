@@ -13,15 +13,15 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Reading classfile bytes into an in-memory object model
 - Parsing all 17 constant-pool entry types
 - Parsing fields, methods, interfaces, and class-level metadata
-- Parsing `Code` attributes and decoding all 205 standard JVM opcodes (0x00–0xCA) plus WIDE variants into typed instruction records
-- Parsing 30 standard attribute types including annotations, stack map tables, module metadata, records, and permitted subclasses
+- Parsing `Code` attributes and decoding the full supported JVM opcode set, including WIDE-expanded forms, into typed instruction records
+- Parsing the standard attribute families including annotations, stack map tables, module metadata, records, and permitted subclasses
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
 - Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
 - Structural classfile validation with structured diagnostics: `pytecode/verify.py` validates magic number, version, constant-pool well-formedness, access flag mutual exclusions, class structure, field/method constraints, Code attribute (branches, exception handlers, CP refs), attribute versioning, descriptor validity, and ClassModel label validity — see `pytecode/verify.py`
-- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, control-flow/stack simulation, frame recomputation, and validation (1239 tests)
+- Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, control-flow/stack simulation, frame recomputation, and validation
 - Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
 - Mutable editing model: `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` — mutable dataclasses with symbolic class/field/method references, bidirectional conversion to/from the parsed `ClassFile` model, `ConstantPoolBuilder` integration for raw operand/index passthrough, and label-aware code editing surfaces — see `pytecode/model.py`
 - Label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)): `pytecode/labels.py` introduces `Label`, symbolic branch/switch wrappers, lifted exception/debug metadata, automatic offset recalculation, switch padding recomputation, and wide-branch promotion during lowering
@@ -29,12 +29,12 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8)): `pytecode/hierarchy.py` introduces a pluggable `ClassResolver` protocol, in-memory `MappingClassResolver`, typed resolved hierarchy snapshots (`ResolvedClass`, `ResolvedMethod`, `InheritedMethod`), and helper queries for superclass walks, supertype traversal, subtype checks, common-superclass lookup, and method-override detection.
 - Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging for future frame and validation work.
 - CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17)): the test suite now compares `pytecode.analysis.build_cfg()` against a JVM-side ASM oracle across compiled fixture corpora, normalizing instruction-level edges into the same block-level spans, successor sets, and handler sets used by `pytecode`.
-- Max stack/max locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)): `pytecode/analysis.py` now exposes `compute_maxs()` and `compute_frames()` for opt-in recomputation of `max_stack`, `max_locals`, and `StackMapTable` entries. `lower_code()` and `ClassModel.to_classfile()` support `recompute_frames=True` for end-to-end integration. All seven compact StackMapTable frame encodings are supported (1117 tests).
+- Max stack/max locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)): `pytecode/analysis.py` now exposes `compute_maxs()` and `compute_frames()` for opt-in recomputation of `max_stack`, `max_locals`, and `StackMapTable` entries. `lower_code()` and `ClassModel.to_classfile()` support `recompute_frames=True` for end-to-end integration. All seven compact StackMapTable frame encodings are supported.
 
 ### Not implemented yet
 
 - Full debug-info maintenance after mutation (label rebinding is implemented, but higher-level policies remain future work) ([#13](https://github.com/smithtrenton/pytecode/issues/13))
-- Binary classfile emission ([#12](https://github.com/smithtrenton/pytecode/issues/12))
+- Binary classfile serialization back to `.class` bytes ([#12](https://github.com/smithtrenton/pytecode/issues/12))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 
 ## Documentation guide

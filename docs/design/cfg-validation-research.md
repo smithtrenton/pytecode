@@ -185,7 +185,7 @@ Even with the existing broad fixture, I would add or isolate these as dedicated 
 - synchronized blocks and compiler-generated `finally` shapes
 - multi-catch compiled output
 - large `tableswitch` / `lookupswitch`
-- legacy `JSR` / `RET` only in a separate non-blocking suite, because support is still explicitly called out as an open roadmap question.[^14]
+- legacy `JSR` / `RET`, likely in a separate non-blocking suite because they are now supported primarily as a compatibility path for older classfiles rather than as a modern code-generation target.[^14]
 
 ## Final recommendation
 

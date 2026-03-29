@@ -83,11 +83,11 @@ fixtures.
 
 ### `pytecode\attributes.py`
 
-Over 80 typed dataclasses for classfile attributes and nested structures (verification types, stack map frames, annotations, type annotations, module info, record components, etc.). It also defines `AttributeInfoType`, which maps attribute names to concrete dataclasses via an enum with a `_missing_` fallback. Unknown attribute names are routed to `UnimplementedAttr`, allowing parse-time preservation of vendor or future attributes.
+Typed dataclasses for classfile attributes and nested structures (verification types, stack map frames, annotations, type annotations, module info, record components, etc.). It also defines `AttributeInfoType`, which maps attribute names to concrete dataclasses via an enum with a `_missing_` fallback. Unknown attribute names are routed to `UnimplementedAttr`, allowing parse-time preservation of vendor or future attributes.
 
 ### `pytecode\instructions.py`
 
-Typed dataclasses for decoded bytecode instructions and operand shapes (12 operand-specific subclasses covering local indexes, constant pool indexes, branches, switches, etc.), plus the `InsnInfoType` opcode enum (205 standard opcodes plus WIDE variants) that maps byte values to instruction record types, and an `ArrayType` enum for `newarray`.
+Typed dataclasses for decoded bytecode instructions and operand shapes covering local indexes, constant-pool indexes, branches, switches, and other operand families, plus the `InsnInfoType` opcode enum that maps supported JVM instruction encodings to instruction record types, and an `ArrayType` enum for `newarray`.
 
 ### `pytecode\info.py`
 
@@ -189,10 +189,10 @@ For the broader design rationale, trade-offs, and future phases behind this edit
 
 ### `pytecode\analysis.py`
 
-Control-flow graph construction and stack/local simulation introduced for issue [#9](https://github.com/smithtrenton/pytecode/issues/9). This module provides the analysis layer that sits between the editing model and future frame computation / validation:
+Control-flow graph construction and stack/local simulation introduced for issue [#9](https://github.com/smithtrenton/pytecode/issues/9). This module provides the analysis layer that sits between the editing model, frame computation, and validation:
 
 - **Verification type system** — a `VType` union (VTop, VInteger, VFloat, VLong, VDouble, VNull, VObject, VUninitializedThis, VUninitialized) mirroring JVM spec §4.10.1.2. Helper functions `vtype_from_descriptor()`, `is_category2()`, `is_reference()`, and `merge_vtypes()` for type conversions and join-point merging.
-- **Opcode metadata** — an `OpcodeEffect` dataclass and `OPCODE_EFFECTS` lookup table covering all ~205 JVM opcodes with stack pop/push counts, branch/switch/return/unconditional flags. Variable-effect instructions (invoke, field access, LDC, multianewarray) use sentinel values and are computed dynamically during simulation.
+- **Opcode metadata** — an `OpcodeEffect` dataclass and `OPCODE_EFFECTS` lookup table covering the supported JVM instruction set with stack pop/push counts, branch/switch/return/unconditional flags. Variable-effect instructions (invoke, field access, LDC, multianewarray) use sentinel values and are computed dynamically during simulation.
 - **Frame state** — a frozen `FrameState` dataclass tracking operand stack and local variable slots as `VType` tuples, with category-2-aware `push`/`pop`/`set_local`/`get_local` operations. `initial_frame()` builds the entry frame from a `MethodModel`'s descriptor and access flags.
 - **CFG construction** — `build_cfg()` partitions a `CodeModel`'s instruction stream into `BasicBlock` nodes with fall-through, branch, switch, and exception-handler edges. Block leaders are identified from branch targets, exception handler labels, and post-terminal instructions.
 - **Stack simulation** — `simulate()` performs forward dataflow analysis over the CFG using a worklist algorithm, propagating `FrameState` through each instruction and merging at join points. Returns a `SimulationResult` with per-block entry/exit states, computed `max_stack`, and `max_locals`.
@@ -269,11 +269,11 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 
 ## Test coverage
 
-The test suite provides both integration-level and unit-level coverage (1239 tests total):
+The test suite provides both integration-level and unit-level coverage:
 
 **Unit tests** ([#2](https://github.com/smithtrenton/pytecode/issues/2) — done):
 
-- `test_attributes.py` — per-attribute-type parsing for all 30 standard attribute types, stack map frame variants, verification types, annotation element values, type annotations, and the `UnimplementedAttr` fallback.
+- `test_attributes.py` — per-attribute-type parsing for the standard attribute families, stack map frame variants, verification types, annotation element values, type annotations, and the `UnimplementedAttr` fallback.
 - `test_instructions.py` — instruction decoding for all operand shapes including no-operand, local variable index, constant-pool index, bipush/sipush, branch16/branch32, iinc, invokedynamic, invokeinterface, newarray, multianewarray, lookupswitch, tableswitch, and wide variants.
 - `test_constant_pool.py` — all 17 constant-pool entry types, Long/Double double-slot handling, Modified UTF-8 `CONSTANT_Utf8` cases, mixed pool parsing, and unknown tag errors.
 - `test_class_reader.py` — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.

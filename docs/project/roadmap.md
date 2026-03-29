@@ -31,9 +31,9 @@ builds on.
 
 Editing bytecode safely required label-based branch targets instead of manual offset arithmetic. That foundation is now in place via `pytecode\labels.py`: labels support forward references, survive instruction insertion/removal, rebind exception/debug metadata, recompute `TABLESWITCH`/`LOOKUPSWITCH` padding, and widen overflowing branches during lowering.
 
-#### 3a. Symbolic instruction operands ([#16](https://github.com/smithtrenton/pytecode/issues/16))
+#### 3a. Symbolic instruction operands ([#16](https://github.com/smithtrenton/pytecode/issues/16) — done)
 
-Control flow is now symbolic, but most non-branch instructions still expose raw constant-pool indexes, local-variable slot encodings, and other operand-level details through spec-shaped `InsnInfo` records. A follow-on symbolic operand layer should add editing-model wrappers for common non-control-flow instructions (for example, constant-pool references and local-slot references) so transformations and future analyses can avoid manual raw-index bookkeeping altogether.
+This layer is now implemented in `pytecode.operands`. The editing model lifts the major non-control-flow instruction families to symbolic wrappers for constant-pool references, local-variable slots, `LDC` values, `INVOKEDYNAMIC`, and `MULTIANEWARRAY`, so ordinary transforms no longer need to manage raw operand encodings by hand.
 
 #### 4. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3)) — implemented foundation
 
@@ -101,7 +101,7 @@ Mutation invalidates LineNumberTable, LocalVariableTable, and LocalVariableTypeT
 
 #### 13. JSR/RET legacy support
 
-The `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 classfiles) are present in the opcode table but create complex control-flow for frame computation. The library should decide whether to fully support these legacy instructions or to document them as unsupported for analysis purposes. Modern JVMs do not allow them in classfiles with version ≥ 51.
+The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 classfiles) are now handled by the opcode table, lowering layer, and analysis/test coverage. They remain a niche compatibility path rather than a modern workflow, because classfiles with version ≥ 51 cannot use them on current JVMs.
 
 ## Recommended implementation order
 
