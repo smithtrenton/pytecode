@@ -97,4 +97,3 @@ def test_model_to_bytes_from_scratch_is_deterministic_and_valid() -> None:
     assert first == second
     _assert_no_error_diagnostics(first)
     assert ClassModel.from_bytes(first).name == "com/example/Generated"
-

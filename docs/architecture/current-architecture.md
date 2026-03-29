@@ -7,7 +7,7 @@ The codebase is currently organized as a parser/lowering/emission pipeline with 
 - Requires Python 3.14+ (`pyproject.toml`)
 - Ships a `py.typed` marker so downstream type checkers can consume package types
 - Keeps the core library runtime dependency-free
-- Uses Ruff, basedpyright, and `pytest`-based validation in development (see `README.md`)
+- Uses Ruff lint and format checks, basedpyright, and `pytest`-based validation in development (see `README.md`)
 
 ## Public entry points
 

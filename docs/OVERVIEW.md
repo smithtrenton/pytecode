@@ -31,11 +31,12 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging for future frame and validation work.
 - CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17)): the test suite now compares `pytecode.analysis.build_cfg()` against a JVM-side ASM oracle across compiled fixture corpora, normalizing instruction-level edges into the same block-level spans, successor sets, and handler sets used by `pytecode`.
 - Max stack/max locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)): `pytecode/analysis.py` now exposes `compute_maxs()` and `compute_frames()` for opt-in recomputation of `max_stack`, `max_locals`, and `StackMapTable` entries. `lower_code()` and `ClassModel.to_classfile()` support `recompute_frames=True` for end-to-end integration. All seven compact StackMapTable frame encodings are supported.
+- Debug-info policy helpers ([#13](https://github.com/smithtrenton/pytecode/issues/13)): label-based preservation remains the default path for lifted `LineNumberTable`, `LocalVariableTable`, and `LocalVariableTypeTable` metadata, while `pytecode.debug_info` now provides explicit preserve/strip helpers and lowering supports `debug_info="strip"` to omit code-debug plus class-level source-debug attributes from emitted output.
 - Tier 1 roundtrip coverage for emission: `tests/test_class_writer.py` now exercises byte-for-byte `ClassWriter.write()` roundtrips over compiled Java fixtures and `ClassModel.to_bytes()` roundtrips over the same corpus, plus raw edge cases such as unknown attributes and double-slot constant-pool gaps
 
 ### Not implemented yet
 
-- Full debug-info maintenance after mutation (label rebinding is implemented, but higher-level policies remain future work) ([#13](https://github.com/smithtrenton/pytecode/issues/13))
+- First-class stale-state modeling for debug metadata after mutation beyond the landed preserve/strip policies ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 - Broader external validation tiers beyond the landed Tier 1 roundtrip suite (`javap` cross-checks, semantic javac comparisons, JVM verifier harnesses) ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 

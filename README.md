@@ -13,6 +13,8 @@ See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current parser +
 
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, and `LabelResolution`, import directly from `pytecode.labels`.
 
+For debug-info policy helpers — `DebugInfoPolicy`, `apply_debug_info_policy()`, and `strip_debug_info()` — import from `pytecode.debug_info`. `ClassModel.to_classfile()`, `ClassModel.to_bytes()`, and `lower_code()` preserve lifted debug metadata by default and also accept `debug_info="strip"` (or `DebugInfoPolicy.STRIP`) when you want to omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata from output.
+
 For symbolic operand wrappers — `FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`, and the `LdcValue` union types — import from `pytecode.operands`. These wrappers are lifted automatically by `ClassModel.from_classfile()` and lowered automatically by `ClassModel.to_classfile()`.
 
 For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `InheritedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names, back the current control-flow/simulation layer, and provide the hierarchy foundation for later frame, validation, and emission work.
@@ -74,9 +76,18 @@ Run type checking:
 uv run basedpyright
 ```
 
-Run the validation suite:
+Run the test suite:
 
 ```powershell
+uv run pytest -q
+```
+
+Run the full validation pass:
+
+```powershell
+uv run ruff check .
+uv run ruff format --check .
+uv run basedpyright
 uv run pytest -q
 ```
 

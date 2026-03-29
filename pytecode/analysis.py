@@ -425,9 +425,7 @@ def _merge_frames(a: FrameState, b: FrameState, resolver: ClassResolver | None) 
     merged slot-by-slot; the shorter locals tuple is padded with ``VTop``.
     """
     if len(a.stack) != len(b.stack):
-        raise TypeMergeError(
-            f"Stack depths differ at join point: {len(a.stack)} vs {len(b.stack)}"
-        )
+        raise TypeMergeError(f"Stack depths differ at join point: {len(a.stack)} vs {len(b.stack)}")
 
     merged_stack = tuple(merge_vtypes(sa, sb, resolver) for sa, sb in zip(a.stack, b.stack))
 
@@ -483,272 +481,246 @@ _var = OpcodeEffect(-1, -1)  # variable — resolved during simulation
 
 OPCODE_EFFECTS: dict[InsnInfoType, OpcodeEffect] = {
     # --- Constants ---
-    _T.NOP:        _simple(0, 0),
-    _T.ACONST_NULL:_simple(0, 1),
-    _T.ICONST_M1:  _simple(0, 1),
-    _T.ICONST_0:   _simple(0, 1),
-    _T.ICONST_1:   _simple(0, 1),
-    _T.ICONST_2:   _simple(0, 1),
-    _T.ICONST_3:   _simple(0, 1),
-    _T.ICONST_4:   _simple(0, 1),
-    _T.ICONST_5:   _simple(0, 1),
-    _T.LCONST_0:   _simple(0, 2),
-    _T.LCONST_1:   _simple(0, 2),
-    _T.FCONST_0:   _simple(0, 1),
-    _T.FCONST_1:   _simple(0, 1),
-    _T.FCONST_2:   _simple(0, 1),
-    _T.DCONST_0:   _simple(0, 2),
-    _T.DCONST_1:   _simple(0, 2),
-    _T.BIPUSH:     _simple(0, 1),
-    _T.SIPUSH:     _simple(0, 1),
-    _T.LDC:        _var,
-    _T.LDC_W:      _var,
-    _T.LDC2_W:     _var,
-
+    _T.NOP: _simple(0, 0),
+    _T.ACONST_NULL: _simple(0, 1),
+    _T.ICONST_M1: _simple(0, 1),
+    _T.ICONST_0: _simple(0, 1),
+    _T.ICONST_1: _simple(0, 1),
+    _T.ICONST_2: _simple(0, 1),
+    _T.ICONST_3: _simple(0, 1),
+    _T.ICONST_4: _simple(0, 1),
+    _T.ICONST_5: _simple(0, 1),
+    _T.LCONST_0: _simple(0, 2),
+    _T.LCONST_1: _simple(0, 2),
+    _T.FCONST_0: _simple(0, 1),
+    _T.FCONST_1: _simple(0, 1),
+    _T.FCONST_2: _simple(0, 1),
+    _T.DCONST_0: _simple(0, 2),
+    _T.DCONST_1: _simple(0, 2),
+    _T.BIPUSH: _simple(0, 1),
+    _T.SIPUSH: _simple(0, 1),
+    _T.LDC: _var,
+    _T.LDC_W: _var,
+    _T.LDC2_W: _var,
     # --- Loads (raw forms — in editing model these are VarInsn) ---
-    _T.ILOAD:      _simple(0, 1),
-    _T.LLOAD:      _simple(0, 2),
-    _T.FLOAD:      _simple(0, 1),
-    _T.DLOAD:      _simple(0, 2),
-    _T.ALOAD:      _simple(0, 1),
-    _T.ILOAD_0:    _simple(0, 1),
-    _T.ILOAD_1:    _simple(0, 1),
-    _T.ILOAD_2:    _simple(0, 1),
-    _T.ILOAD_3:    _simple(0, 1),
-    _T.LLOAD_0:    _simple(0, 2),
-    _T.LLOAD_1:    _simple(0, 2),
-    _T.LLOAD_2:    _simple(0, 2),
-    _T.LLOAD_3:    _simple(0, 2),
-    _T.FLOAD_0:    _simple(0, 1),
-    _T.FLOAD_1:    _simple(0, 1),
-    _T.FLOAD_2:    _simple(0, 1),
-    _T.FLOAD_3:    _simple(0, 1),
-    _T.DLOAD_0:    _simple(0, 2),
-    _T.DLOAD_1:    _simple(0, 2),
-    _T.DLOAD_2:    _simple(0, 2),
-    _T.DLOAD_3:    _simple(0, 2),
-    _T.ALOAD_0:    _simple(0, 1),
-    _T.ALOAD_1:    _simple(0, 1),
-    _T.ALOAD_2:    _simple(0, 1),
-    _T.ALOAD_3:    _simple(0, 1),
-
+    _T.ILOAD: _simple(0, 1),
+    _T.LLOAD: _simple(0, 2),
+    _T.FLOAD: _simple(0, 1),
+    _T.DLOAD: _simple(0, 2),
+    _T.ALOAD: _simple(0, 1),
+    _T.ILOAD_0: _simple(0, 1),
+    _T.ILOAD_1: _simple(0, 1),
+    _T.ILOAD_2: _simple(0, 1),
+    _T.ILOAD_3: _simple(0, 1),
+    _T.LLOAD_0: _simple(0, 2),
+    _T.LLOAD_1: _simple(0, 2),
+    _T.LLOAD_2: _simple(0, 2),
+    _T.LLOAD_3: _simple(0, 2),
+    _T.FLOAD_0: _simple(0, 1),
+    _T.FLOAD_1: _simple(0, 1),
+    _T.FLOAD_2: _simple(0, 1),
+    _T.FLOAD_3: _simple(0, 1),
+    _T.DLOAD_0: _simple(0, 2),
+    _T.DLOAD_1: _simple(0, 2),
+    _T.DLOAD_2: _simple(0, 2),
+    _T.DLOAD_3: _simple(0, 2),
+    _T.ALOAD_0: _simple(0, 1),
+    _T.ALOAD_1: _simple(0, 1),
+    _T.ALOAD_2: _simple(0, 1),
+    _T.ALOAD_3: _simple(0, 1),
     # --- Array loads ---
-    _T.IALOAD:     _simple(2, 1),
-    _T.LALOAD:     _simple(2, 2),
-    _T.FALOAD:     _simple(2, 1),
-    _T.DALOAD:     _simple(2, 2),
-    _T.AALOAD:     _simple(2, 1),
-    _T.BALOAD:     _simple(2, 1),
-    _T.CALOAD:     _simple(2, 1),
-    _T.SALOAD:     _simple(2, 1),
-
+    _T.IALOAD: _simple(2, 1),
+    _T.LALOAD: _simple(2, 2),
+    _T.FALOAD: _simple(2, 1),
+    _T.DALOAD: _simple(2, 2),
+    _T.AALOAD: _simple(2, 1),
+    _T.BALOAD: _simple(2, 1),
+    _T.CALOAD: _simple(2, 1),
+    _T.SALOAD: _simple(2, 1),
     # --- Stores (raw forms) ---
-    _T.ISTORE:     _simple(1, 0),
-    _T.LSTORE:     _simple(2, 0),
-    _T.FSTORE:     _simple(1, 0),
-    _T.DSTORE:     _simple(2, 0),
-    _T.ASTORE:     _simple(1, 0),
-    _T.ISTORE_0:   _simple(1, 0),
-    _T.ISTORE_1:   _simple(1, 0),
-    _T.ISTORE_2:   _simple(1, 0),
-    _T.ISTORE_3:   _simple(1, 0),
-    _T.LSTORE_0:   _simple(2, 0),
-    _T.LSTORE_1:   _simple(2, 0),
-    _T.LSTORE_2:   _simple(2, 0),
-    _T.LSTORE_3:   _simple(2, 0),
-    _T.FSTORE_0:   _simple(1, 0),
-    _T.FSTORE_1:   _simple(1, 0),
-    _T.FSTORE_2:   _simple(1, 0),
-    _T.FSTORE_3:   _simple(1, 0),
-    _T.DSTORE_0:   _simple(2, 0),
-    _T.DSTORE_1:   _simple(2, 0),
-    _T.DSTORE_2:   _simple(2, 0),
-    _T.DSTORE_3:   _simple(2, 0),
-    _T.ASTORE_0:   _simple(1, 0),
-    _T.ASTORE_1:   _simple(1, 0),
-    _T.ASTORE_2:   _simple(1, 0),
-    _T.ASTORE_3:   _simple(1, 0),
-
+    _T.ISTORE: _simple(1, 0),
+    _T.LSTORE: _simple(2, 0),
+    _T.FSTORE: _simple(1, 0),
+    _T.DSTORE: _simple(2, 0),
+    _T.ASTORE: _simple(1, 0),
+    _T.ISTORE_0: _simple(1, 0),
+    _T.ISTORE_1: _simple(1, 0),
+    _T.ISTORE_2: _simple(1, 0),
+    _T.ISTORE_3: _simple(1, 0),
+    _T.LSTORE_0: _simple(2, 0),
+    _T.LSTORE_1: _simple(2, 0),
+    _T.LSTORE_2: _simple(2, 0),
+    _T.LSTORE_3: _simple(2, 0),
+    _T.FSTORE_0: _simple(1, 0),
+    _T.FSTORE_1: _simple(1, 0),
+    _T.FSTORE_2: _simple(1, 0),
+    _T.FSTORE_3: _simple(1, 0),
+    _T.DSTORE_0: _simple(2, 0),
+    _T.DSTORE_1: _simple(2, 0),
+    _T.DSTORE_2: _simple(2, 0),
+    _T.DSTORE_3: _simple(2, 0),
+    _T.ASTORE_0: _simple(1, 0),
+    _T.ASTORE_1: _simple(1, 0),
+    _T.ASTORE_2: _simple(1, 0),
+    _T.ASTORE_3: _simple(1, 0),
     # --- Array stores ---
-    _T.IASTORE:    _simple(3, 0),
-    _T.LASTORE:    _simple(4, 0),
-    _T.FASTORE:    _simple(3, 0),
-    _T.DASTORE:    _simple(4, 0),
-    _T.AASTORE:    _simple(3, 0),
-    _T.BASTORE:    _simple(3, 0),
-    _T.CASTORE:    _simple(3, 0),
-    _T.SASTORE:    _simple(3, 0),
-
+    _T.IASTORE: _simple(3, 0),
+    _T.LASTORE: _simple(4, 0),
+    _T.FASTORE: _simple(3, 0),
+    _T.DASTORE: _simple(4, 0),
+    _T.AASTORE: _simple(3, 0),
+    _T.BASTORE: _simple(3, 0),
+    _T.CASTORE: _simple(3, 0),
+    _T.SASTORE: _simple(3, 0),
     # --- Stack manipulation ---
-    _T.POP:        _simple(1, 0),
-    _T.POP2:       _simple(2, 0),
-    _T.DUP:        _simple(1, 2),
-    _T.DUP_X1:     _simple(2, 3),
-    _T.DUP_X2:     _simple(3, 4),
-    _T.DUP2:       _simple(2, 4),
-    _T.DUP2_X1:    _simple(3, 5),
-    _T.DUP2_X2:    _simple(4, 6),
-    _T.SWAP:       _simple(2, 2),
-
+    _T.POP: _simple(1, 0),
+    _T.POP2: _simple(2, 0),
+    _T.DUP: _simple(1, 2),
+    _T.DUP_X1: _simple(2, 3),
+    _T.DUP_X2: _simple(3, 4),
+    _T.DUP2: _simple(2, 4),
+    _T.DUP2_X1: _simple(3, 5),
+    _T.DUP2_X2: _simple(4, 6),
+    _T.SWAP: _simple(2, 2),
     # --- Integer arithmetic ---
-    _T.IADD:       _simple(2, 1),
-    _T.ISUB:       _simple(2, 1),
-    _T.IMUL:       _simple(2, 1),
-    _T.IDIV:       _simple(2, 1),
-    _T.IREM:       _simple(2, 1),
-    _T.INEG:       _simple(1, 1),
-    _T.ISHL:       _simple(2, 1),
-    _T.ISHR:       _simple(2, 1),
-    _T.IUSHR:      _simple(2, 1),
-    _T.IAND:       _simple(2, 1),
-    _T.IOR:        _simple(2, 1),
-    _T.IXOR:       _simple(2, 1),
-
+    _T.IADD: _simple(2, 1),
+    _T.ISUB: _simple(2, 1),
+    _T.IMUL: _simple(2, 1),
+    _T.IDIV: _simple(2, 1),
+    _T.IREM: _simple(2, 1),
+    _T.INEG: _simple(1, 1),
+    _T.ISHL: _simple(2, 1),
+    _T.ISHR: _simple(2, 1),
+    _T.IUSHR: _simple(2, 1),
+    _T.IAND: _simple(2, 1),
+    _T.IOR: _simple(2, 1),
+    _T.IXOR: _simple(2, 1),
     # --- Long arithmetic ---
-    _T.LADD:       _simple(4, 2),
-    _T.LSUB:       _simple(4, 2),
-    _T.LMUL:       _simple(4, 2),
-    _T.LDIV:       _simple(4, 2),
-    _T.LREM:       _simple(4, 2),
-    _T.LNEG:       _simple(2, 2),
-    _T.LSHL:       _simple(3, 2),
-    _T.LSHR:       _simple(3, 2),
-    _T.LUSHR:      _simple(3, 2),
-    _T.LAND:       _simple(4, 2),
-    _T.LOR:        _simple(4, 2),
-    _T.LXOR:       _simple(4, 2),
-
+    _T.LADD: _simple(4, 2),
+    _T.LSUB: _simple(4, 2),
+    _T.LMUL: _simple(4, 2),
+    _T.LDIV: _simple(4, 2),
+    _T.LREM: _simple(4, 2),
+    _T.LNEG: _simple(2, 2),
+    _T.LSHL: _simple(3, 2),
+    _T.LSHR: _simple(3, 2),
+    _T.LUSHR: _simple(3, 2),
+    _T.LAND: _simple(4, 2),
+    _T.LOR: _simple(4, 2),
+    _T.LXOR: _simple(4, 2),
     # --- Float arithmetic ---
-    _T.FADD:       _simple(2, 1),
-    _T.FSUB:       _simple(2, 1),
-    _T.FMUL:       _simple(2, 1),
-    _T.FDIV:       _simple(2, 1),
-    _T.FREM:       _simple(2, 1),
-    _T.FNEG:       _simple(1, 1),
-
+    _T.FADD: _simple(2, 1),
+    _T.FSUB: _simple(2, 1),
+    _T.FMUL: _simple(2, 1),
+    _T.FDIV: _simple(2, 1),
+    _T.FREM: _simple(2, 1),
+    _T.FNEG: _simple(1, 1),
     # --- Double arithmetic ---
-    _T.DADD:       _simple(4, 2),
-    _T.DSUB:       _simple(4, 2),
-    _T.DMUL:       _simple(4, 2),
-    _T.DDIV:       _simple(4, 2),
-    _T.DREM:       _simple(4, 2),
-    _T.DNEG:       _simple(2, 2),
-
+    _T.DADD: _simple(4, 2),
+    _T.DSUB: _simple(4, 2),
+    _T.DMUL: _simple(4, 2),
+    _T.DDIV: _simple(4, 2),
+    _T.DREM: _simple(4, 2),
+    _T.DNEG: _simple(2, 2),
     # --- Conversions ---
-    _T.I2L:        _simple(1, 2),
-    _T.I2F:        _simple(1, 1),
-    _T.I2D:        _simple(1, 2),
-    _T.L2I:        _simple(2, 1),
-    _T.L2F:        _simple(2, 1),
-    _T.L2D:        _simple(2, 2),
-    _T.F2I:        _simple(1, 1),
-    _T.F2L:        _simple(1, 2),
-    _T.F2D:        _simple(1, 2),
-    _T.D2I:        _simple(2, 1),
-    _T.D2L:        _simple(2, 2),
-    _T.D2F:        _simple(2, 1),
-    _T.I2B:        _simple(1, 1),
-    _T.I2C:        _simple(1, 1),
-    _T.I2S:        _simple(1, 1),
-
+    _T.I2L: _simple(1, 2),
+    _T.I2F: _simple(1, 1),
+    _T.I2D: _simple(1, 2),
+    _T.L2I: _simple(2, 1),
+    _T.L2F: _simple(2, 1),
+    _T.L2D: _simple(2, 2),
+    _T.F2I: _simple(1, 1),
+    _T.F2L: _simple(1, 2),
+    _T.F2D: _simple(1, 2),
+    _T.D2I: _simple(2, 1),
+    _T.D2L: _simple(2, 2),
+    _T.D2F: _simple(2, 1),
+    _T.I2B: _simple(1, 1),
+    _T.I2C: _simple(1, 1),
+    _T.I2S: _simple(1, 1),
     # --- Comparisons ---
-    _T.LCMP:       _simple(4, 1),
-    _T.FCMPL:      _simple(2, 1),
-    _T.FCMPG:      _simple(2, 1),
-    _T.DCMPL:      _simple(4, 1),
-    _T.DCMPG:      _simple(4, 1),
-
+    _T.LCMP: _simple(4, 1),
+    _T.FCMPL: _simple(2, 1),
+    _T.FCMPG: _simple(2, 1),
+    _T.DCMPL: _simple(4, 1),
+    _T.DCMPG: _simple(4, 1),
     # --- Conditional branches (pop 1 int) ---
-    _T.IFEQ:       _branch(1, False),
-    _T.IFNE:       _branch(1, False),
-    _T.IFLT:       _branch(1, False),
-    _T.IFGE:       _branch(1, False),
-    _T.IFGT:       _branch(1, False),
-    _T.IFLE:       _branch(1, False),
-
+    _T.IFEQ: _branch(1, False),
+    _T.IFNE: _branch(1, False),
+    _T.IFLT: _branch(1, False),
+    _T.IFGE: _branch(1, False),
+    _T.IFGT: _branch(1, False),
+    _T.IFLE: _branch(1, False),
     # --- Conditional branches (pop 2 ints) ---
-    _T.IF_ICMPEQ:  _branch(2, False),
-    _T.IF_ICMPNE:  _branch(2, False),
-    _T.IF_ICMPLT:  _branch(2, False),
-    _T.IF_ICMPGE:  _branch(2, False),
-    _T.IF_ICMPGT:  _branch(2, False),
-    _T.IF_ICMPLE:  _branch(2, False),
-
+    _T.IF_ICMPEQ: _branch(2, False),
+    _T.IF_ICMPNE: _branch(2, False),
+    _T.IF_ICMPLT: _branch(2, False),
+    _T.IF_ICMPGE: _branch(2, False),
+    _T.IF_ICMPGT: _branch(2, False),
+    _T.IF_ICMPLE: _branch(2, False),
     # --- Reference conditional branches ---
-    _T.IF_ACMPEQ:  _branch(2, False),
-    _T.IF_ACMPNE:  _branch(2, False),
-    _T.IFNULL:     _branch(1, False),
-    _T.IFNONNULL:  _branch(1, False),
-
+    _T.IF_ACMPEQ: _branch(2, False),
+    _T.IF_ACMPNE: _branch(2, False),
+    _T.IFNULL: _branch(1, False),
+    _T.IFNONNULL: _branch(1, False),
     # --- Unconditional branches ---
-    _T.GOTO:       _branch(0, True),
-    _T.GOTO_W:     _branch(0, True),
-
+    _T.GOTO: _branch(0, True),
+    _T.GOTO_W: _branch(0, True),
     # --- Subroutine (legacy, pre-Java 6) ---
-    _T.JSR:        OpcodeEffect(0, 1, is_branch=True, is_unconditional=True),
-    _T.JSR_W:      OpcodeEffect(0, 1, is_branch=True, is_unconditional=True),
-    _T.RET:        OpcodeEffect(0, 0, is_branch=True, is_unconditional=True),
-
+    _T.JSR: OpcodeEffect(0, 1, is_branch=True, is_unconditional=True),
+    _T.JSR_W: OpcodeEffect(0, 1, is_branch=True, is_unconditional=True),
+    _T.RET: OpcodeEffect(0, 0, is_branch=True, is_unconditional=True),
     # --- Switch ---
-    _T.TABLESWITCH:  _switch,
+    _T.TABLESWITCH: _switch,
     _T.LOOKUPSWITCH: _switch,
-
     # --- Returns ---
-    _T.IRETURN:    _ret(1),
-    _T.LRETURN:    _ret(2),
-    _T.FRETURN:    _ret(1),
-    _T.DRETURN:    _ret(2),
-    _T.ARETURN:    _ret(1),
-    _T.RETURN:     _ret(0),
-
+    _T.IRETURN: _ret(1),
+    _T.LRETURN: _ret(2),
+    _T.FRETURN: _ret(1),
+    _T.DRETURN: _ret(2),
+    _T.ARETURN: _ret(1),
+    _T.RETURN: _ret(0),
     # --- Field access (variable effect) ---
-    _T.GETFIELD:   _var,
-    _T.PUTFIELD:   _var,
-    _T.GETSTATIC:  _var,
-    _T.PUTSTATIC:  _var,
-
+    _T.GETFIELD: _var,
+    _T.PUTFIELD: _var,
+    _T.GETSTATIC: _var,
+    _T.PUTSTATIC: _var,
     # --- Method invocation (variable effect) ---
-    _T.INVOKEVIRTUAL:   _var,
-    _T.INVOKESPECIAL:   _var,
-    _T.INVOKESTATIC:    _var,
+    _T.INVOKEVIRTUAL: _var,
+    _T.INVOKESPECIAL: _var,
+    _T.INVOKESTATIC: _var,
     _T.INVOKEINTERFACE: _var,
-    _T.INVOKEDYNAMIC:   _var,
-
+    _T.INVOKEDYNAMIC: _var,
     # --- Object creation ---
-    _T.NEW:        _simple(0, 1),
-    _T.NEWARRAY:   _simple(1, 1),
-    _T.ANEWARRAY:  _simple(1, 1),
+    _T.NEW: _simple(0, 1),
+    _T.NEWARRAY: _simple(1, 1),
+    _T.ANEWARRAY: _simple(1, 1),
     _T.MULTIANEWARRAY: _var,
-    _T.ARRAYLENGTH:_simple(1, 1),
-
+    _T.ARRAYLENGTH: _simple(1, 1),
     # --- Type operations ---
-    _T.CHECKCAST:  _simple(1, 1),
+    _T.CHECKCAST: _simple(1, 1),
     _T.INSTANCEOF: _simple(1, 1),
-
     # --- Throw ---
-    _T.ATHROW:     _ret(1),
-
+    _T.ATHROW: _ret(1),
     # --- Monitor ---
     _T.MONITORENTER: _simple(1, 0),
-    _T.MONITOREXIT:  _simple(1, 0),
-
+    _T.MONITOREXIT: _simple(1, 0),
     # --- IINC (no stack change) ---
-    _T.IINC:       _simple(0, 0),
-
+    _T.IINC: _simple(0, 0),
     # --- WIDE variants (same effect as non-wide) ---
-    _T.WIDE:       _simple(0, 0),
-    _T.ILOADW:     _simple(0, 1),
-    _T.LLOADW:     _simple(0, 2),
-    _T.FLOADW:     _simple(0, 1),
-    _T.DLOADW:     _simple(0, 2),
-    _T.ALOADW:     _simple(0, 1),
-    _T.ISTOREW:    _simple(1, 0),
-    _T.LSTOREW:    _simple(2, 0),
-    _T.FSTOREW:    _simple(1, 0),
-    _T.DSTOREW:    _simple(2, 0),
-    _T.ASTOREW:    _simple(1, 0),
-    _T.RETW:       OpcodeEffect(0, 0, is_branch=True, is_unconditional=True),
-    _T.IINCW:      _simple(0, 0),
+    _T.WIDE: _simple(0, 0),
+    _T.ILOADW: _simple(0, 1),
+    _T.LLOADW: _simple(0, 2),
+    _T.FLOADW: _simple(0, 1),
+    _T.DLOADW: _simple(0, 2),
+    _T.ALOADW: _simple(0, 1),
+    _T.ISTOREW: _simple(1, 0),
+    _T.LSTOREW: _simple(2, 0),
+    _T.FSTOREW: _simple(1, 0),
+    _T.DSTOREW: _simple(2, 0),
+    _T.ASTOREW: _simple(1, 0),
+    _T.RETW: OpcodeEffect(0, 0, is_branch=True, is_unconditional=True),
+    _T.IINCW: _simple(0, 0),
 }
 
 
@@ -880,8 +852,7 @@ def build_cfg(code: CodeModel) -> ControlFlowGraph:
             leader_indices.add(i)
 
         prev_was_terminal = _is_terminal(item) or (
-            _is_branch_or_switch(item)
-            and not OPCODE_EFFECTS[item.type].is_unconditional
+            _is_branch_or_switch(item) and not OPCODE_EFFECTS[item.type].is_unconditional
         )
         # For conditional branches, the fall-through is the next insn, which
         # is implicitly a leader only if control can reach it from multiple paths.
@@ -1166,9 +1137,7 @@ def _propagate(
         try:
             merged = _merge_frames(existing, incoming, resolver)
         except TypeMergeError as exc:
-            raise TypeMergeError(
-                f"Cannot merge incoming frame into block {target_id}: {exc}"
-            ) from exc
+            raise TypeMergeError(f"Cannot merge incoming frame into block {target_id}: {exc}") from exc
         if merged == existing:
             return  # No change — don't re-process.
         entry_states[target_id] = merged
@@ -1180,180 +1149,182 @@ def _propagate(
         in_worklist.add(target_id)
 
 
-_NON_THROWING_RAW_OPCODES: frozenset[InsnInfoType] = frozenset({
-    _T.NOP,
-    _T.ACONST_NULL,
-    _T.ICONST_M1,
-    _T.ICONST_0,
-    _T.ICONST_1,
-    _T.ICONST_2,
-    _T.ICONST_3,
-    _T.ICONST_4,
-    _T.ICONST_5,
-    _T.LCONST_0,
-    _T.LCONST_1,
-    _T.FCONST_0,
-    _T.FCONST_1,
-    _T.FCONST_2,
-    _T.DCONST_0,
-    _T.DCONST_1,
-    _T.BIPUSH,
-    _T.SIPUSH,
-    _T.ILOAD,
-    _T.ILOAD_0,
-    _T.ILOAD_1,
-    _T.ILOAD_2,
-    _T.ILOAD_3,
-    _T.ILOADW,
-    _T.LLOAD,
-    _T.LLOAD_0,
-    _T.LLOAD_1,
-    _T.LLOAD_2,
-    _T.LLOAD_3,
-    _T.LLOADW,
-    _T.FLOAD,
-    _T.FLOAD_0,
-    _T.FLOAD_1,
-    _T.FLOAD_2,
-    _T.FLOAD_3,
-    _T.FLOADW,
-    _T.DLOAD,
-    _T.DLOAD_0,
-    _T.DLOAD_1,
-    _T.DLOAD_2,
-    _T.DLOAD_3,
-    _T.DLOADW,
-    _T.ALOAD,
-    _T.ALOAD_0,
-    _T.ALOAD_1,
-    _T.ALOAD_2,
-    _T.ALOAD_3,
-    _T.ALOADW,
-    _T.ISTORE,
-    _T.ISTORE_0,
-    _T.ISTORE_1,
-    _T.ISTORE_2,
-    _T.ISTORE_3,
-    _T.ISTOREW,
-    _T.LSTORE,
-    _T.LSTORE_0,
-    _T.LSTORE_1,
-    _T.LSTORE_2,
-    _T.LSTORE_3,
-    _T.LSTOREW,
-    _T.FSTORE,
-    _T.FSTORE_0,
-    _T.FSTORE_1,
-    _T.FSTORE_2,
-    _T.FSTORE_3,
-    _T.FSTOREW,
-    _T.DSTORE,
-    _T.DSTORE_0,
-    _T.DSTORE_1,
-    _T.DSTORE_2,
-    _T.DSTORE_3,
-    _T.DSTOREW,
-    _T.ASTORE,
-    _T.ASTORE_0,
-    _T.ASTORE_1,
-    _T.ASTORE_2,
-    _T.ASTORE_3,
-    _T.ASTOREW,
-    _T.POP,
-    _T.POP2,
-    _T.DUP,
-    _T.DUP_X1,
-    _T.DUP_X2,
-    _T.DUP2,
-    _T.DUP2_X1,
-    _T.DUP2_X2,
-    _T.SWAP,
-    _T.IADD,
-    _T.ISUB,
-    _T.IMUL,
-    _T.INEG,
-    _T.ISHL,
-    _T.ISHR,
-    _T.IUSHR,
-    _T.IAND,
-    _T.IOR,
-    _T.IXOR,
-    _T.LADD,
-    _T.LSUB,
-    _T.LMUL,
-    _T.LNEG,
-    _T.LSHL,
-    _T.LSHR,
-    _T.LUSHR,
-    _T.LAND,
-    _T.LOR,
-    _T.LXOR,
-    _T.FADD,
-    _T.FSUB,
-    _T.FMUL,
-    _T.FDIV,
-    _T.FREM,
-    _T.FNEG,
-    _T.DADD,
-    _T.DSUB,
-    _T.DMUL,
-    _T.DDIV,
-    _T.DREM,
-    _T.DNEG,
-    _T.I2L,
-    _T.I2F,
-    _T.I2D,
-    _T.L2I,
-    _T.L2F,
-    _T.L2D,
-    _T.F2I,
-    _T.F2L,
-    _T.F2D,
-    _T.D2I,
-    _T.D2L,
-    _T.D2F,
-    _T.I2B,
-    _T.I2C,
-    _T.I2S,
-    _T.LCMP,
-    _T.FCMPL,
-    _T.FCMPG,
-    _T.DCMPL,
-    _T.DCMPG,
-    _T.IFEQ,
-    _T.IFNE,
-    _T.IFLT,
-    _T.IFGE,
-    _T.IFGT,
-    _T.IFLE,
-    _T.IF_ICMPEQ,
-    _T.IF_ICMPNE,
-    _T.IF_ICMPLT,
-    _T.IF_ICMPGE,
-    _T.IF_ICMPGT,
-    _T.IF_ICMPLE,
-    _T.IF_ACMPEQ,
-    _T.IF_ACMPNE,
-    _T.GOTO,
-    _T.GOTO_W,
-    _T.JSR,
-    _T.JSR_W,
-    _T.RET,
-    _T.RETW,
-    _T.IFNULL,
-    _T.IFNONNULL,
-    _T.TABLESWITCH,
-    _T.LOOKUPSWITCH,
-    _T.IRETURN,
-    _T.LRETURN,
-    _T.FRETURN,
-    _T.DRETURN,
-    _T.ARETURN,
-    _T.RETURN,
-    _T.IINC,
-    _T.IINCW,
-    _T.WIDE,
-})
+_NON_THROWING_RAW_OPCODES: frozenset[InsnInfoType] = frozenset(
+    {
+        _T.NOP,
+        _T.ACONST_NULL,
+        _T.ICONST_M1,
+        _T.ICONST_0,
+        _T.ICONST_1,
+        _T.ICONST_2,
+        _T.ICONST_3,
+        _T.ICONST_4,
+        _T.ICONST_5,
+        _T.LCONST_0,
+        _T.LCONST_1,
+        _T.FCONST_0,
+        _T.FCONST_1,
+        _T.FCONST_2,
+        _T.DCONST_0,
+        _T.DCONST_1,
+        _T.BIPUSH,
+        _T.SIPUSH,
+        _T.ILOAD,
+        _T.ILOAD_0,
+        _T.ILOAD_1,
+        _T.ILOAD_2,
+        _T.ILOAD_3,
+        _T.ILOADW,
+        _T.LLOAD,
+        _T.LLOAD_0,
+        _T.LLOAD_1,
+        _T.LLOAD_2,
+        _T.LLOAD_3,
+        _T.LLOADW,
+        _T.FLOAD,
+        _T.FLOAD_0,
+        _T.FLOAD_1,
+        _T.FLOAD_2,
+        _T.FLOAD_3,
+        _T.FLOADW,
+        _T.DLOAD,
+        _T.DLOAD_0,
+        _T.DLOAD_1,
+        _T.DLOAD_2,
+        _T.DLOAD_3,
+        _T.DLOADW,
+        _T.ALOAD,
+        _T.ALOAD_0,
+        _T.ALOAD_1,
+        _T.ALOAD_2,
+        _T.ALOAD_3,
+        _T.ALOADW,
+        _T.ISTORE,
+        _T.ISTORE_0,
+        _T.ISTORE_1,
+        _T.ISTORE_2,
+        _T.ISTORE_3,
+        _T.ISTOREW,
+        _T.LSTORE,
+        _T.LSTORE_0,
+        _T.LSTORE_1,
+        _T.LSTORE_2,
+        _T.LSTORE_3,
+        _T.LSTOREW,
+        _T.FSTORE,
+        _T.FSTORE_0,
+        _T.FSTORE_1,
+        _T.FSTORE_2,
+        _T.FSTORE_3,
+        _T.FSTOREW,
+        _T.DSTORE,
+        _T.DSTORE_0,
+        _T.DSTORE_1,
+        _T.DSTORE_2,
+        _T.DSTORE_3,
+        _T.DSTOREW,
+        _T.ASTORE,
+        _T.ASTORE_0,
+        _T.ASTORE_1,
+        _T.ASTORE_2,
+        _T.ASTORE_3,
+        _T.ASTOREW,
+        _T.POP,
+        _T.POP2,
+        _T.DUP,
+        _T.DUP_X1,
+        _T.DUP_X2,
+        _T.DUP2,
+        _T.DUP2_X1,
+        _T.DUP2_X2,
+        _T.SWAP,
+        _T.IADD,
+        _T.ISUB,
+        _T.IMUL,
+        _T.INEG,
+        _T.ISHL,
+        _T.ISHR,
+        _T.IUSHR,
+        _T.IAND,
+        _T.IOR,
+        _T.IXOR,
+        _T.LADD,
+        _T.LSUB,
+        _T.LMUL,
+        _T.LNEG,
+        _T.LSHL,
+        _T.LSHR,
+        _T.LUSHR,
+        _T.LAND,
+        _T.LOR,
+        _T.LXOR,
+        _T.FADD,
+        _T.FSUB,
+        _T.FMUL,
+        _T.FDIV,
+        _T.FREM,
+        _T.FNEG,
+        _T.DADD,
+        _T.DSUB,
+        _T.DMUL,
+        _T.DDIV,
+        _T.DREM,
+        _T.DNEG,
+        _T.I2L,
+        _T.I2F,
+        _T.I2D,
+        _T.L2I,
+        _T.L2F,
+        _T.L2D,
+        _T.F2I,
+        _T.F2L,
+        _T.F2D,
+        _T.D2I,
+        _T.D2L,
+        _T.D2F,
+        _T.I2B,
+        _T.I2C,
+        _T.I2S,
+        _T.LCMP,
+        _T.FCMPL,
+        _T.FCMPG,
+        _T.DCMPL,
+        _T.DCMPG,
+        _T.IFEQ,
+        _T.IFNE,
+        _T.IFLT,
+        _T.IFGE,
+        _T.IFGT,
+        _T.IFLE,
+        _T.IF_ICMPEQ,
+        _T.IF_ICMPNE,
+        _T.IF_ICMPLT,
+        _T.IF_ICMPGE,
+        _T.IF_ICMPGT,
+        _T.IF_ICMPLE,
+        _T.IF_ACMPEQ,
+        _T.IF_ACMPNE,
+        _T.GOTO,
+        _T.GOTO_W,
+        _T.JSR,
+        _T.JSR_W,
+        _T.RET,
+        _T.RETW,
+        _T.IFNULL,
+        _T.IFNONNULL,
+        _T.TABLESWITCH,
+        _T.LOOKUPSWITCH,
+        _T.IRETURN,
+        _T.LRETURN,
+        _T.FRETURN,
+        _T.DRETURN,
+        _T.ARETURN,
+        _T.RETURN,
+        _T.IINC,
+        _T.IINCW,
+        _T.WIDE,
+    }
+)
 
 
 def _instruction_may_throw(insn: InsnInfo) -> bool:
@@ -1366,12 +1337,7 @@ def _instruction_may_throw(insn: InsnInfo) -> bool:
         return False
     if isinstance(
         insn,
-        FieldInsn
-        | MethodInsn
-        | InterfaceMethodInsn
-        | InvokeDynamicInsn
-        | TypeInsn
-        | MultiANewArrayInsn,
+        FieldInsn | MethodInsn | InterfaceMethodInsn | InvokeDynamicInsn | TypeInsn | MultiANewArrayInsn,
     ):
         return True
     if isinstance(insn, LdcInsn):
@@ -1411,9 +1377,15 @@ _LOAD_TYPE_MAP: dict[InsnInfoType, VType] = {
     _T.ALOAD: _NULL,  # placeholder — actual type comes from the local
 }
 
-_STORE_OPCODES: frozenset[InsnInfoType] = frozenset({
-    _T.ISTORE, _T.LSTORE, _T.FSTORE, _T.DSTORE, _T.ASTORE,
-})
+_STORE_OPCODES: frozenset[InsnInfoType] = frozenset(
+    {
+        _T.ISTORE,
+        _T.LSTORE,
+        _T.FSTORE,
+        _T.DSTORE,
+        _T.ASTORE,
+    }
+)
 
 
 def _simulate_insn(
@@ -1692,8 +1664,7 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
     # --- Constants ---
     if opcode == _T.ACONST_NULL:
         return state.push(_NULL)
-    if opcode in {_T.ICONST_M1, _T.ICONST_0, _T.ICONST_1, _T.ICONST_2,
-                  _T.ICONST_3, _T.ICONST_4, _T.ICONST_5}:
+    if opcode in {_T.ICONST_M1, _T.ICONST_0, _T.ICONST_1, _T.ICONST_2, _T.ICONST_3, _T.ICONST_4, _T.ICONST_5}:
         return state.push(_INTEGER)
     if opcode in {_T.LCONST_0, _T.LCONST_1}:
         return state.push(_LONG)
@@ -1707,8 +1678,7 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
         return state.push(_INTEGER)
 
     # --- Arithmetic (result type by opcode prefix) ---
-    if opcode in {_T.IADD, _T.ISUB, _T.IMUL, _T.IDIV, _T.IREM,
-                  _T.ISHL, _T.ISHR, _T.IUSHR, _T.IAND, _T.IOR, _T.IXOR}:
+    if opcode in {_T.IADD, _T.ISUB, _T.IMUL, _T.IDIV, _T.IREM, _T.ISHL, _T.ISHR, _T.IUSHR, _T.IAND, _T.IOR, _T.IXOR}:
         state, _ = state.pop(2)
         return state.push(_INTEGER)
     if opcode == _T.INEG:
@@ -1881,6 +1851,7 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
     if opcode == _T.NEWARRAY:
         state, _ = state.pop(1)  # pop count
         from .instructions import NewArray as NewArrayInsn
+
         if isinstance(insn, NewArrayInsn):
             array_desc = _NEWARRAY_TYPE_MAP.get(insn.atype, "[I")
             return state.push(VObject(array_desc))
@@ -1900,43 +1871,33 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
 
     # --- Raw load/store opcodes (when not lifted to VarInsn) ---
     # These shouldn't appear in editing model code, but handle gracefully.
-    if opcode in {_T.ILOAD, _T.ILOAD_0, _T.ILOAD_1, _T.ILOAD_2, _T.ILOAD_3,
-                  _T.ILOADW}:
+    if opcode in {_T.ILOAD, _T.ILOAD_0, _T.ILOAD_1, _T.ILOAD_2, _T.ILOAD_3, _T.ILOADW}:
         return state.push(_INTEGER)
-    if opcode in {_T.LLOAD, _T.LLOAD_0, _T.LLOAD_1, _T.LLOAD_2, _T.LLOAD_3,
-                  _T.LLOADW}:
+    if opcode in {_T.LLOAD, _T.LLOAD_0, _T.LLOAD_1, _T.LLOAD_2, _T.LLOAD_3, _T.LLOADW}:
         return state.push(_LONG)
-    if opcode in {_T.FLOAD, _T.FLOAD_0, _T.FLOAD_1, _T.FLOAD_2, _T.FLOAD_3,
-                  _T.FLOADW}:
+    if opcode in {_T.FLOAD, _T.FLOAD_0, _T.FLOAD_1, _T.FLOAD_2, _T.FLOAD_3, _T.FLOADW}:
         return state.push(_FLOAT)
-    if opcode in {_T.DLOAD, _T.DLOAD_0, _T.DLOAD_1, _T.DLOAD_2, _T.DLOAD_3,
-                  _T.DLOADW}:
+    if opcode in {_T.DLOAD, _T.DLOAD_0, _T.DLOAD_1, _T.DLOAD_2, _T.DLOAD_3, _T.DLOADW}:
         return state.push(_DOUBLE)
-    if opcode in {_T.ALOAD, _T.ALOAD_0, _T.ALOAD_1, _T.ALOAD_2, _T.ALOAD_3,
-                  _T.ALOADW}:
+    if opcode in {_T.ALOAD, _T.ALOAD_0, _T.ALOAD_1, _T.ALOAD_2, _T.ALOAD_3, _T.ALOADW}:
         return state.push(_OBJECT_OBJECT)
-    if opcode in {_T.ISTORE, _T.ISTORE_0, _T.ISTORE_1, _T.ISTORE_2, _T.ISTORE_3,
-                  _T.ISTOREW}:
+    if opcode in {_T.ISTORE, _T.ISTORE_0, _T.ISTORE_1, _T.ISTORE_2, _T.ISTORE_3, _T.ISTOREW}:
         state, _ = state.pop(1)
 
         return state
-    if opcode in {_T.LSTORE, _T.LSTORE_0, _T.LSTORE_1, _T.LSTORE_2, _T.LSTORE_3,
-                  _T.LSTOREW}:
+    if opcode in {_T.LSTORE, _T.LSTORE_0, _T.LSTORE_1, _T.LSTORE_2, _T.LSTORE_3, _T.LSTOREW}:
         state, _ = state.pop(2)
 
         return state
-    if opcode in {_T.FSTORE, _T.FSTORE_0, _T.FSTORE_1, _T.FSTORE_2, _T.FSTORE_3,
-                  _T.FSTOREW}:
+    if opcode in {_T.FSTORE, _T.FSTORE_0, _T.FSTORE_1, _T.FSTORE_2, _T.FSTORE_3, _T.FSTOREW}:
         state, _ = state.pop(1)
 
         return state
-    if opcode in {_T.DSTORE, _T.DSTORE_0, _T.DSTORE_1, _T.DSTORE_2, _T.DSTORE_3,
-                  _T.DSTOREW}:
+    if opcode in {_T.DSTORE, _T.DSTORE_0, _T.DSTORE_1, _T.DSTORE_2, _T.DSTORE_3, _T.DSTOREW}:
         state, _ = state.pop(2)
 
         return state
-    if opcode in {_T.ASTORE, _T.ASTORE_0, _T.ASTORE_1, _T.ASTORE_2, _T.ASTORE_3,
-                  _T.ASTOREW}:
+    if opcode in {_T.ASTORE, _T.ASTORE_0, _T.ASTORE_1, _T.ASTORE_2, _T.ASTORE_3, _T.ASTOREW}:
         state, _ = state.pop(1)
 
         return state
@@ -2128,18 +2089,18 @@ def _select_frame(
         diff = len(curr_locals) - len(prev_locals)
 
         # chop_frame: 1–3 fewer locals
-        if -3 <= diff < 0 and curr_locals == prev_locals[:len(curr_locals)]:
+        if -3 <= diff < 0 and curr_locals == prev_locals[: len(curr_locals)]:
             return ChopFrameInfo(
                 frame_type=251 + diff,  # 248, 249, or 250
                 offset_delta=offset_delta,
             )
 
         # append_frame: 1–3 more locals
-        if 0 < diff <= 3 and curr_locals[:len(prev_locals)] == prev_locals:
+        if 0 < diff <= 3 and curr_locals[: len(prev_locals)] == prev_locals:
             return AppendFrameInfo(
                 frame_type=251 + diff,  # 252, 253, or 254
                 offset_delta=offset_delta,
-                locals=list(curr_locals[len(prev_locals):]),
+                locals=list(curr_locals[len(prev_locals) :]),
             )
 
     # full_frame

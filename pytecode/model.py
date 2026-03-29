@@ -31,6 +31,7 @@ from .constant_pool import (
 )
 from .constant_pool_builder import ConstantPoolBuilder
 from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from .debug_info import DebugInfoPolicy, normalize_debug_info_policy, strip_class_debug_attributes
 from .info import ClassFile, FieldInfo, MethodInfo
 from .instructions import (
     Branch,
@@ -228,6 +229,7 @@ class ClassModel:
         *,
         recompute_frames: bool = False,
         resolver: ClassResolver | None = None,
+        debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
     ) -> ClassFile:
         """Lower this model back to a spec-faithful ``ClassFile``.
 
@@ -237,8 +239,11 @@ class ClassModel:
 
         When *recompute_frames* is ``True``, ``max_stack``, ``max_locals``,
         and ``StackMapTable`` are recomputed for every method that has code.
+        ``debug_info`` controls whether lifted code-debug tables and class-level
+        source-debug attributes are preserved or stripped during lowering.
         """
         cp = self.constant_pool
+        debug_policy = normalize_debug_info_policy(debug_info)
 
         # Allocate class-level CP entries.
         this_class_index = cp.add_class(self.name)
@@ -251,15 +256,20 @@ class ClassModel:
         # Lower methods.
         raw_methods = [
             _method_to_info(
-                mm, cp,
+                mm,
+                cp,
                 class_name=self.name,
                 recompute_frames=recompute_frames,
                 resolver=resolver,
+                debug_info=debug_policy,
             )
             for mm in self.methods
         ]
 
         pool = cp.build()
+        class_attributes = self.attributes
+        if debug_policy is DebugInfoPolicy.STRIP:
+            class_attributes = strip_class_debug_attributes(class_attributes)
 
         return ClassFile(
             magic=MAGIC,
@@ -276,8 +286,8 @@ class ClassModel:
             fields=raw_fields,
             methods_count=len(raw_methods),
             methods=raw_methods,
-            attributes_count=len(self.attributes),
-            attributes=copy.deepcopy(self.attributes),
+            attributes_count=len(class_attributes),
+            attributes=copy.deepcopy(class_attributes),
         )
 
     def to_bytes(
@@ -285,9 +295,16 @@ class ClassModel:
         *,
         recompute_frames: bool = False,
         resolver: ClassResolver | None = None,
+        debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
     ) -> bytes:
         """Lower this model and serialize the resulting ``ClassFile`` to bytes."""
-        return ClassWriter.write(self.to_classfile(recompute_frames=recompute_frames, resolver=resolver))
+        return ClassWriter.write(
+            self.to_classfile(
+                recompute_frames=recompute_frames,
+                resolver=resolver,
+                debug_info=debug_info,
+            )
+        )
 
 
 # ------------------------------------------------------------------
@@ -340,16 +357,19 @@ def _method_to_info(
     class_name: str | None = None,
     recompute_frames: bool = False,
     resolver: ClassResolver | None = None,
+    debug_info: DebugInfoPolicy = DebugInfoPolicy.PRESERVE,
 ) -> MethodInfo:
     attrs: list[AttributeInfo] = copy.deepcopy(mm.attributes)
 
     if mm.code is not None:
         code_attr = lower_code(
-            mm.code, cp,
+            mm.code,
+            cp,
             method=mm if recompute_frames else None,
             class_name=class_name if recompute_frames else None,
             resolver=resolver,
             recompute_frames=recompute_frames,
+            debug_info=debug_info,
         )
         attrs.insert(0, code_attr)
 

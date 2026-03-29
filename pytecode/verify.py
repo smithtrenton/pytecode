@@ -295,11 +295,7 @@ def _check_class_flags(flags: ClassAccessFlag, loc: Location, dc: _Collector) ->
                 loc,
             )
 
-    if (
-        ClassAccessFlag.FINAL in flags
-        and ClassAccessFlag.ABSTRACT in flags
-        and ClassAccessFlag.INTERFACE not in flags
-    ):
+    if ClassAccessFlag.FINAL in flags and ClassAccessFlag.ABSTRACT in flags and ClassAccessFlag.INTERFACE not in flags:
         dc.add(Severity.ERROR, Category.ACCESS_FLAGS, "Class cannot be both FINAL and ABSTRACT", loc)
 
 
@@ -312,9 +308,7 @@ def _check_method_flags(
     dc: _Collector,
 ) -> None:
     vis_count = sum(
-        1
-        for f in (MethodAccessFlag.PUBLIC, MethodAccessFlag.PRIVATE, MethodAccessFlag.PROTECTED)
-        if f in flags
+        1 for f in (MethodAccessFlag.PUBLIC, MethodAccessFlag.PRIVATE, MethodAccessFlag.PROTECTED) if f in flags
     )
     if vis_count > 1:
         dc.add(Severity.ERROR, Category.ACCESS_FLAGS, f"Method {name!r} has multiple visibility modifiers", loc)
@@ -378,9 +372,7 @@ def _check_field_flags(
     dc: _Collector,
 ) -> None:
     vis_count = sum(
-        1
-        for f in (FieldAccessFlag.PUBLIC, FieldAccessFlag.PRIVATE, FieldAccessFlag.PROTECTED)
-        if f in flags
+        1 for f in (FieldAccessFlag.PUBLIC, FieldAccessFlag.PRIVATE, FieldAccessFlag.PROTECTED) if f in flags
     )
     if vis_count > 1:
         dc.add(Severity.ERROR, Category.ACCESS_FLAGS, f"Field {name!r} has multiple visibility modifiers", loc)
@@ -397,9 +389,7 @@ def _check_field_flags(
 # ── Shared attribute version checking ─────────────────────────────────
 
 
-def _verify_attr_versions(
-    attrs: list[AttributeInfo], major: int, loc: Location, dc: _Collector
-) -> None:
+def _verify_attr_versions(attrs: list[AttributeInfo], major: int, loc: Location, dc: _Collector) -> None:
     """Check that attributes satisfy their minimum version requirements."""
     for attr in attrs:
         attr_type = type(attr)
@@ -455,9 +445,7 @@ def _verify_constant_pool(cf: ClassFile, dc: _Collector, class_name: str | None)
             Location(class_name=class_name),
         )
 
-    def _check_ref(
-        index: int, expected: type | tuple[type, ...], entry_idx: int, ref_field: str
-    ) -> None:
+    def _check_ref(index: int, expected: type | tuple[type, ...], entry_idx: int, ref_field: str) -> None:
         loc = Location(class_name=class_name, cp_index=entry_idx)
         target = _cp_entry(cp, index)
         if target is None:
@@ -797,13 +785,9 @@ def _verify_method(
 
 # ── Code attribute verification ───────────────────────────────────────
 
-_FIELD_OPS = frozenset(
-    {InsnInfoType.GETFIELD, InsnInfoType.PUTFIELD, InsnInfoType.GETSTATIC, InsnInfoType.PUTSTATIC}
-)
+_FIELD_OPS = frozenset({InsnInfoType.GETFIELD, InsnInfoType.PUTFIELD, InsnInfoType.GETSTATIC, InsnInfoType.PUTSTATIC})
 _METHOD_OPS = frozenset({InsnInfoType.INVOKEVIRTUAL, InsnInfoType.INVOKESPECIAL, InsnInfoType.INVOKESTATIC})
-_CLASS_OPS = frozenset(
-    {InsnInfoType.NEW, InsnInfoType.CHECKCAST, InsnInfoType.INSTANCEOF, InsnInfoType.ANEWARRAY}
-)
+_CLASS_OPS = frozenset({InsnInfoType.NEW, InsnInfoType.CHECKCAST, InsnInfoType.INSTANCEOF, InsnInfoType.ANEWARRAY})
 
 
 def _verify_code(
@@ -1074,9 +1058,7 @@ def _verify_code_cp_refs(
                 )
 
 
-def _verify_ldc_entry(
-    entry: ConstantPoolInfo, idx: int, major: int, loc: Location, dc: _Collector
-) -> None:
+def _verify_ldc_entry(entry: ConstantPoolInfo, idx: int, major: int, loc: Location, dc: _Collector) -> None:
     """Validate that an LDC/LDC_W entry is a valid loadable type."""
     if isinstance(entry, (IntegerInfo, FloatInfo, StringInfo)):
         return

@@ -17,6 +17,7 @@ from .attributes import (
 )
 from .constant_pool import ClassInfo
 from .constant_pool_builder import ConstantPoolBuilder
+from .debug_info import DebugInfoPolicy, normalize_debug_info_policy
 from .descriptors import parameter_slot_count, parse_method_descriptor
 from .instructions import (
     Branch,
@@ -723,6 +724,7 @@ def _lower_resolved_code(
     items: list[CodeItem],
     resolution: LabelResolution,
     cp: ConstantPoolBuilder,
+    keep_debug_info: bool,
 ) -> CodeAttr:
     lowered_code = [
         lowered
@@ -731,11 +733,23 @@ def _lower_resolved_code(
     ]
     exception_table = _lower_exception_handlers(code.exception_handlers, resolution.label_offsets, cp)
 
+    line_number_attr = None
+    local_variable_attr = None
+    local_variable_type_attr = None
+    if keep_debug_info:
+        line_number_attr = _build_line_number_attribute(code.line_numbers, resolution.label_offsets, cp)
+        local_variable_attr = _build_local_variable_attribute(code.local_variables, resolution.label_offsets, cp)
+        local_variable_type_attr = _build_local_variable_type_attribute(
+            code.local_variable_types,
+            resolution.label_offsets,
+            cp,
+        )
+
     attributes = _ordered_nested_code_attributes(
         code,
-        _build_line_number_attribute(code.line_numbers, resolution.label_offsets, cp),
-        _build_local_variable_attribute(code.local_variables, resolution.label_offsets, cp),
-        _build_local_variable_type_attribute(code.local_variable_types, resolution.label_offsets, cp),
+        line_number_attr,
+        local_variable_attr,
+        local_variable_type_attr,
     )
 
     return CodeAttr(
@@ -764,6 +778,7 @@ def lower_code(
     class_name: str | None = None,
     resolver: ClassResolver | None = None,
     recompute_frames: bool = False,
+    debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
 ) -> CodeAttr:
     """Lower a label-based ``CodeModel`` into a raw ``CodeAttr``.
 
@@ -771,11 +786,15 @@ def lower_code(
     runs automatically: ``max_stack`` and ``max_locals`` are recomputed
     via stack simulation, and a fresh ``StackMapTable`` attribute is
     generated and attached to the returned ``CodeAttr``.  This requires
-    *method* and *class_name* to be provided.
+    *method* and *class_name* to be provided. ``debug_info`` controls
+    whether lifted LineNumberTable/LocalVariableTable/LocalVariableTypeTable
+    entries are preserved or stripped during lowering.
     """
     if recompute_frames and (method is None or class_name is None):
         raise ValueError("method and class_name are required when recompute_frames=True")
 
+    debug_policy = normalize_debug_info_policy(debug_info)
+    keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE
     items = [_clone_code_item(item) for item in code.instructions]
 
     while True:
@@ -789,8 +808,8 @@ def lower_code(
     if resolution.total_code_length > 65535:
         raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
 
-    _lower_resolved_code(code, items, resolution, _clone_constant_pool_builder(cp))
-    result = _lower_resolved_code(code, items, resolution, cp)
+    _lower_resolved_code(code, items, resolution, _clone_constant_pool_builder(cp), keep_debug_info)
+    result = _lower_resolved_code(code, items, resolution, cp, keep_debug_info)
 
     if recompute_frames:
         assert method is not None and class_name is not None
@@ -798,7 +817,12 @@ def lower_code(
         from .attributes import StackMapTableAttr
 
         frame_result = compute_frames(
-            code, method, class_name, cp, resolution.label_offsets, resolver,
+            code,
+            method,
+            class_name,
+            cp,
+            resolution.label_offsets,
+            resolver,
         )
         result.max_stacks = frame_result.max_stack
         result.max_locals = frame_result.max_locals
@@ -806,9 +830,7 @@ def lower_code(
             (i for i, attr in enumerate(result.attributes) if isinstance(attr, StackMapTableAttr)),
             len(result.attributes),
         )
-        result.attributes = [
-            attr for attr in result.attributes if not isinstance(attr, StackMapTableAttr)
-        ]
+        result.attributes = [attr for attr in result.attributes if not isinstance(attr, StackMapTableAttr)]
         if frame_result.stack_map_table is not None:
             insert_at = min(stack_map_index, len(result.attributes))
             result.attributes.insert(insert_at, frame_result.stack_map_table)

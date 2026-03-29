@@ -892,8 +892,10 @@ class TestMethods:
     def test_multiple_exceptions_attributes(self) -> None:
         cp = _base_cp() + [_utf8(5, "foo"), _utf8(6, "()V")]
         exc = ExceptionsAttr(
-            attribute_name_index=0, attribute_length=0,
-            number_of_exceptions=0, exception_index_table=[],
+            attribute_name_index=0,
+            attribute_length=0,
+            number_of_exceptions=0,
+            exception_index_table=[],
         )
         cf = _make_classfile(
             constant_pool=cp,
@@ -983,8 +985,7 @@ class TestCode:
         )
         diags = verify_classfile(cf)
         code_errs = [
-            e for e in _by_cat(diags, Category.CODE)
-            if "Branch" in e.message and "invalid offset" in e.message
+            e for e in _by_cat(diags, Category.CODE) if "Branch" in e.message and "invalid offset" in e.message
         ]
         assert len(code_errs) == 0
 
@@ -1233,23 +1234,31 @@ class TestAttributeVersioning:
         attr: AttributeInfo
         if attr_cls is StackMapTableAttr:
             attr = StackMapTableAttr(
-                attribute_name_index=0, attribute_length=0,
-                number_of_entries=0, entries=[],
+                attribute_name_index=0,
+                attribute_length=0,
+                number_of_entries=0,
+                entries=[],
             )
         elif attr_cls is BootstrapMethodsAttr:
             attr = BootstrapMethodsAttr(
-                attribute_name_index=0, attribute_length=0,
-                num_bootstrap_methods=0, bootstrap_methods=[],
+                attribute_name_index=0,
+                attribute_length=0,
+                num_bootstrap_methods=0,
+                bootstrap_methods=[],
             )
         elif attr_cls is MethodParametersAttr:
             attr = MethodParametersAttr(
-                attribute_name_index=0, attribute_length=0,
-                parameters_count=0, parameters=[],
+                attribute_name_index=0,
+                attribute_length=0,
+                parameters_count=0,
+                parameters=[],
             )
         elif attr_cls is RuntimeVisibleTypeAnnotationsAttr:
             attr = RuntimeVisibleTypeAnnotationsAttr(
-                attribute_name_index=0, attribute_length=0,
-                num_annotations=0, annotations=[],
+                attribute_name_index=0,
+                attribute_length=0,
+                num_annotations=0,
+                annotations=[],
             )
         elif attr_cls is ModuleAttr:
             from pytecode.constants import ModuleAccessFlag

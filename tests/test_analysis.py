@@ -406,12 +406,12 @@ class TestInitialFrame:
         fs = initial_frame(method, "MyClass")
         assert fs.locals == (
             VObject("MyClass"),  # this
-            VInteger(),          # int
-            VLong(),             # long (slot 2)
-            VTop(),              # long high word (slot 3)
+            VInteger(),  # int
+            VLong(),  # long (slot 2)
+            VTop(),  # long high word (slot 3)
             VObject("java/lang/String"),  # String (slot 4)
-            VDouble(),           # double (slot 5)
-            VTop(),              # double high word (slot 6)
+            VDouble(),  # double (slot 5)
+            VTop(),  # double high word (slot 6)
         )
 
 
@@ -617,11 +617,7 @@ class TestBuildCfgLoop:
         # There should be a block that has l_top as a successor (backedge).
         top_block = cfg.label_to_block.get(l_top)
         assert top_block is not None
-        has_backedge = any(
-            top_block.id in b.successor_ids
-            for b in cfg.blocks
-            if b.id != top_block.id
-        )
+        has_backedge = any(top_block.id in b.successor_ids for b in cfg.blocks if b.id != top_block.id)
         assert has_backedge
 
 
@@ -1306,9 +1302,7 @@ class TestCfgFixtureIntegration:
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
             cfg,
-            (
-                ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),
-            ),
+            (ExpectedCfgBlock(InsnInfoType.IRETURN, frozenset()),),
         )
 
     def test_empty_method_single_block(self, cfg_model: ClassModel) -> None:
@@ -1317,9 +1311,7 @@ class TestCfgFixtureIntegration:
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
             cfg,
-            (
-                ExpectedCfgBlock(InsnInfoType.RETURN, frozenset()),
-            ),
+            (ExpectedCfgBlock(InsnInfoType.RETURN, frozenset()),),
         )
 
     def test_if_else_has_branch(self, cfg_model: ClassModel) -> None:
@@ -1528,9 +1520,7 @@ class TestCfgFixtureIntegration:
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
             cfg,
-            (
-                ExpectedCfgBlock(InsnInfoType.ATHROW, frozenset()),
-            ),
+            (ExpectedCfgBlock(InsnInfoType.ATHROW, frozenset()),),
         )
 
 
@@ -1543,9 +1533,7 @@ class TestSimulationFixtureIntegration:
                 return m
         raise AssertionError(f"Method {name!r} not found")
 
-    def _simulate_method(
-        self, model: ClassModel, method_name: str
-    ) -> SimulationResult:
+    def _simulate_method(self, model: ClassModel, method_name: str) -> SimulationResult:
         method = self._find_method(model, method_name)
         assert method.code is not None
         cfg = build_cfg(method.code)
@@ -2057,7 +2045,6 @@ class TestComputeMaxs:
 # ===================================================================
 
 
-
 class TestComputeFrames:
     """Tests for ``compute_frames`` — StackMapTable generation."""
 
@@ -2329,7 +2316,8 @@ class TestLowerCodeRecomputeFrames:
         )
         method = _static_method(descriptor="()I", code=code)
         result = lower_code(
-            code, cp,
+            code,
+            cp,
             method=method,
             class_name="Test",
             recompute_frames=True,
@@ -2355,7 +2343,8 @@ class TestLowerCodeRecomputeFrames:
         )
         method = _static_method(descriptor="()I", code=code)
         result = lower_code(
-            code, cp,
+            code,
+            cp,
             method=method,
             class_name="Test",
             recompute_frames=True,
@@ -2386,7 +2375,8 @@ class TestLowerCodeRecomputeFrames:
         )
         method = _static_method(descriptor="()V", code=code)
         result = lower_code(
-            code, cp,
+            code,
+            cp,
             method=method,
             class_name="Test",
             recompute_frames=True,
@@ -2454,7 +2444,11 @@ class TestComputeFramesWithFixtures:
             items = list(mm.code.instructions)
             resolution = resolve_labels(items, cp)
             result = compute_frames(
-                mm.code, mm, model.name, cp, resolution.label_offsets,
+                mm.code,
+                mm,
+                model.name,
+                cp,
+                resolution.label_offsets,
             )
             assert result.max_stack >= 0
             assert result.max_locals >= 0
@@ -2474,7 +2468,11 @@ class TestComputeFramesWithFixtures:
             items = list(mm.code.instructions)
             resolution = resolve_labels(items, cp)
             result = compute_frames(
-                mm.code, mm, model.name, cp, resolution.label_offsets,
+                mm.code,
+                mm,
+                model.name,
+                cp,
+                resolution.label_offsets,
             )
             assert result.max_stack >= 0
             assert result.max_locals >= 0

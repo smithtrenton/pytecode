@@ -97,9 +97,11 @@ The manipulation API uses Design A (direct mutable dataclasses) as the primary e
 
 See [editing model design rationale](../design/editing-model.md) for the full comparative analysis.
 
-#### 12. Debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13))
+#### 12. Debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13) — preserve/strip policies landed)
 
-Mutation invalidates LineNumberTable, LocalVariableTable, and LocalVariableTypeTable entries because they reference bytecode offsets. The library should provide utilities to rebind debug info after transformation, strip it cleanly, or preserve it through label-based indirection.
+The label-based editing model already preserved debug metadata through instruction edits by rebinding `LineNumberTable`, `LocalVariableTable`, and `LocalVariableTypeTable` entries to labels instead of raw offsets. That foundation is now complemented by explicit debug-info policy helpers in `pytecode.debug_info` plus `debug_info=` lowering controls on `lower_code()`, `ClassModel.to_classfile()`, and `ClassModel.to_bytes()`. Users can therefore keep debug info by default or strip it deliberately during mutation/emission without hand-editing nested attributes.
+
+What remains future work is a richer first-class stale-state model for debug metadata when preserve-or-strip is not expressive enough. That follow-up is tracked separately in [#18](https://github.com/smithtrenton/pytecode/issues/18).
 
 #### 13. JSR/RET legacy support
 
@@ -121,6 +123,6 @@ The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Jav
 12. ~~Implement max stack, max locals, and stack map frame recomputation.~~ ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done)
 13. ~~Implement validation with structured diagnostics and version-aware rules.~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 14. ~~Add classfile emission with deterministic constant-pool layout.~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
-15. Broaden debug info management beyond label rebinding. ([#13](https://github.com/smithtrenton/pytecode/issues/13) — partially addressed)
+15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13) — done; explicit stale-state modeling moved to [#18](https://github.com/smithtrenton/pytecode/issues/18))
 16. Add round-trip and verifier-focused regression coverage. ([#14](https://github.com/smithtrenton/pytecode/issues/14) — Tier 1 landed; broader tiers pending)
 17. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))

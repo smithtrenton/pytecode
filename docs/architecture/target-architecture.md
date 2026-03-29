@@ -140,12 +140,11 @@ Responsibilities:
 
 This is not strictly required for a classfile library, but it follows naturally from the existing `JarFile` support and would make the project more useful in practice.
 
-## Cross-cutting concern: debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13))
+## Cross-cutting concern: debug info management ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 
-Mutation invalidates debug attributes (LineNumberTable, LocalVariableTable, LocalVariableTypeTable) because they bind to bytecode offsets. The editing model should either:
+Mutation invalidates debug attributes (LineNumberTable, LocalVariableTable, LocalVariableTypeTable) because they bind to bytecode offsets. The current editing model already covers two practical policies:
 
 - rebind debug info to labels so it survives instruction edits automatically
-- explicitly mark debug info as stale after mutation and provide helpers to update or strip it
-- provide a "strip debug info" utility for users who do not need it
+- provide explicit preserve/strip helpers so callers can omit debug metadata deliberately
 
-Without this, mutated classes will produce confusing stack traces and debugger behavior.
+The remaining open design question is whether debug metadata should also gain a first-class stale state after mutation. Without a clear policy here, mutated classes can still produce confusing stack traces and debugger behavior when preserved debug tables are no longer semantically fresh.

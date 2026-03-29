@@ -37,6 +37,6 @@ A four-tier bytecode validation framework now sits on top of the implemented `Cl
 
 The remaining work is centered on broader validation and mutation workflows now that emission, validation, and frame recomputation are in place. The roadmap continues with:
 
-- broader debug info management during mutation ([#13](https://github.com/smithtrenton/pytecode/issues/13))
+- optional first-class stale-state modeling for debug metadata beyond the landed preserve/strip policies ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 - broader round-trip and JVM compatibility testing beyond the landed Tier 1 suite ([#14](https://github.com/smithtrenton/pytecode/issues/14))
 - composable transform pipelines (Phase 2 of [#6](https://github.com/smithtrenton/pytecode/issues/6))

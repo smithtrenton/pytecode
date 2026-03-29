@@ -180,9 +180,7 @@ def normalize_to_blocks(oracle: OracleMethodCfg) -> NormalizedCfg:
 
     normalized_blocks: list[NormalizedBlock] = []
     for start, end in block_ranges:
-        normal_successors = frozenset(
-            block_start_by_insn[to_insn] for to_insn in outgoing_normal_edges.get(end, [])
-        )
+        normal_successors = frozenset(block_start_by_insn[to_insn] for to_insn in outgoing_normal_edges.get(end, []))
         exception_handlers = frozenset(
             (
                 block_start_by_insn[handler_insn],
@@ -216,9 +214,7 @@ def normalize_pytecode_cfg(cfg: ControlFlowGraph) -> NormalizedCfg:
     instruction_index_by_identity = {
         id(instruction): index
         for index, instruction in enumerate(
-            instruction
-            for block in non_empty_blocks
-            for instruction in block.instructions
+            instruction for block in non_empty_blocks for instruction in block.instructions
         )
     }
     block_by_id = {block.id: block for block in non_empty_blocks}
@@ -269,8 +265,7 @@ def compare_cfgs(pytecode_cfg: NormalizedCfg, oracle_cfg: NormalizedCfg) -> list
 
     if len(pytecode_cfg.blocks) != len(oracle_cfg.blocks):
         differences.append(
-            "block count mismatch: "
-            f"pytecode has {len(pytecode_cfg.blocks)}, oracle has {len(oracle_cfg.blocks)}"
+            f"block count mismatch: pytecode has {len(pytecode_cfg.blocks)}, oracle has {len(oracle_cfg.blocks)}"
         )
 
     pytecode_blocks = {block.first_insn_index: block for block in pytecode_cfg.blocks}
