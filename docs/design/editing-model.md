@@ -62,11 +62,12 @@ pytecode's parsed output is a tree of `@dataclass` objects (`ClassFile`, `FieldI
 
 ## Recommendation and phased approach
 
-Given pytecode's characteristics — Python-first audience, existing tree-based read model, interactive/scripting primary use case, small team, and a roadmap full of other features — **Design A (Mutable Dataclasses) is the strongest starting point**, with the tree model designed so that pass composition (Design D) layers on naturally, and a visitor layer (Design E) can be added later if streaming becomes necessary.
+Given pytecode's characteristics — Python-first audience, existing tree-based read model, interactive/scripting primary use case, small team, and a roadmap full of other features — **Design A (Mutable Dataclasses) is the strongest starting point**, with the tree model designed so that pass composition (Design D) layers on naturally. That minimal Phase 2 composition layer has now landed via `pytecode.transforms`, while a visitor layer (Design E) remains deferred until streaming becomes necessary.
 
 - **Phase 1 (done)**: `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` as mutable dataclasses with symbolic references, `ConstantPoolBuilder`, label-based instruction editing, and symbolic operand wrappers.
-- **Phase 2**: Pass-style composition helpers (`Pipeline`, `Pass` protocol). Model transforms as `(builder, element) → None` functions with transform lifting (inspired by the JDK Class-File API, JEP 457). Add matcher-based selection predicates (inspired by Byte Buddy). Consider instruction pattern matching (inspired by ProGuardCORE).
-- **Phase 3 (if needed)**: Streaming visitor layer. The JDK Class-File API shows that streaming and tree can share the same element vocabulary, reducing the "two API" burden.
+- **Phase 2 (done)**: Minimal pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, and basic selector/combinator helpers for common name/descriptor/access/code predicates. The first cut intentionally stays small and keeps transforms as ordinary in-place `ClassModel` callables so they plug directly into existing lowering and `JarFile.rewrite()` flows.
+- **Future follow-up**: A richer matcher DSL and declarative instruction-pattern layer ([#20](https://github.com/smithtrenton/pytecode/issues/20)) can still be added on top of the current predicate helpers if usage justifies the extra API surface.
+- **Phase 3 (if needed)**: Streaming visitor layer ([#21](https://github.com/smithtrenton/pytecode/issues/21)). The JDK Class-File API shows that streaming and tree can share the same element vocabulary, reducing the "two API" burden.
 
 ## Survey of other bytecode libraries
 
@@ -88,10 +89,10 @@ A broader survey of JVM bytecode manipulation libraries identified additional de
 | Pattern | Source | Applicable? | Phase |
 |---------|--------|:-----------:|-------|
 | Source-level abstraction | Javassist | ✗ (requires Java compiler) | — |
-| Fluent declarative DSL / matchers | Byte Buddy | Partially | Phase 2 |
+| Fluent declarative DSL / matchers | Byte Buddy | Partially | Future follow-up |
 | IR lifting | Soot/SootUp | ✗ (massive scope) | — |
 | Patch-based editing | WALA Shrike | ✓ (alternative to mutable InstructionList) | Phase 1–2 |
 | Immutable element + transform lifting | JDK Class-File API | ✓ (informs Phase 2 transform design) | Phase 2 |
-| Instruction pattern matching | ProGuardCORE | ✓ (declarative find-and-replace) | Phase 2+ |
+| Instruction pattern matching | ProGuardCORE | ✓ (declarative find-and-replace) | Future follow-up |
 
 None of the surveyed designs displace Design A as the Phase 1 choice. Every library surveyed either uses a mutable tree internally (Javassist, CafeDude, BCEL), builds on a visitor/tree substrate (Byte Buddy, ProGuardCORE), or uses an IR that is a different kind of tree (Soot). The mutable tree is the universal substrate.

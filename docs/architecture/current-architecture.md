@@ -35,6 +35,8 @@ The codebase is currently organized as a parser/lowering/emission pipeline with 
 
 These are the current public exports in `pytecode.__init__`.
 
+Advanced transform-composition helpers intentionally live in `pytecode.transforms` rather than `pytecode.__init__`, keeping the top-level API small while still exposing a supported submodule for pipelines, lifting helpers, and selectors.
+
 ## Module responsibilities
 
 ### `pytecode\bytes_utils.py`
@@ -159,6 +161,17 @@ Mutable editing model for safe classfile manipulation. This module provides the 
 
 For the design rationale behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
+### `pytecode\transforms.py`
+
+Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the minimal Phase 2 transform surface without introducing a second object model:
+
+- **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes
+- **`Pipeline` / `pipeline()`** — deterministic class-transform composition; pipelines are themselves callable so they slot directly into `JarFile.rewrite(transform=...)`
+- **Lifting helpers** — `on_classes()`, `on_fields()`, `on_methods()`, and `on_code()` adapt lower-level transforms onto `ClassModel` traversal while preserving in-place ownership boundaries
+- **Selection helpers** — `class_named()`, `field_named()`, `method_named()`, `class_access()`, `field_access()`, `method_access()`, `field_descriptor()`, `method_descriptor()`, `has_code()`, plus predicate combinators `all_of()`, `any_of()`, and `not_()`
+
+Traversal of fields and methods uses collection snapshots so transforms can mutate `ClassModel.fields` / `ClassModel.methods` without changing which original elements are visited during the current pass.
+
 ### `pytecode\hierarchy.py`
 
 Hierarchy-resolution helpers introduced for issue [#8](https://github.com/smithtrenton/pytecode/issues/8). This module provides:
@@ -237,7 +250,7 @@ Issue [#17](https://github.com/smithtrenton/pytecode/issues/17) added a JVM-back
 
 ### `pytecode\jar.py`
 
-JAR container support. This module now covers archive reading, class/non-class separation, in-memory entry mutation, and safe rewrite-to-disk behavior. `JarFile.add_file()` and `remove_file()` update the in-memory archive state, while `JarFile.rewrite()` can either copy entries verbatim or lift `.class` entries through `ClassModel` for in-place transforms before writing a temporary archive and replacing the destination. Signature-related files are preserved as ordinary resources and are not re-signed automatically.
+JAR container support. This module now covers archive reading, class/non-class separation, in-memory entry mutation, and safe rewrite-to-disk behavior. `JarFile.add_file()` and `remove_file()` update the in-memory archive state, while `JarFile.rewrite()` can either copy entries verbatim or lift `.class` entries through `ClassModel` for in-place transforms before writing a temporary archive and replacing the destination. The `transform=` parameter accepts any supported class transform, including callable `Pipeline` objects from `pytecode.transforms`. Signature-related files are preserved as ordinary resources and are not re-signed automatically.
 
 ### `run.py`
 
@@ -291,7 +304,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - Most parser behavior lives in one large module (`class_reader.py`), so parsing remains a maintenance hotspot even though emission now lives in `class_writer.py`
 - The editing model now uses labels for control flow, exception ranges, and debug scopes, and symbolic operand wrappers for all major non-control-flow instruction families; only raw pass-through instructions (`BIPUSH`, `SIPUSH`, `NEWARRAY`, and zero-operand `InsnInfo`) remain in their spec-shaped form
 - Signed-JAR artifacts are preserved as pass-through bytes during rewrite, but `pytecode` does not generate replacement signatures for modified archives
-- Binary classfile emission, archive rewrite support, and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, `JarFile.rewrite()`, and the current validation suite; higher-level transform composition and richer debug stale-state modeling remain future work ([#6](https://github.com/smithtrenton/pytecode/issues/6), [#18](https://github.com/smithtrenton/pytecode/issues/18))
+- Binary classfile emission, archive rewrite support, transform composition via `pytecode.transforms`, and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, `JarFile.rewrite()`, the new pipeline helpers, and the current validation suite; richer matcher DSL follow-ups ([#20](https://github.com/smithtrenton/pytecode/issues/20)), an optional visitor layer ([#21](https://github.com/smithtrenton/pytecode/issues/21)), and richer debug stale-state modeling ([#18](https://github.com/smithtrenton/pytecode/issues/18)) remain future work
 
 ## Test coverage
 
@@ -305,6 +318,7 @@ The test suite provides both integration-level and unit-level coverage:
 - `test_class_reader.py` — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
 - `test_bytes_utils.py` — all primitive byte readers and writers (`_read_*`/`_write_*`), `BytesReader` stateful cursor, rewind, and buffer overrun, `BytesWriter` sequential writes, alignment padding, reserve/patch, and round-trip read↔write.
 - `test_jar.py` — JAR reading, class/non-class separation, path normalization, explicit entry mutation, safe rewrite behavior, metadata/resource preservation, signed-artifact pass-through, atomic failure handling, and compiled JAR integration.
+- `test_transforms.py` — pipeline ordering, no-op behavior, predicate helpers, snapshot traversal semantics, abstract/native/no-code method handling, runtime guardrails, and `JarFile.rewrite()` pipeline interop.
 - `test_descriptors.py` — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, throws clauses, and invalid internal-name edge cases.
 - `test_constant_pool_builder.py` — builder deduplication, Modified UTF-8 handling, MethodHandle validation, import/export behavior, overflow guards, and defensive-copy semantics.
 - `test_modified_utf8.py` — direct Modified UTF-8 codec coverage for NUL, supplementary characters, round-tripping, and malformed byte rejection.

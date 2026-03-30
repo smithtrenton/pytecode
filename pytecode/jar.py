@@ -4,7 +4,6 @@ import copy
 import os
 import tempfile
 import zipfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -12,6 +11,7 @@ from .class_reader import ClassReader
 from .debug_info import DebugInfoPolicy, normalize_debug_info_policy
 from .hierarchy import ClassResolver
 from .model import ClassModel
+from .transforms import ClassTransform
 
 
 @dataclass
@@ -131,7 +131,7 @@ class JarFile:
         self,
         output_path: str | os.PathLike[str] | None = None,
         *,
-        transform: Callable[[ClassModel], None] | None = None,
+        transform: ClassTransform | None = None,
         recompute_frames: bool = False,
         resolver: ClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,

@@ -97,8 +97,9 @@ Now implemented in `pytecode.verify`. The `Diagnostic` dataclass carries severit
 The manipulation API uses Design A (direct mutable dataclasses) as the primary editing surface, chosen for its Pythonic feel, low learning curve, and natural fit with the existing `@dataclass`-based codebase. The phased extension plan is:
 
 - **Phase 1 (done)**: Mutable tree model — `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` with symbolic references, `ConstantPoolBuilder`, and label-based instruction editing.
-- **Phase 2**: Pass-style composition — `Pipeline`/`Pass` protocol for chaining transformations. Model transforms as `(builder, element) → None` functions with transform lifting (inspired by the JDK Class-File API). Add matcher-based selection predicates (inspired by Byte Buddy).
-- **Phase 3 (if needed)**: Optional visitor layer for streaming — defer until there is an actual use case for high-throughput, memory-efficient bulk transformations.
+- **Phase 2 (done)**: Minimal pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, and basic selectors/combinators for name, descriptor, access flags, and `has_code()` matching. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into `JarFile.rewrite(transform=...)` and the existing lowering/validation flow.
+- **Future follow-up**: A richer matcher DSL ([#20](https://github.com/smithtrenton/pytecode/issues/20)) may still be layered on top of the current predicate helpers if real-world transform usage justifies it.
+- **Phase 3 (if needed)**: Optional visitor layer for streaming ([#21](https://github.com/smithtrenton/pytecode/issues/21)) — defer until there is an actual use case for high-throughput, memory-efficient bulk transformations.
 
 See [editing model design rationale](../design/editing-model.md) for the full comparative analysis.
 
@@ -138,7 +139,7 @@ track the supported API rather than transient internal helpers.
 3. ~~Add descriptor and signature parsing utilities.~~ ([#3](https://github.com/smithtrenton/pytecode/issues/3) — done)
 4. ~~Introduce a writer foundation for primitive values and classfile sections.~~ ([#4](https://github.com/smithtrenton/pytecode/issues/4) — done)
 5. ~~Add constant-pool management utilities (deduplication, symbol lookup, reindexing).~~ ([#5](https://github.com/smithtrenton/pytecode/issues/5) — done)
-6. ~~Design the mutable editing model and public transformation API.~~ ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phase 1 done)
+6. ~~Design and complete the mutable editing model plus the minimal public transformation API.~~ ([#6](https://github.com/smithtrenton/pytecode/issues/6) — done)
 7. ~~Add label-based instruction editing with automatic offset recalculation.~~ ([#7](https://github.com/smithtrenton/pytecode/issues/7) — done)
 8. ~~Add symbolic instruction operand wrappers for non-control-flow instructions.~~ ([#16](https://github.com/smithtrenton/pytecode/issues/16) — done)
 9. ~~Add a pluggable class hierarchy resolver.~~ ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)

@@ -11,6 +11,8 @@ See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current classfil
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, parses classes via `ClassReader`, and can add/remove entries plus rewrite archives safely.
 - `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path. `ClassModel.from_classfile()` and `ClassModel.from_bytes()` also accept `skip_debug=True` when you want an ASM-like lift path that omits debug metadata before it enters the mutable model.
 
+For composable in-place transformations — `Pipeline`, `pipeline()`, `on_classes()`, `on_fields()`, `on_methods()`, `on_code()`, and the basic selector/combinator helpers such as `class_named()`, `field_named()`, `method_named()`, `class_access()`, `field_access()`, `method_access()`, `field_descriptor()`, `method_descriptor()`, `has_code()`, `all_of()`, `any_of()`, and `not_()` — import from `pytecode.transforms`. Pipelines are callable and can be passed directly to `JarFile.rewrite(transform=...)`.
+
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, `LabelResolution`, and `lower_code()`, import directly from `pytecode.labels`.
 
 For debug-info helpers — `DebugInfoPolicy`, `DebugInfoState`, `apply_debug_info_policy()`, `strip_debug_info()`, `mark_class_debug_info_stale()`, and `mark_code_debug_info_stale()` — import from `pytecode.debug_info`. `ClassModel.to_classfile()`, `ClassModel.to_bytes()`, and `lower_code()` preserve lifted debug metadata by default and also accept `debug_info="strip"` (or `DebugInfoPolicy.STRIP`) when you want to omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata from output. Explicitly stale class/code debug metadata is also stripped automatically during lowering, and `verify_classmodel()` warns before emission when that stale state is present.
@@ -34,6 +36,25 @@ If you call `resolve_labels()` directly on code that contains single-slot `LdcIn
 For direct classfile emission, call `ClassWriter.write(classfile)`. `ClassModel.to_bytes()` is a thin convenience wrapper over `to_classfile()` plus `ClassWriter.write()`.
 
 For archive-level edits, use `JarFile.add_file()`, `JarFile.remove_file()`, and `JarFile.rewrite()`. `rewrite()` can copy entries verbatim, or lift `.class` entries through `ClassModel` for in-place transforms plus the usual `recompute_frames`, `resolver`, and `debug_info` lowering controls. Pass `skip_debug=True` for an ASM-like lift path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before transformation. Signature-related files are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed.
+
+A minimal transform pipeline looks like:
+
+```python
+from pytecode import JarFile
+from pytecode.constants import MethodAccessFlag
+from pytecode.model import MethodModel
+from pytecode.transforms import method_named, on_methods, pipeline
+
+
+def make_final(method: MethodModel) -> None:
+    method.access_flags |= MethodAccessFlag.FINAL
+
+
+JarFile("input.jar").rewrite(
+    "output.jar",
+    transform=pipeline(on_methods(make_final, where=method_named("main"))),
+)
+```
 
 ## Requirements
 

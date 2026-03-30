@@ -4,7 +4,7 @@
 
 `pytecode` is a Python library for parsing, inspecting, manipulating, and emitting JVM class files and bytecode.
 
-The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, hierarchy resolution, control-flow analysis, multi-release four-tier validation, optional JAR rewrite support, and explicit debug-info stale-state / skip-debug controls. The remaining roadmap work is higher-level transform composition and generated API reference coverage.
+The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, composable transform pipelines, hierarchy resolution, control-flow analysis, multi-release four-tier validation, optional JAR rewrite support, and explicit debug-info stale-state / skip-debug controls. The remaining roadmap work is generated API reference coverage, while richer matcher-DSL and visitor-style transform layers remain optional follow-up directions.
 
 ## Current status
 
@@ -26,6 +26,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Unit test coverage for all attribute types, instruction operand shapes, constant-pool entries, byte utilities, class reader, JAR handling, descriptor/signature parsing, Modified UTF-8 handling, constant-pool builder hardening, mutable editing model, hierarchy resolution, control-flow/stack simulation, frame recomputation, and validation
 - Constant-pool management: `ConstantPoolBuilder` with Modified UTF-8 handling, deduplication, symbol-table lookups, compound-entry auto-creation, MethodHandle/import validation, double-slot handling, defensive-copy reads/exports, and deterministic ordering — see `pytecode/constant_pool_builder.py`
 - Mutable editing model: `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` — mutable dataclasses with symbolic class/field/method references, bidirectional conversion to/from the parsed `ClassFile` model, `ConstantPoolBuilder` integration for raw operand/index passthrough, and label-aware code editing surfaces — see `pytecode/model.py`
+- Composable transform pipelines ([#6](https://github.com/smithtrenton/pytecode/issues/6)): `pytecode.transforms` introduces callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, and basic selector/combinator helpers for name, descriptor, access-flag, and `has_code()` matching. Pipelines remain ordinary class transforms, so they plug directly into `JarFile.rewrite(transform=...)`.
 - Label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)): `pytecode/labels.py` introduces `Label`, symbolic branch/switch wrappers, lifted exception/debug metadata, automatic offset recalculation, switch padding recomputation, and wide-branch promotion during lowering
 - Symbolic instruction operand wrappers ([#16](https://github.com/smithtrenton/pytecode/issues/16)): `pytecode/operands.py` introduces nine editing-model wrappers (`FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`) that replace raw constant-pool indexes and local-variable slot encodings. All wrapper types lift automatically in `model.py` during `from_classfile()` and lower back to raw instructions in `labels.py` during `to_classfile()`.
 - Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8)): `pytecode/hierarchy.py` introduces a pluggable `ClassResolver` protocol, in-memory `MappingClassResolver`, typed resolved hierarchy snapshots (`ResolvedClass`, `ResolvedMethod`, `InheritedMethod`), and helper queries for superclass walks, supertype traversal, subtype checks, common-superclass lookup, and method-override detection.
@@ -38,8 +39,9 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 
 ### Not implemented yet
 
-- Pass-style transformation helpers and composable pipelines on top of the current mutable model foundation ([#6](https://github.com/smithtrenton/pytecode/issues/6))
 - Generated API reference docs with full coverage of the supported public surface ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+- A richer matcher DSL on top of the current `pytecode.transforms` predicate helpers ([#20](https://github.com/smithtrenton/pytecode/issues/20))
+- An optional visitor-style streaming transform API layered alongside the current tree model ([#21](https://github.com/smithtrenton/pytecode/issues/21))
 
 ## Documentation guide
 
