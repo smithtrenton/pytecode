@@ -2,13 +2,13 @@
 
 `pytecode` is a Python 3.14+ library for parsing, inspecting, manipulating, and emitting JVM class files, bytecode, and JAR files.
 
-See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current parser + label-aware editing model and the roadmap toward a full classfile manipulation library.
+See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current classfile toolkit and the remaining roadmap work.
 
 ## Current public API
 
 - `pytecode.ClassReader` parses `.class` bytes eagerly into an `info.ClassFile` tree.
 - `pytecode.ClassWriter` serializes an `info.ClassFile` tree back to `.class` bytes.
-- `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, and parses classes via `ClassReader`.
+- `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, parses classes via `ClassReader`, and can add/remove entries plus rewrite archives safely.
 - `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path.
 
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, `LabelResolution`, and `lower_code()`, import directly from `pytecode.labels`.
@@ -17,7 +17,7 @@ For debug-info policy helpers — `DebugInfoPolicy`, `apply_debug_info_policy()`
 
 For symbolic operand wrappers — `FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`, and the `LdcValue` union types — import from `pytecode.operands`. These wrappers are lifted automatically by `ClassModel.from_classfile()` and lowered automatically by `ClassModel.to_classfile()`.
 
-For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `InheritedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names, back the current control-flow/simulation layer, and provide the hierarchy foundation for later frame, validation, and emission work.
+For hierarchy-resolution helpers — `ClassResolver`, `MappingClassResolver`, `ResolvedClass`, `ResolvedMethod`, `InheritedMethod`, `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — import from `pytecode.hierarchy`. These helpers work with JVM internal class names, back the current control-flow/simulation layer, and support the current frame-recomputation and validation pipeline.
 
 For control-flow graph construction and stack/local simulation — `build_cfg()`, `simulate()`, `ControlFlowGraph`, `BasicBlock`, `ExceptionEdge`, `SimulationResult`, `FrameState`, `initial_frame()`, helper functions `vtype_from_descriptor()`, `merge_vtypes()`, `is_category2()`, `is_reference()`, and verification types (`VType`, `VTop`, `VInteger`, `VFloat`, `VLong`, `VDouble`, `VNull`, `VObject`, `VUninitializedThis`, `VUninitialized`) — import from `pytecode.analysis`. The analysis module also provides `compute_maxs()` and `compute_frames()` for recomputing `max_stack`/`max_locals` and generating `StackMapTable` entries after bytecode editing. The module operates on `CodeModel` and accepts an optional `ClassResolver` for reference-type merging at join points.
 
@@ -32,6 +32,8 @@ For JVM Modified UTF-8 encoding and decoding of `CONSTANT_Utf8` values — `deco
 If you call `resolve_labels()` directly on code that contains single-slot `LdcInsn` values, pass the current `ConstantPoolBuilder` so `LDC` vs `LDC_W` sizing stays exact. `ClassModel.to_classfile()` and `lower_code()` handle that automatically.
 
 For direct classfile emission, call `ClassWriter.write(classfile)`. `ClassModel.to_bytes()` is a thin convenience wrapper over `to_classfile()` plus `ClassWriter.write()`.
+
+For archive-level edits, use `JarFile.add_file()`, `JarFile.remove_file()`, and `JarFile.rewrite()`. `rewrite()` can copy entries verbatim, or lift `.class` entries through `ClassModel` for in-place transforms plus the usual `recompute_frames`, `resolver`, and `debug_info` lowering controls. Signature-related files are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed.
 
 ## Requirements
 

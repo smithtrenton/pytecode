@@ -32,7 +32,7 @@ This document describes the architecture for validating pytecode's classfile emi
 
 Each tier catches different classes of bugs and is independently testable.
 
-All four tiers are now implemented in the current repository. The sections below describe both the architecture and the concrete workflow exercised by `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, and `tests/jvm_harness.py`.
+All four tiers are now implemented in the current repository. The sections below describe both the architecture and the concrete workflow exercised by `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, `tests/test_javap_parser.py`, and `tests/jvm_harness.py`.
 
 ## External tool landscape
 
@@ -135,7 +135,7 @@ CP ordering is one of the most nuanced aspects of javac compatibility. The frame
 
 **Mode 1 — Preserve-on-roundtrip (default)**: When reading an existing class file and writing it back, preserve the original CP ordering. New entries are appended at the end. This is what `ConstantPoolBuilder.from_pool()` already supports. This mode is essential for bytecode transformation pipelines (ProGuard, R8, ByteBuddy all follow this pattern).
 
-**Mode 2 — javac-compatible ordering (opt-in)**: When generating a class file from scratch, use an ordering that matches javac's allocation pattern:
+**Mode 2 — javac-compatible ordering (future opt-in)**: A later compatibility mode could generate a class file from scratch using an ordering that matches javac's allocation pattern:
 
 1. This-class name Utf8 → `CONSTANT_Class` for `this_class`
 2. Super-class name Utf8 → `CONSTANT_Class` for `super_class`
@@ -144,7 +144,7 @@ CP ordering is one of the most nuanced aspects of javac compatibility. The frame
 5. For each method (in source order): name Utf8, descriptor Utf8 → `NameAndType` → `Methodref`; then referenced classes/fields/methods from instructions (in instruction order)
 6. Attribute-related entries (`SourceFile`, `Signature`, etc.)
 
-This ordering is implemented in the CP builder's allocation strategy, not as a post-hoc sort. Note that javac's exact CP ordering rules are reverse-engineered from observation, not formally documented by the JVM specification.
+This mode is not implemented today; current from-scratch generation uses the builder's deterministic insertion order. Note that javac's exact CP ordering rules are reverse-engineered from observation, not formally documented by the JVM specification.
 
 ## Validation test infrastructure
 
@@ -154,7 +154,7 @@ Validation tests integrate with the existing `tests/helpers.py` caching infrastr
 tests/
 ├── helpers.py                   # Shared fixture compilation / caching helpers
 ├── test_class_writer.py         # Tier 1 byte-for-byte roundtrip coverage
-├── test_validation.py           # End-to-end Tier 1-4 validation matrix
+├── test_validation.py           # End-to-end Tier 1/2/4 validation matrix
 ├── javap_parser.py              # Tier 3 parser + semantic diff engine
 ├── test_javap_parser.py         # Unit coverage for Tier 3 parsing / diffing
 ├── jvm_harness.py               # Tier 4 Python wrapper for JVM verification
@@ -164,7 +164,7 @@ tests/
 └── ...existing test files...
 ```
 
-The repository currently exposes the `oracle` marker for the JVM-backed CFG differential suite. The four validation tiers themselves are exercised primarily through `tests/test_class_writer.py`, `tests/test_validation.py`, and `tests/test_javap_parser.py`, while fixture selection and batching are handled by `tests/helpers.py` and `tests/validation_fixtures.py`.
+The repository currently exposes the `oracle` marker for the JVM-backed CFG differential suite. The four validation tiers themselves are exercised across `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, `tests/test_javap_parser.py`, and `tests/jvm_harness.py`: the fixture/release matrix in `tests/test_validation.py` exercises Tiers 1, 2, and 4, while `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine. Fixture selection and batching are handled by `tests/helpers.py` and `tests/validation_fixtures.py`.
 
 ## Validation data flow
 
@@ -183,7 +183,7 @@ The repository currently exposes the `oracle` marker for the JVM-backed CFG diff
 - **Issue #12 (ClassWriter)**: Implemented.
 - **Issue #10 (StackMapTable computation)**: Implemented.
 - **Issue #14 (round-trip and verifier-focused validation)**: Implemented end-to-end.
-- **Current module split**: `tests/test_class_writer.py` focuses on Tier 1 byte-for-byte roundtrips; `tests/test_validation.py` exercises Tiers 1-4 across the compiled Java fixture corpus and selected execution fixtures; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; `tests/jvm_harness.py` wraps `tests/resources/VerifierHarness.java` for Tier 4 JVM verification and execution checks.
+- **Current module split**: `tests/test_class_writer.py` focuses on Tier 1 byte-for-byte roundtrips; `tests/test_validation.py` exercises the Tier 1/Tier 2/Tier 4 fixture matrix plus selected execution fixtures; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; `tests/jvm_harness.py` wraps `tests/resources/VerifierHarness.java` for Tier 4 JVM verification and execution checks.
 - **Fixture selection**: `tests/validation_fixtures.py` derives the `(fixture, release)` matrix from `tests/helpers.py`, so new Java fixtures join the validation matrix once their minimum release is declared.
 
 ## Open questions

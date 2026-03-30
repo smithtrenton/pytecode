@@ -81,11 +81,11 @@ Round-trip testing distinguishes three levels of fidelity:
 - **Level B — Structural equivalence** (`parse(bytes₁) ≅ parse(bytes₂)`): For modified roundtrips where CP indexes may have shifted. Compares parsed structures with CP references resolved to symbolic values.
 - **Level C — Semantic equivalence** (behavior-preserving): The weakest level — two class files define the same class with the same behavior, even if structural details differ (attribute order, debug attributes, method order).
 
-All four validation tiers are now implemented in `tests/test_validation.py`, covering a comprehensive fixture corpus compiled at `--release 8, 11, 17, 21, 25` via JDK 25:
+All four validation tiers are now implemented across the validation suite, covering a comprehensive fixture corpus compiled at `--release 8, 11, 17, 21, 25` via JDK 25:
 
 - **Tier 1 — Byte-for-byte roundtrip**: `ClassWriter.write()` and `ClassModel.to_bytes()` identity checks.
 - **Tier 2 — Structural verification**: `verify_classfile()` regression (no new errors vs gold) plus `javap -v -p -c` exit-code validation.
-- **Tier 3 — Semantic diff**: Full `javap` output parser (`tests/javap_parser.py`) with CP-aware comparison — zero error-severity diffs between gold and roundtripped output.
+- **Tier 3 — Semantic diff**: Full `javap` output parser (`tests/javap_parser.py`) with CP-aware comparison, covered by `tests/test_javap_parser.py` and available for fixture comparisons when byte identity is not sufficient.
 - **Tier 4 — JVM loading**: Custom `VerifierHarness.java` classloader with `-Xverify:all`.
 
 #### 10. Error and diagnostics model ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
@@ -112,7 +112,13 @@ What remains future work is a richer first-class stale-state model for debug met
 
 The legacy `JSR` and `RET` instructions (used for subroutine inlining in pre-Java 6 classfiles) are now handled by the opcode table, lowering layer, and analysis/test coverage. They remain a niche compatibility path rather than a modern workflow, because classfiles with version ≥ 51 cannot use them on current JVMs.
 
-#### 14. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+#### 14. Optional JAR rewrite support ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
+
+This layer is now implemented in `pytecode.jar`. `JarFile` remains compatible as the read-oriented archive surface, but it now also exposes explicit `add_file()` / `remove_file()` mutators plus `rewrite()` for writing the current archive state back to disk either in place or to a new path. Rewriting preserves entry order, non-class resources, and practical `ZipInfo` metadata; `.class` entries can optionally be lifted through `ClassModel` for in-place transforms, frame recomputation, and debug-info policy control using the same lowering machinery as ordinary class emission.
+
+Signature-related `META-INF` artifacts are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed. That caveat is explicit by design so archive rewrite support does not silently pretend to offer cryptographic integrity guarantees it does not implement.
+
+#### 15. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))
 
 As the user-facing surface grows, the project should generate API reference
 documentation from Python docstrings/signatures instead of relying only on
@@ -141,5 +147,5 @@ track the supported API rather than transient internal helpers.
 14. ~~Add classfile emission with deterministic constant-pool layout.~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
 15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13) — done; explicit stale-state modeling moved to [#18](https://github.com/smithtrenton/pytecode/issues/18))
 16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
-17. Add optional JAR rewrite support. ([#15](https://github.com/smithtrenton/pytecode/issues/15))
+17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 18. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))

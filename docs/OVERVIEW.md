@@ -4,7 +4,7 @@
 
 `pytecode` is a Python library for parsing, inspecting, manipulating, and emitting JVM class files and bytecode.
 
-The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, hierarchy resolution, and control-flow analysis. The longer-term goal is to broaden compatibility validation and support richer transformation workflows.
+The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, hierarchy resolution, control-flow analysis, multi-release four-tier validation, and optional JAR rewrite support. The remaining roadmap work is higher-level transform composition, explicit stale-state handling for debug metadata after mutation, and generated API reference coverage.
 
 ## Current status
 
@@ -17,6 +17,7 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Parsing the standard attribute families including annotations, stack map tables, module metadata, records, and permitted subclasses
 - Preserving unknown or unrecognized attributes as raw bytes through `UnimplementedAttr`
 - Reading JAR files and parsing every `.class` entry in them
+- Rewriting JAR files via `JarFile.add_file()`, `JarFile.remove_file()`, and `JarFile.rewrite()`, including safe temp-file replacement, entry-order preservation, and pass-through preservation of non-class resources plus signature artifacts
 - Descriptor and signature parsing utilities: structured field/method descriptor types, generic signature parsing (class, method, and field signatures), round-trip construction, slot-size helpers, and stricter validation of malformed internal names and signature segments — see `pytecode/descriptors.py`
 - Binary writer foundation: big-endian write primitives, stateful `BytesWriter` with alignment, reserve/patch helpers for length-prefixed structures — see `pytecode/bytes_utils.py`
 - Shared JVM Modified UTF-8 codec for `CONSTANT_Utf8` values — see `pytecode/modified_utf8.py`
@@ -28,18 +29,17 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 - Label-based instruction editing ([#7](https://github.com/smithtrenton/pytecode/issues/7)): `pytecode/labels.py` introduces `Label`, symbolic branch/switch wrappers, lifted exception/debug metadata, automatic offset recalculation, switch padding recomputation, and wide-branch promotion during lowering
 - Symbolic instruction operand wrappers ([#16](https://github.com/smithtrenton/pytecode/issues/16)): `pytecode/operands.py` introduces nine editing-model wrappers (`FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`) that replace raw constant-pool indexes and local-variable slot encodings. All wrapper types lift automatically in `model.py` during `from_classfile()` and lower back to raw instructions in `labels.py` during `to_classfile()`.
 - Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8)): `pytecode/hierarchy.py` introduces a pluggable `ClassResolver` protocol, in-memory `MappingClassResolver`, typed resolved hierarchy snapshots (`ResolvedClass`, `ResolvedMethod`, `InheritedMethod`), and helper queries for superclass walks, supertype traversal, subtype checks, common-superclass lookup, and method-override detection.
-- Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging for future frame and validation work.
+- Control-flow analysis ([#9](https://github.com/smithtrenton/pytecode/issues/9)): `pytecode/analysis.py` introduces control-flow graph construction, verification-type-based stack/local simulation, structured merge/locals diagnostics, and optional `ClassResolver`-driven reference merging used by the current frame-recomputation and validation layers.
 - CFG differential validation ([#17](https://github.com/smithtrenton/pytecode/issues/17)): the test suite now compares `pytecode.analysis.build_cfg()` against a JVM-side ASM oracle across compiled fixture corpora, normalizing instruction-level edges into the same block-level spans, successor sets, and handler sets used by `pytecode`.
 - Max stack/max locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)): `pytecode/analysis.py` now exposes `compute_maxs()` and `compute_frames()` for opt-in recomputation of `max_stack`, `max_locals`, and `StackMapTable` entries. `lower_code()` and `ClassModel.to_classfile()` support `recompute_frames=True` for end-to-end integration. All seven compact StackMapTable frame encodings are supported.
 - Debug-info policy helpers ([#13](https://github.com/smithtrenton/pytecode/issues/13)): label-based preservation remains the default path for lifted `LineNumberTable`, `LocalVariableTable`, and `LocalVariableTypeTable` metadata, while `pytecode.debug_info` now provides explicit preserve/strip helpers and lowering supports `debug_info="strip"` to omit code-debug plus class-level source-debug attributes from emitted output.
 - Tier 1 roundtrip coverage for emission: `tests/test_class_writer.py` now exercises byte-for-byte `ClassWriter.write()` roundtrips over compiled Java fixtures and `ClassModel.to_bytes()` roundtrips over the same corpus, plus raw edge cases such as unknown attributes and double-slot constant-pool gaps
-- Multi-release four-tier validation coverage ([#14](https://github.com/smithtrenton/pytecode/issues/14)): `tests/test_validation.py` parametrizes the compiled Java fixture corpus across `--release 8, 11, 17, 21, 25`, filtered by each fixture's minimum supported release. Each (fixture, release) pair runs all four tiers: byte-for-byte roundtrip (T1), `verify_classfile()` + `javap` structural check (T2), `javap_parser.py` CP-aware semantic diff (T3), and JVM loading via `VerifierHarness.java` with `-Xverify:all` (T4).
+- Validation-framework coverage ([#14](https://github.com/smithtrenton/pytecode/issues/14)): `tests/test_validation.py` parametrizes the compiled Java fixture corpus across `--release 8, 11, 17, 21, 25`, filtered by each fixture's minimum supported release, and runs byte-for-byte roundtrip (T1), `verify_classfile()` + `javap` structural checks (T2), and JVM loading via `VerifierHarness.java` with `-Xverify:all` (T4). The Tier 3 CP-aware semantic-diff engine lives in `tests/javap_parser.py` and is covered by `tests/test_javap_parser.py`.
 
 ### Not implemented yet
 
 - Pass-style transformation helpers and composable pipelines on top of the current mutable model foundation ([#6](https://github.com/smithtrenton/pytecode/issues/6))
 - First-class stale-state modeling for debug metadata after mutation beyond the landed preserve/strip policies ([#18](https://github.com/smithtrenton/pytecode/issues/18))
-- Archive rewrite support for writing transformed JARs back to disk ([#15](https://github.com/smithtrenton/pytecode/issues/15))
 - Generated API reference docs with full coverage of the supported public surface ([#19](https://github.com/smithtrenton/pytecode/issues/19))
 
 ## Documentation guide

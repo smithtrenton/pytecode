@@ -92,7 +92,7 @@ Max stack/max locals recomputation and StackMapTable generation are now complete
 
 ## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; four tiers implemented in [#14](https://github.com/smithtrenton/pytecode/issues/14))
 
-Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`, while `tests/test_validation.py`, `tests/javap_parser.py`, and `tests/jvm_harness.py` cover the higher external-tool tiers. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
+Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`; `tests/test_validation.py` covers the fixture/release matrix for Tiers 1, 2, and 4; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; and `tests/jvm_harness.py` provides the JVM harness used by Tier 4. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|
@@ -127,9 +127,9 @@ Responsibilities:
 - recalculate lengths, offsets, and indexes
 - optionally minimize or canonicalize generated structures
 
-## 7. JAR rewrite layer ([#15](https://github.com/smithtrenton/pytecode/issues/15))
+## 7. JAR rewrite layer ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 
-Now that class emission exists, the remaining archive-level architecture work is optional JAR rewrite support.
+This layer is now implemented in `pytecode.jar`.
 
 Responsibilities:
 
@@ -138,7 +138,7 @@ Responsibilities:
 - preserve JAR metadata (META-INF/MANIFEST.MF, signatures, service loader configs)
 - write modified archives safely
 
-This is not strictly required for a classfile library, but it follows naturally from the existing `JarFile` support and would make the project more useful in practice.
+`JarFile.add_file()` and `JarFile.remove_file()` mutate the in-memory archive state, while `JarFile.rewrite()` serializes that state back to disk, optionally lifting `.class` entries through `ClassModel` for in-place transforms and class-level lowering controls. Existing signature-related files are preserved as pass-through resources; rewritten signed JARs are not re-signed automatically and may therefore no longer verify as signed.
 
 ## Cross-cutting concern: debug info management ([#18](https://github.com/smithtrenton/pytecode/issues/18))
 

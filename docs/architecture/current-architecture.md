@@ -23,6 +23,9 @@ The codebase is currently organized as a parser/lowering/emission pipeline with 
   - Reads the contents of a JAR
   - Separates `.class` entries from non-class resources
   - Parses classes via `ClassReader`
+  - Supports explicit archive entry mutation via `add_file()` / `remove_file()`
+  - Rewrites archives safely via `rewrite()`, optionally lowering `.class` entries through `ClassModel`
+  - Preserves signature artifacts as pass-through resources but does not re-sign modified archives
 
 - `pytecode.ClassModel`
   - Mutable editing model for JVM class files
@@ -234,7 +237,7 @@ Issue [#17](https://github.com/smithtrenton/pytecode/issues/17) added a JVM-back
 
 ### `pytecode\jar.py`
 
-JAR container support. This is currently a convenience layer around archive reading plus class parsing: it separates `.class` entries from non-class resources and parses each class via `ClassReader`. JAR rewrite support remains future work ([#15](https://github.com/smithtrenton/pytecode/issues/15)).
+JAR container support. This module now covers archive reading, class/non-class separation, in-memory entry mutation, and safe rewrite-to-disk behavior. `JarFile.add_file()` and `remove_file()` update the in-memory archive state, while `JarFile.rewrite()` can either copy entries verbatim or lift `.class` entries through `ClassModel` for in-place transforms before writing a temporary archive and replacing the destination. Signature-related files are preserved as ordinary resources and are not re-signed automatically.
 
 ### `run.py`
 
@@ -262,6 +265,14 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 3. Non-class resources are preserved as raw bytes.
 4. Callers receive `(JarInfo, ClassReader)` pairs for classes and `JarInfo` records for other files.
 
+### JAR rewriting
+
+1. Callers optionally mutate the in-memory archive state with `JarFile.add_file()` / `remove_file()`.
+2. `JarFile.rewrite()` iterates the current entry order and copies non-class resources verbatim.
+3. When class rewriting is requested, `.class` entries are lifted through `ClassModel`, transformed in place, and lowered back to bytes with the existing classfile emission stack.
+4. The updated archive is written to a temporary ZIP and atomically replaced at the destination path.
+5. After a successful rewrite, `JarFile` refreshes itself from disk so its in-memory state matches the written archive metadata.
+
 ## Design characteristics
 
 ### Strengths
@@ -270,7 +281,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - The parser retains structural detail rather than flattening everything into dictionaries
 - Unknown attributes can still be carried as bytes
 - Full opcode coverage with no gaps in the standard instruction set
-- JAR-level parsing already gives the project a practical integration point
+- JAR-level parsing and rewrite support give the project a practical integration point
 - The codebase is dependency-light and easy to run locally
 - Enum-driven dispatch in both `ConstantPoolInfoType` and `AttributeInfoType` makes adding new types mechanical
 
@@ -279,7 +290,8 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - Parsing is eager and tightly coupled to `ClassReader`
 - Most parser behavior lives in one large module (`class_reader.py`), so parsing remains a maintenance hotspot even though emission now lives in `class_writer.py`
 - The editing model now uses labels for control flow, exception ranges, and debug scopes, and symbolic operand wrappers for all major non-control-flow instruction families; only raw pass-through instructions (`BIPUSH`, `SIPUSH`, `NEWARRAY`, and zero-operand `InsnInfo`) remain in their spec-shaped form
-- Binary classfile emission and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, and the current validation suite; higher-level transform composition and archive rewrite support remain future work ([#6](https://github.com/smithtrenton/pytecode/issues/6), [#15](https://github.com/smithtrenton/pytecode/issues/15))
+- Signed-JAR artifacts are preserved as pass-through bytes during rewrite, but `pytecode` does not generate replacement signatures for modified archives
+- Binary classfile emission, archive rewrite support, and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, `JarFile.rewrite()`, and the current validation suite; higher-level transform composition and richer debug stale-state modeling remain future work ([#6](https://github.com/smithtrenton/pytecode/issues/6), [#18](https://github.com/smithtrenton/pytecode/issues/18))
 
 ## Test coverage
 
@@ -292,7 +304,7 @@ The test suite provides both integration-level and unit-level coverage:
 - `test_constant_pool.py` — all 17 constant-pool entry types, Long/Double double-slot handling, Modified UTF-8 `CONSTANT_Utf8` cases, mixed pool parsing, and unknown tag errors.
 - `test_class_reader.py` — classfile parsing including magic number validation, version field validation, constant-pool indexing, access flags, interfaces, fields, methods, Code attributes, and error paths for invalid/truncated classfiles.
 - `test_bytes_utils.py` — all primitive byte readers and writers (`_read_*`/`_write_*`), `BytesReader` stateful cursor, rewind, and buffer overrun, `BytesWriter` sequential writes, alignment padding, reserve/patch, and round-trip read↔write.
-- `test_jar.py` — JAR reading, class/non-class separation, path normalization, and compiled JAR class count.
+- `test_jar.py` — JAR reading, class/non-class separation, path normalization, explicit entry mutation, safe rewrite behavior, metadata/resource preservation, signed-artifact pass-through, atomic failure handling, and compiled JAR integration.
 - `test_descriptors.py` — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, throws clauses, and invalid internal-name edge cases.
 - `test_constant_pool_builder.py` — builder deduplication, Modified UTF-8 handling, MethodHandle validation, import/export behavior, overflow guards, and defensive-copy semantics.
 - `test_modified_utf8.py` — direct Modified UTF-8 codec coverage for NUL, supplementary characters, round-tripping, and malformed byte rejection.
@@ -303,7 +315,7 @@ The test suite provides both integration-level and unit-level coverage:
 - `test_helpers.py` — persistent Java fixture-cache coverage for `tests/helpers.py`, including cache hits across separate temp directories, invalidation when source contents change, and invalidation when `javac --release` changes.
 - `test_analysis.py` — control-flow graph and simulation coverage: verification type helpers (`vtype_from_descriptor`, `is_category2`, `is_reference`, `merge_vtypes` with and without a resolver), `FrameState` operations (push/pop for category-1 and category-2 types, set_local/get_local with two-slot expansion, stack underflow detection), `initial_frame` for static methods, instance methods, `<init>`, and multi-parameter signatures (including long/double slots), CFG construction (single block, if/else branching, tableswitch, lookupswitch, try-catch exception edges, unconditional GOTO, loops, terminal ATHROW/return blocks), stack simulation for all major opcode families (constants, loads/stores, arithmetic, conversions, comparisons, stack manipulation including DUP/DUP_X1/DUP_X2/DUP2/DUP2_X1/DUP2_X2/SWAP/POP/POP2, field access, method invocations, object creation with NEW→`<init>` uninitialized tracking, type checks, array operations, monitors, IINC, LDC variants), max_stack/max_locals computation, type merging at branch join points, loop convergence via fixed-point iteration, exception-handler pre-instruction state, incompatible join-point merge failures, precise `AALOAD` reference typing, error paths (stack underflow, invalid locals), and integration tests against compiled `CfgFixture.java` methods covering all control-flow patterns.
 - `test_verify.py` — structural validation coverage (122 tests): magic number, version range, constant-pool well-formedness, access flag mutual exclusions, class structure, field and method constraints, Code attribute validation (branches, exception handlers, CP reference validity), attribute versioning, descriptor validation, ClassModel label validity, `fail_fast` mode, and diagnostic severity/category/location accuracy.
-- `test_validation.py` — multi-release four-tier validation tests: parametrizes the compiled Java fixture corpus across `--release 8, 11, 17, 21, 25`, filtered by each fixture's minimum supported release. For each (fixture, release) pair, runs all four tiers on every generated `.class` file: byte-for-byte roundtrip (T1), `verify_classfile()` + `javap` structural check (T2), CP-aware semantic diff via `javap_parser.py` (T3), and JVM loading via `VerifierHarness.java` with `-Xverify:all` (T4). Plus execution tests verifying runtime output of roundtripped classes.
+- `test_validation.py` — multi-release validation-matrix tests: parametrizes the compiled Java fixture corpus across `--release 8, 11, 17, 21, 25`, filtered by each fixture's minimum supported release. For each (fixture, release) pair, it runs byte-for-byte roundtrip (T1), `verify_classfile()` + `javap` structural checks (T2), and JVM loading via `VerifierHarness.java` with `-Xverify:all` (T4), plus execution tests for selected roundtripped fixtures. The Tier 3 CP-aware semantic-diff engine lives in `tests/javap_parser.py` and is unit-tested in `test_javap_parser.py`.
 - `test_javap_parser.py` — unit tests for the `javap` output parser and CP-aware semantic diff engine: parsing edge cases, member extraction, instruction operand resolution, and diff severity classification.
 
 Test fixtures are generated from Java source in `tests/resources/` rather than relying on large binary artifacts. Helper utilities in `tests/helpers.py` compile focused fixtures and small JARs with `javac`, persist those outputs in a content-addressed cache under `.pytest_cache/pytecode-javac`, and only re-run `javac` when the ordered source list, source contents, `--release`, or `javac` identity changes. The `FIXTURE_MIN_RELEASES` mapping in `helpers.py` tracks which fixtures require `--release` > 8, and `list_java_resources(max_release=N)` filters accordingly.

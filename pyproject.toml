@@ -14,7 +14,7 @@ pytecode = ["py.typed"]
 [project]
 name = "pytecode"
 version = "0.0.1"
-description = "Python library for parsing and analyzing JVM bytecode"
+description = "Python library for parsing, manipulating, and emitting JVM class files"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
