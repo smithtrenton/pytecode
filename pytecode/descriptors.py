@@ -11,13 +11,48 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Never
 
+__all__ = [
+    "ArrayType",
+    "ArrayTypeSignature",
+    "BaseType",
+    "ClassSignature",
+    "ClassTypeSignature",
+    "FieldDescriptor",
+    "FieldSignature",
+    "InnerClassType",
+    "JavaTypeSignature",
+    "MethodDescriptor",
+    "MethodSignature",
+    "ObjectType",
+    "ReferenceTypeSignature",
+    "ReturnType",
+    "TypeArgument",
+    "TypeParameter",
+    "TypeVariable",
+    "VOID",
+    "VoidType",
+    "is_valid_field_descriptor",
+    "is_valid_method_descriptor",
+    "parameter_slot_count",
+    "parse_class_signature",
+    "parse_field_descriptor",
+    "parse_field_signature",
+    "parse_method_descriptor",
+    "parse_method_signature",
+    "slot_size",
+    "to_descriptor",
+]
+
 # ---------------------------------------------------------------------------
 # Descriptor data model (JVM spec §4.3.2, §4.3.3)
 # ---------------------------------------------------------------------------
 
 
 class BaseType(Enum):
-    """JVM primitive types, each carrying its single-character descriptor."""
+    """JVM primitive types as defined in §4.3.2.
+
+    Each member carries its single-character descriptor code as its value.
+    """
 
     BOOLEAN = "Z"
     BYTE = "B"
@@ -35,7 +70,10 @@ _TWO_SLOT_TYPES = frozenset({BaseType.LONG, BaseType.DOUBLE})
 
 
 class VoidType(Enum):
-    """Sentinel for the void return type (``V``). Only valid in return position."""
+    """Sentinel for the ``V`` return descriptor (§4.3.3).
+
+    Only valid in the return-type position of a method descriptor.
+    """
 
     VOID = "V"
 
@@ -45,21 +83,38 @@ VOID = VoidType.VOID
 
 @dataclass(frozen=True, slots=True)
 class ObjectType:
-    """Reference to a class or interface in internal form (e.g. ``java/lang/String``)."""
+    """Reference to a class or interface type in internal form (§4.3.2).
+
+    Attributes:
+        class_name: Fully-qualified name using ``/`` as the package separator
+            (e.g. ``java/lang/String``).
+    """
 
     class_name: str
 
 
 @dataclass(frozen=True, slots=True)
 class ArrayType:
-    """Array type whose component may be any field descriptor, including another array."""
+    """Array type whose component may be any field descriptor (§4.3.2).
+
+    The component may itself be an ``ArrayType``, representing multi-dimensional
+    arrays.
+
+    Attributes:
+        component_type: The element type of the array.
+    """
 
     component_type: FieldDescriptor
 
 
 @dataclass(frozen=True, slots=True)
 class MethodDescriptor:
-    """Parsed method descriptor: parameter types and return type."""
+    """Parsed method descriptor representing parameter and return types (§4.3.3).
+
+    Attributes:
+        parameter_types: Ordered tuple of parameter type descriptors.
+        return_type: The method's return type, which may be ``VoidType.VOID``.
+    """
 
     parameter_types: tuple[FieldDescriptor, ...]
     return_type: ReturnType
@@ -77,17 +132,26 @@ _INVALID_UNQUALIFIED_NAME_CHARS = frozenset({".", ";", "[", "/", "<", ">", ":"})
 
 @dataclass(frozen=True, slots=True)
 class TypeVariable:
-    """Type variable reference, e.g. ``TT;`` → ``TypeVariable("T")``."""
+    """Type variable reference (§4.7.9.1).
+
+    For example, ``TT;`` in a generic signature parses to
+    ``TypeVariable("T")``.
+
+    Attributes:
+        name: The identifier of the type variable.
+    """
 
     name: str
 
 
 @dataclass(frozen=True, slots=True)
 class TypeArgument:
-    """A single type argument inside angle brackets.
+    """A single type argument inside angle brackets (§4.7.9.1).
 
-    *wildcard* is ``"+"`` (extends), ``"-"`` (super), or ``None`` (exact).
-    *signature* is ``None`` only for the unbounded wildcard ``*``.
+    Attributes:
+        wildcard: ``"+"`` (extends), ``"-"`` (super), or ``None`` (exact match).
+        signature: The bounding type, or ``None`` for the unbounded wildcard
+            ``*``.
     """
 
     wildcard: Literal["+", "-"] | None
@@ -96,7 +160,15 @@ class TypeArgument:
 
 @dataclass(frozen=True, slots=True)
 class InnerClassType:
-    """An inner-class suffix inside a ``ClassTypeSignature`` (after ``.``)."""
+    """An inner-class suffix inside a ``ClassTypeSignature`` (§4.7.9.1).
+
+    Represents a ``.SimpleClassName<TypeArgs>`` segment that follows the
+    outer class type.
+
+    Attributes:
+        name: Simple name of the inner class.
+        type_arguments: Generic type arguments applied to this inner class.
+    """
 
     name: str
     type_arguments: tuple[TypeArgument, ...]
@@ -104,8 +176,16 @@ class InnerClassType:
 
 @dataclass(frozen=True, slots=True)
 class ClassTypeSignature:
-    """Fully-qualified generic class type, e.g.
-    ``Ljava/util/Map<TK;TV;>.Entry<TK;TV;>;``
+    """Fully-qualified generic class type (§4.7.9.1).
+
+    Example: ``Ljava/util/Map<TK;TV;>.Entry<TK;TV;>;``.
+
+    Attributes:
+        package: Package prefix in internal form (e.g. ``java/util/``), or
+            empty string for classes in the default package.
+        name: Simple class name.
+        type_arguments: Generic type arguments on the outer class.
+        inner: Inner-class suffixes with their own type arguments.
     """
 
     package: str
@@ -116,7 +196,13 @@ class ClassTypeSignature:
 
 @dataclass(frozen=True, slots=True)
 class ArrayTypeSignature:
-    """Generic array type signature, e.g. ``[TT;``."""
+    """Generic array type signature (§4.7.9.1).
+
+    For example, ``[TT;`` represents an array of a type variable.
+
+    Attributes:
+        component: The element type signature of the array.
+    """
 
     component: JavaTypeSignature
 
@@ -127,7 +213,17 @@ type JavaTypeSignature = BaseType | ReferenceTypeSignature
 
 @dataclass(frozen=True, slots=True)
 class TypeParameter:
-    """A formal type parameter declaration, e.g. ``T:Ljava/lang/Object;``."""
+    """A formal type parameter declaration (§4.7.9.1).
+
+    For example, ``T:Ljava/lang/Object;`` declares a type parameter ``T``
+    bounded by ``Object``.
+
+    Attributes:
+        name: The type parameter identifier.
+        class_bound: Optional upper class bound, or ``None`` if absent.
+        interface_bounds: Additional interface bounds the type parameter must
+            satisfy.
+    """
 
     name: str
     class_bound: ReferenceTypeSignature | None
@@ -136,7 +232,13 @@ class TypeParameter:
 
 @dataclass(frozen=True, slots=True)
 class ClassSignature:
-    """Parsed generic class signature (``Signature`` attribute on a class)."""
+    """Parsed generic class signature from a ``Signature`` attribute (§4.7.9.1).
+
+    Attributes:
+        type_parameters: Formal type parameters declared by the class.
+        super_class: The generic superclass type.
+        super_interfaces: Generic superinterface types.
+    """
 
     type_parameters: tuple[TypeParameter, ...]
     super_class: ClassTypeSignature
@@ -145,7 +247,14 @@ class ClassSignature:
 
 @dataclass(frozen=True, slots=True)
 class MethodSignature:
-    """Parsed generic method signature (``Signature`` attribute on a method)."""
+    """Parsed generic method signature from a ``Signature`` attribute (§4.7.9.1).
+
+    Attributes:
+        type_parameters: Formal type parameters declared by the method.
+        parameter_types: Generic parameter type signatures.
+        return_type: The return type signature, or ``VoidType.VOID``.
+        throws: Exception types declared in the throws clause.
+    """
 
     type_parameters: tuple[TypeParameter, ...]
     parameter_types: tuple[JavaTypeSignature, ...]
@@ -426,12 +535,24 @@ def _read_throws_signature(r: _Reader) -> ClassTypeSignature | TypeVariable:
 
 
 def parse_field_descriptor(s: str) -> FieldDescriptor:
-    """Parse a JVM field descriptor string into a structured type.
+    """Parse a JVM field descriptor string into a structured type (§4.3.2).
 
-    >>> parse_field_descriptor("Ljava/lang/String;")
-    ObjectType(class_name='java/lang/String')
-    >>> parse_field_descriptor("[[I")
-    ArrayType(component_type=ArrayType(component_type=<BaseType.INT: 'I'>))
+    Args:
+        s: A field descriptor string such as ``"I"`` or
+            ``"Ljava/lang/String;"``.
+
+    Returns:
+        The parsed descriptor as a ``BaseType``, ``ObjectType``, or
+        ``ArrayType``.
+
+    Raises:
+        ValueError: If *s* is not a valid field descriptor.
+
+    Examples:
+        >>> parse_field_descriptor("Ljava/lang/String;")
+        ObjectType(class_name='java/lang/String')
+        >>> parse_field_descriptor("[[I")
+        ArrayType(component_type=ArrayType(component_type=<BaseType.INT: 'I'>))
     """
     r = _Reader(s)
     result = _read_field_descriptor(r)
@@ -441,10 +562,21 @@ def parse_field_descriptor(s: str) -> FieldDescriptor:
 
 
 def parse_method_descriptor(s: str) -> MethodDescriptor:
-    """Parse a JVM method descriptor string into parameter and return types.
+    """Parse a JVM method descriptor string into parameter and return types (§4.3.3).
 
-    >>> parse_method_descriptor("(IDLjava/lang/Thread;)Ljava/lang/Object;")
-    MethodDescriptor(parameter_types=(...), return_type=ObjectType(...))
+    Args:
+        s: A method descriptor string such as
+            ``"(IDLjava/lang/Thread;)Ljava/lang/Object;"``.
+
+    Returns:
+        A ``MethodDescriptor`` with the parsed parameter and return types.
+
+    Raises:
+        ValueError: If *s* is not a valid method descriptor.
+
+    Examples:
+        >>> parse_method_descriptor("(IDLjava/lang/Thread;)Ljava/lang/Object;")
+        MethodDescriptor(parameter_types=(...), return_type=ObjectType(...))
     """
     r = _Reader(s)
     r.expect("(")
@@ -459,10 +591,22 @@ def parse_method_descriptor(s: str) -> MethodDescriptor:
 
 
 def parse_class_signature(s: str) -> ClassSignature:
-    """Parse a generic class signature (``Signature`` attribute on a class).
+    """Parse a generic class signature from a ``Signature`` attribute (§4.7.9.1).
 
-    >>> parse_class_signature("<T:Ljava/lang/Object;>Ljava/lang/Object;")
-    ClassSignature(...)
+    Args:
+        s: A class signature string such as
+            ``"<T:Ljava/lang/Object;>Ljava/lang/Object;"``.
+
+    Returns:
+        A ``ClassSignature`` with type parameters, superclass, and
+        superinterfaces.
+
+    Raises:
+        ValueError: If *s* is not a valid class signature.
+
+    Examples:
+        >>> parse_class_signature("<T:Ljava/lang/Object;>Ljava/lang/Object;")
+        ClassSignature(...)
     """
     r = _Reader(s)
     type_params: tuple[TypeParameter, ...] = ()
@@ -476,10 +620,22 @@ def parse_class_signature(s: str) -> ClassSignature:
 
 
 def parse_method_signature(s: str) -> MethodSignature:
-    """Parse a generic method signature (``Signature`` attribute on a method).
+    """Parse a generic method signature from a ``Signature`` attribute (§4.7.9.1).
 
-    >>> parse_method_signature("<T:Ljava/lang/Object;>(TT;)TT;")
-    MethodSignature(...)
+    Args:
+        s: A method signature string such as
+            ``"<T:Ljava/lang/Object;>(TT;)TT;"``.
+
+    Returns:
+        A ``MethodSignature`` with type parameters, parameter types, return
+        type, and throws clause.
+
+    Raises:
+        ValueError: If *s* is not a valid method signature.
+
+    Examples:
+        >>> parse_method_signature("<T:Ljava/lang/Object;>(TT;)TT;")
+        MethodSignature(...)
     """
     r = _Reader(s)
     type_params: tuple[TypeParameter, ...] = ()
@@ -498,10 +654,21 @@ def parse_method_signature(s: str) -> MethodSignature:
 
 
 def parse_field_signature(s: str) -> FieldSignature:
-    """Parse a generic field type signature (``Signature`` attribute on a field).
+    """Parse a generic field type signature from a ``Signature`` attribute (§4.7.9.1).
 
-    >>> parse_field_signature("Ljava/util/List<Ljava/lang/String;>;")
-    ClassTypeSignature(...)
+    Args:
+        s: A field signature string such as
+            ``"Ljava/util/List<Ljava/lang/String;>;"``.
+
+    Returns:
+        The parsed reference type signature.
+
+    Raises:
+        ValueError: If *s* is not a valid field signature.
+
+    Examples:
+        >>> parse_field_signature("Ljava/util/List<Ljava/lang/String;>;")
+        ClassTypeSignature(...)
     """
     r = _Reader(s)
     result = _read_reference_type_signature(r)
@@ -526,14 +693,24 @@ def _field_descriptor_to_str(t: FieldDescriptor) -> str:
 
 
 def to_descriptor(t: FieldDescriptor | MethodDescriptor) -> str:
-    """Convert a structured descriptor back into its JVM string form.
+    """Convert a structured descriptor back into its JVM string form (§4.3).
 
-    >>> to_descriptor(BaseType.INT)
-    'I'
-    >>> to_descriptor(ObjectType("java/lang/String"))
-    'Ljava/lang/String;'
-    >>> to_descriptor(MethodDescriptor((BaseType.INT,), VOID))
-    '(I)V'
+    Args:
+        t: A field or method descriptor to serialize.
+
+    Returns:
+        The canonical JVM descriptor string.
+
+    Raises:
+        TypeError: If *t* is not a recognized descriptor type.
+
+    Examples:
+        >>> to_descriptor(BaseType.INT)
+        'I'
+        >>> to_descriptor(ObjectType("java/lang/String"))
+        'Ljava/lang/String;'
+        >>> to_descriptor(MethodDescriptor((BaseType.INT,), VOID))
+        '(I)V'
     """
     if isinstance(t, MethodDescriptor):
         params = "".join(_field_descriptor_to_str(p) for p in t.parameter_types)
@@ -548,7 +725,16 @@ def to_descriptor(t: FieldDescriptor | MethodDescriptor) -> str:
 
 
 def slot_size(t: FieldDescriptor) -> int:
-    """Return the number of JVM local/stack slots a type occupies (2 for long/double, 1 otherwise)."""
+    """Return the number of JVM local/stack slots a type occupies.
+
+    ``long`` and ``double`` use two slots (§2.6.1); all other types use one.
+
+    Args:
+        t: A field descriptor for the value type.
+
+    Returns:
+        ``2`` for ``long``/``double``, ``1`` otherwise.
+    """
     if isinstance(t, BaseType) and t in _TWO_SLOT_TYPES:
         return 2
     return 1
@@ -558,6 +744,12 @@ def parameter_slot_count(d: MethodDescriptor) -> int:
     """Return the total number of JVM parameter slots for a method descriptor.
 
     Does **not** include the implicit ``this`` slot for instance methods.
+
+    Args:
+        d: A parsed method descriptor.
+
+    Returns:
+        Sum of slot sizes across all parameter types.
     """
     return sum(slot_size(p) for p in d.parameter_types)
 
@@ -568,7 +760,14 @@ def parameter_slot_count(d: MethodDescriptor) -> int:
 
 
 def is_valid_field_descriptor(s: str) -> bool:
-    """Return ``True`` if *s* is a well-formed JVM field descriptor."""
+    """Return ``True`` if *s* is a well-formed JVM field descriptor (§4.3.2).
+
+    Args:
+        s: The string to validate.
+
+    Returns:
+        Whether *s* can be parsed as a valid field descriptor.
+    """
     try:
         parse_field_descriptor(s)
         return True
@@ -577,7 +776,14 @@ def is_valid_field_descriptor(s: str) -> bool:
 
 
 def is_valid_method_descriptor(s: str) -> bool:
-    """Return ``True`` if *s* is a well-formed JVM method descriptor."""
+    """Return ``True`` if *s* is a well-formed JVM method descriptor (§4.3.3).
+
+    Args:
+        s: The string to validate.
+
+    Returns:
+        Whether *s* can be parsed as a valid method descriptor.
+    """
     try:
         parse_method_descriptor(s)
         return True

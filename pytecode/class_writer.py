@@ -1,15 +1,36 @@
+"""Serialize a ClassFile tree into JVM ``.class`` file bytes (JVMS §4)."""
+
 from __future__ import annotations
 
 from . import attributes, constant_pool, instructions
 from .bytes_utils import BytesWriter
 from .info import ClassFile, FieldInfo, MethodInfo
 
+__all__ = ["ClassWriter"]
+
 
 class ClassWriter:
-    """Serialize a parsed ``ClassFile`` back to raw JVM classfile bytes."""
+    """Serializer that converts a ``ClassFile`` tree into JVM ``.class`` bytes.
+
+    This writer walks every section of the ``ClassFile`` structure — constant
+    pool, fields, methods, and attributes — and emits the binary encoding
+    defined by the JVM class-file format (JVMS §4).
+    """
 
     @staticmethod
     def write(classfile: ClassFile) -> bytes:
+        """Serialize a ``ClassFile`` into raw ``.class`` file bytes.
+
+        Encodes all sections of the class file (magic number, version,
+        constant pool, access flags, fields, methods, and attributes) into
+        the binary format specified by JVMS §4.1.
+
+        Args:
+            classfile: The parsed class-file structure to serialize.
+
+        Returns:
+            The complete ``.class`` binary content.
+        """
         writer = BytesWriter()
         _write_classfile(writer, classfile)
         return writer.to_bytes()

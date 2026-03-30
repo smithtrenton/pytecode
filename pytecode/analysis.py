@@ -13,12 +13,11 @@ The module operates on the symbolic editing model (``CodeModel``) so it
 benefits from label-based branch targets, symbolic operands, and
 exception handlers already bound to labels.
 
-JVM Spec references
--------------------
-- §4.7.4 — StackMapTable attribute format
-- §4.10.1 — Verification by type checking
-- §4.10.1.2 — Verification type system and type merging rules
-- §6.5 — Individual opcode definitions (stack effects)
+References:
+    JVM spec §4.7.4 — StackMapTable attribute format.
+    JVM spec §4.10.1 — Verification by type checking.
+    JVM spec §4.10.1.2 — Verification type system and type merging rules.
+    JVM spec §6.5 — Individual opcode definitions (stack effects).
 """
 
 from __future__ import annotations
@@ -160,7 +159,11 @@ class VNull:
 
 @dataclass(frozen=True, slots=True)
 class VObject:
-    """Verification type for a reference to a class, interface, or array."""
+    """Verification type for a reference to a class, interface, or array.
+
+    Attributes:
+        class_name: JVM internal name (e.g. ``"java/lang/String"`` or ``"[I"``).
+    """
 
     class_name: str
 
@@ -174,9 +177,11 @@ class VUninitializedThis:
 class VUninitialized:
     """Verification type for an object created by NEW before ``<init>``.
 
-    ``new_label`` identifies the NEW instruction that created this value.
     Analysis inserts synthetic labels for unlabeled ``NEW`` instructions so
     edited code can still refer to allocation sites precisely.
+
+    Attributes:
+        new_label: Label identifying the NEW instruction that created this value.
     """
 
     new_label: Label
@@ -275,10 +280,19 @@ def merge_vtypes(a: VType, b: VType, resolver: ClassResolver | None = None) -> V
     """Merge two verification types at a control-flow join point.
 
     Follows JVM spec §4.10.1.2 type merging rules:
+
     - Identical types → same type
     - Two ``VObject`` → ``VObject(common_superclass(...))``
     - ``VNull`` + reference → the reference type
     - Incompatible types → ``VTop``
+
+    Args:
+        a: First verification type.
+        b: Second verification type.
+        resolver: Optional class hierarchy resolver for precise object merging.
+
+    Returns:
+        The merged verification type.
     """
     if a == b:
         return a
@@ -311,9 +325,13 @@ def merge_vtypes(a: VType, b: VType, resolver: ClassResolver | None = None) -> V
 class FrameState:
     """Immutable snapshot of the operand stack and local variable slots.
 
-    ``stack`` is ordered bottom-to-top.  ``locals`` is indexed by slot number;
-    unset slots are ``VTop``.  Category-2 values (long, double) occupy two
-    consecutive slots—the value itself followed by ``VTop``.
+    Category-2 values (long, double) occupy two consecutive slots — the
+    value itself followed by ``VTop``.
+
+    Attributes:
+        stack: Operand stack, ordered bottom-to-top.
+        locals: Local variable slots indexed by slot number; unset slots
+            are ``VTop``.
     """
 
     stack: tuple[VType, ...]
@@ -331,9 +349,17 @@ class FrameState:
         return FrameState(tuple(new_stack), self.locals)
 
     def pop(self, n: int = 1) -> tuple[FrameState, tuple[VType, ...]]:
-        """Pop *n* stack slots and return (new_state, popped_values_top_first).
+        """Pop *n* stack slots and return ``(new_state, popped_values)``.
 
-        Raises ``StackUnderflowError`` if the stack has fewer than *n* slots.
+        Args:
+            n: Number of stack slots to pop.
+
+        Returns:
+            A ``(new_state, popped_values)`` tuple where *popped_values* is
+            ordered from topmost to deepest.
+
+        Raises:
+            StackUnderflowError: If the stack has fewer than *n* slots.
         """
         if len(self.stack) < n:
             raise StackUnderflowError(f"Need {n} slots but stack has {len(self.stack)}")
@@ -344,7 +370,11 @@ class FrameState:
         return FrameState(remaining, self.locals), popped
 
     def peek(self, depth: int = 0) -> VType:
-        """Return the type at *depth* slots from the top (0 = top)."""
+        """Return the type at *depth* slots from the top (0 = top).
+
+        Raises:
+            StackUnderflowError: If *depth* exceeds the current stack size.
+        """
         idx = len(self.stack) - 1 - depth
         if idx < 0:
             raise StackUnderflowError(f"Cannot peek at depth {depth} with stack size {len(self.stack)}")
@@ -364,7 +394,12 @@ class FrameState:
         return FrameState(self.stack, tuple(locals_list))
 
     def get_local(self, index: int) -> VType:
-        """Read a local variable slot."""
+        """Read a local variable slot.
+
+        Raises:
+            InvalidLocalError: If *index* is out of range or the slot is
+                uninitialized.
+        """
         if index < 0 or index >= len(self.locals):
             raise InvalidLocalError(f"Local variable slot {index} is out of range (max {len(self.locals) - 1})")
         vt = self.locals[index]
@@ -392,6 +427,13 @@ def initial_frame(method: MethodModel, class_name: str) -> FrameState:
     Slot 0 is ``VObject(class_name)`` for instance methods, or
     ``VUninitializedThis`` for ``<init>``.  Parameter types follow,
     with category-2 values spanning two slots.  Stack is empty.
+
+    Args:
+        method: The method whose initial frame to build.
+        class_name: JVM internal name of the enclosing class.
+
+    Returns:
+        A ``FrameState`` representing the method entry point.
     """
     from .constants import MethodAccessFlag
 
@@ -448,10 +490,19 @@ def _merge_frames(a: FrameState, b: FrameState, resolver: ClassResolver | None) 
 class OpcodeEffect:
     """Static stack effect and control-flow metadata for an opcode.
 
-    ``pops`` and ``pushes`` are -1 for opcodes whose stack effects depend on
+    ``pops`` and ``pushes`` are ``-1`` for opcodes whose stack effects depend on
     the operand (invoke, field access, LDC, multianewarray).  Those are
     computed dynamically during simulation from the instruction's symbolic
     operand metadata.
+
+    Attributes:
+        pops: Number of stack slots consumed (``-1`` if variable).
+        pushes: Number of stack slots produced (``-1`` if variable).
+        is_branch: ``True`` for branch instructions.
+        is_unconditional: ``True`` for unconditional transfers (goto, switch,
+            athrow).
+        is_switch: ``True`` for tableswitch/lookupswitch.
+        is_return: ``True`` for return instructions.
     """
 
     pops: int
@@ -750,6 +801,14 @@ class BasicBlock:
     """A maximal straight-line sequence of instructions within a method.
 
     Mutable during construction, then frozen by ``build_cfg``.
+
+    Attributes:
+        id: Unique block index within the CFG.
+        label: Label at the start of this block, if any.
+        instructions: Ordered instructions in this block.
+        successor_ids: Block ids of normal-flow successors.
+        exception_handler_ids: ``(handler_block_id, catch_type)`` pairs for
+            active exception handlers.
     """
 
     id: int
@@ -765,7 +824,13 @@ class BasicBlock:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionEdge:
-    """An exception edge from a protected block to a handler block."""
+    """An exception edge from a protected block to a handler block.
+
+    Attributes:
+        handler_block_id: Block id of the exception handler.
+        catch_type: Internal name of the caught exception type, or ``None``
+            for a catch-all (``finally``).
+    """
 
     handler_block_id: int
     catch_type: str | None
@@ -775,9 +840,11 @@ class ExceptionEdge:
 class ControlFlowGraph:
     """Control-flow graph for a method's code body.
 
-    ``blocks`` is ordered to match the original instruction sequence.
-    ``block_map`` provides fast lookup from block id to block.
-    ``label_to_block`` maps labels to the block they start.
+    Attributes:
+        entry: The entry basic block.
+        blocks: All blocks, ordered to match the original instruction sequence.
+        exception_handlers: Exception handler declarations from the code.
+        label_to_block: Mapping from labels to the block they start.
     """
 
     entry: BasicBlock
@@ -791,6 +858,12 @@ def build_cfg(code: CodeModel) -> ControlFlowGraph:
 
     Partitions the instruction stream into basic blocks and builds edges
     for branches, fall-through, and exception handlers.
+
+    Args:
+        code: The code model to partition into basic blocks.
+
+    Returns:
+        A ``ControlFlowGraph`` with edges for all control-flow paths.
     """
     items = code.instructions
     if not items:
@@ -1030,8 +1103,11 @@ def _find_next_insn(items: list[CodeItem], start: int) -> int | None:
 class SimulationResult:
     """Results of forward dataflow stack/local simulation.
 
-    ``entry_states`` and ``exit_states`` map block ids to frame states.
-    ``max_stack`` and ``max_locals`` track the observed maximums.
+    Attributes:
+        entry_states: Mapping from block id to the frame state on entry.
+        exit_states: Mapping from block id to the frame state on exit.
+        max_stack: Maximum operand stack depth observed.
+        max_locals: Maximum local variable slot count observed.
     """
 
     entry_states: dict[int, FrameState]
@@ -1050,8 +1126,18 @@ def simulate(
     """Run forward dataflow analysis over a control-flow graph.
 
     Propagates ``FrameState`` through each basic block, merging at join
-    points using a worklist algorithm.  Returns a ``SimulationResult``
-    with per-block entry/exit states and computed max_stack/max_locals.
+    points using a worklist algorithm.
+
+    Args:
+        cfg: Control-flow graph to analyze.
+        code: Code model providing the instruction stream.
+        method: Method model (used to derive the initial frame).
+        class_name: JVM internal name of the enclosing class.
+        resolver: Optional class hierarchy resolver for precise type merging.
+
+    Returns:
+        A ``SimulationResult`` with per-block entry/exit states and
+        computed max_stack/max_locals.
     """
     if not cfg.blocks:
         entry = initial_frame(method, class_name)
@@ -2129,6 +2215,15 @@ def compute_maxs(
 
     Builds a control-flow graph, runs forward dataflow simulation, and
     returns ``(max_stack, max_locals)``.
+
+    Args:
+        code: The code model to analyze.
+        method: The method model (used for initial frame).
+        class_name: JVM internal name of the enclosing class.
+        resolver: Optional class hierarchy resolver for precise type merging.
+
+    Returns:
+        A ``(max_stack, max_locals)`` tuple.
     """
     cfg = build_cfg(code)
     result = simulate(cfg, code, method, class_name, resolver)
@@ -2139,9 +2234,12 @@ def compute_maxs(
 class FrameComputationResult:
     """Results of frame computation: limits and StackMapTable.
 
-    ``max_stack`` and ``max_locals`` are the recomputed limits.
-    ``stack_map_table`` is ``None`` when no frames are required
-    (e.g. a linear method with no branches or exception handlers).
+    Attributes:
+        max_stack: Recomputed maximum operand stack depth.
+        max_locals: Recomputed maximum local variable slot count.
+        stack_map_table: Generated ``StackMapTable`` attribute, or ``None``
+            when no frames are required (e.g. a linear method with no
+            branches or exception handlers).
     """
 
     max_stack: int
@@ -2160,30 +2258,23 @@ def compute_frames(
     """Recompute ``max_stack``, ``max_locals``, and ``StackMapTable`` frames.
 
     Builds a CFG, simulates stack/local states, then generates compact
-    StackMapTable entries at every branch/exception-handler target.
+    StackMapTable entries at every branch/exception-handler target
+    (JVM spec §4.7.4).
 
-    Parameters
-    ----------
-    code:
-        The ``CodeModel`` whose frames to compute.
-    method:
-        The ``MethodModel`` owning this code (used for initial frame).
-    class_name:
-        Internal name of the enclosing class (e.g. ``"com/example/Foo"``).
-    cp:
-        ``ConstantPoolBuilder`` for allocating ``CONSTANT_Class`` entries
-        referenced by ``ObjectVariableInfo``.
-    label_offsets:
-        Mapping from ``Label`` to resolved bytecode offset, as produced
-        by ``resolve_labels()``.
-    resolver:
-        Optional class hierarchy resolver for precise type merging.
+    Args:
+        code: The ``CodeModel`` whose frames to compute.
+        method: The ``MethodModel`` owning this code (used for initial frame).
+        class_name: Internal name of the enclosing class
+            (e.g. ``"com/example/Foo"``).
+        cp: ``ConstantPoolBuilder`` for allocating ``CONSTANT_Class`` entries
+            referenced by ``ObjectVariableInfo``.
+        label_offsets: Mapping from ``Label`` to resolved bytecode offset,
+            as produced by ``resolve_labels()``.
+        resolver: Optional class hierarchy resolver for precise type merging.
 
-    Returns
-    -------
-    FrameComputationResult
-        Contains ``max_stack``, ``max_locals``, and an optional
-        ``StackMapTableAttr`` (``None`` if no frames are needed).
+    Returns:
+        A ``FrameComputationResult`` with ``max_stack``, ``max_locals``, and
+        an optional ``StackMapTableAttr`` (``None`` if no frames are needed).
     """
     analysis_code = _prepare_analysis_code(code)
     analysis_label_offsets = label_offsets

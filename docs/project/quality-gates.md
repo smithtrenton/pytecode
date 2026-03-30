@@ -11,7 +11,7 @@ Before calling the library a manipulation toolkit, it should have:
 - ~~negative tests for malformed transformations and invalid classfile inputs~~
 - ~~verifier acceptance tests (generated classes pass `java -verify`)~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 - ~~stable emitted bytes for deterministic scenarios~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12), [#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
-- generated API reference docs covering the supported public surface, with no undocumented public entry points ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+- ~~generated API reference docs covering the supported public surface, with no undocumented public entry points~~ ([#19](https://github.com/smithtrenton/pytecode/issues/19) — done)
 - ~~structured diagnostic output for all validation failures~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 - ~~differential CFG checks against an external oracle for representative compiled fixtures before later frame-computation and validation work depends on that analysis layer~~ ([#17](https://github.com/smithtrenton/pytecode/issues/17) — done)
 - ~~Tier 1 (roundtrip) passing for all existing fixtures before any higher tier is attempted~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
@@ -38,4 +38,6 @@ All four tiers of the bytecode validation framework are now implemented ([#14](h
 
 The remaining work is now centered on documentation coverage now that emission, archive rewrite, validation, frame recomputation, explicit debug-info lifecycle controls, the richer transform-composition layer, and context-passing transform protocols are in place. The roadmap continues with:
 
-- generated API reference docs with full public-surface coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+- ~~generated API reference docs with full public-surface coverage~~ ([#19](https://github.com/smithtrenton/pytecode/issues/19) — done)
+
+All quality gates and roadmap items have been completed.

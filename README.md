@@ -133,7 +133,19 @@ Run the JVM-backed CFG oracle suite only:
 uv run pytest -q -m oracle
 ```
 
-The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
+Validate docstring coverage across the public API surface:
+
+```powershell
+uv run python tools\generate_api_docs.py --check
+```
+
+Regenerate API reference HTML in `docs\api\`:
+
+```powershell
+uv run python tools\generate_api_docs.py
+```
+
+The`oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
 
 ## Script validation
 

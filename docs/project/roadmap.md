@@ -120,16 +120,9 @@ This layer is now implemented in `pytecode.jar`. `JarFile` remains compatible as
 
 Signature-related `META-INF` artifacts are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed. That caveat is explicit by design so archive rewrite support does not silently pretend to offer cryptographic integrity guarantees it does not implement.
 
-#### 15. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+#### 15. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19) — done)
 
-As the user-facing surface grows, the project should generate API reference
-documentation from Python docstrings/signatures instead of relying only on
-narrative guides. "Full coverage" should mean every supported public module,
-class, function, method, and convenience entry point appears in the generated
-reference output, with a workflow that flags newly introduced undocumented
-public APIs. This work should stay aligned with the public-surface decisions in
-[#6](https://github.com/smithtrenton/pytecode/issues/6) so the generated docs
-track the supported API rather than transient internal helpers.
+Generated API reference documentation now covers the full public surface (363 symbols across 20 modules) using `pdoc`. All public symbols have Google-style docstrings, and the validation script (`tools/generate_api_docs.py`) checks for 100% docstring coverage. Generated HTML lives in `docs/api/` and is committed to the repository. The test suite (`tests/test_api_docs.py`) validates the public-surface manifest and docstring coverage as part of the regular test run.
 
 ## Recommended implementation order
 
@@ -152,4 +145,4 @@ track the supported API rather than transient internal helpers.
 17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 18. ~~Add richer matcher DSL over `pytecode.transforms`.~~ ([#20](https://github.com/smithtrenton/pytecode/issues/20) — done)
 19. ~~Evaluate optional visitor-style transform API.~~ ([#21](https://github.com/smithtrenton/pytecode/issues/21) — done)
-20. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+20. ~~Add pydoc-based API reference generation with full public-surface coverage.~~ ([#19](https://github.com/smithtrenton/pytecode/issues/19) — done)

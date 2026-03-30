@@ -1,70 +1,179 @@
+"""Data types representing JVM bytecode instruction operands.
+
+Provides dataclasses and enums that model the operand formats for each JVM
+instruction as defined in the JVM specification (JVMS §6.5). Each opcode is
+mapped to an ``InsnInfoType`` member whose associated ``InsnInfo`` subclass
+describes the shape of its operands.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
 
+__all__ = [
+    "ArrayType",
+    "Branch",
+    "BranchW",
+    "ByteValue",
+    "ConstPoolIndex",
+    "IInc",
+    "IIncW",
+    "InsnInfo",
+    "InsnInfoType",
+    "InvokeDynamic",
+    "InvokeInterface",
+    "LocalIndex",
+    "LocalIndexW",
+    "LookupSwitch",
+    "MatchOffsetPair",
+    "MultiANewArray",
+    "NewArray",
+    "ShortValue",
+    "TableSwitch",
+]
+
 
 @dataclass
 class InsnInfo:
+    """Base operand info for a JVM bytecode instruction.
+
+    Attributes:
+        type: The ``InsnInfoType`` member identifying the opcode.
+        bytecode_offset: Byte offset of this instruction within the Code
+            attribute.
+    """
+
     type: InsnInfoType
     bytecode_offset: int
 
 
 @dataclass
 class LocalIndex(InsnInfo):
+    """Operand carrying a single-byte local variable index (§6.5).
+
+    Attributes:
+        index: Local variable slot index (0–255).
+    """
+
     index: int
 
 
 @dataclass
 class LocalIndexW(InsnInfo):
+    """Operand carrying a wide (two-byte) local variable index (§6.5.wide).
+
+    Attributes:
+        index: Local variable slot index (0–65535).
+    """
+
     index: int
 
 
 @dataclass
 class ConstPoolIndex(InsnInfo):
+    """Operand carrying a two-byte constant pool index.
+
+    Attributes:
+        index: Index into the class file constant pool.
+    """
+
     index: int
 
 
 @dataclass
 class ByteValue(InsnInfo):
+    """Operand carrying a signed byte immediate value (e.g. ``bipush``).
+
+    Attributes:
+        value: Signed byte value (−128–127).
+    """
+
     value: int
 
 
 @dataclass
 class ShortValue(InsnInfo):
+    """Operand carrying a signed short immediate value (e.g. ``sipush``).
+
+    Attributes:
+        value: Signed short value (−32768–32767).
+    """
+
     value: int
 
 
 @dataclass
 class Branch(InsnInfo):
+    """Operand for a branch instruction with a two-byte signed offset.
+
+    Attributes:
+        offset: Signed branch offset relative to this instruction.
+    """
+
     offset: int
 
 
 @dataclass
 class BranchW(InsnInfo):
+    """Operand for a wide branch instruction with a four-byte signed offset.
+
+    Attributes:
+        offset: Signed branch offset relative to this instruction.
+    """
+
     offset: int
 
 
 @dataclass
 class IInc(InsnInfo):
+    """Operand for the ``iinc`` instruction (§6.5.iinc).
+
+    Attributes:
+        index: Local variable slot index (0–255).
+        value: Signed byte increment constant.
+    """
+
     index: int
     value: int
 
 
 @dataclass
 class IIncW(InsnInfo):
+    """Operand for the wide form of ``iinc`` (§6.5.wide).
+
+    Attributes:
+        index: Local variable slot index (0–65535).
+        value: Signed short increment constant.
+    """
+
     index: int
     value: int
 
 
 @dataclass
 class InvokeDynamic(InsnInfo):
+    """Operand for the ``invokedynamic`` instruction (§6.5.invokedynamic).
+
+    Attributes:
+        index: Constant pool index to a ``CONSTANT_InvokeDynamic_info``.
+        unused: Two reserved zero bytes following the index.
+    """
+
     index: int
     unused: bytes
 
 
 @dataclass
 class InvokeInterface(InsnInfo):
+    """Operand for the ``invokeinterface`` instruction (§6.5.invokeinterface).
+
+    Attributes:
+        index: Constant pool index to a ``CONSTANT_InterfaceMethodref_info``.
+        count: Number of argument slots (non-zero).
+        unused: One reserved zero byte following count.
+    """
+
     index: int
     count: int
     unused: bytes
@@ -72,23 +181,51 @@ class InvokeInterface(InsnInfo):
 
 @dataclass
 class NewArray(InsnInfo):
+    """Operand for the ``newarray`` instruction (§6.5.newarray).
+
+    Attributes:
+        atype: ``ArrayType`` enum member identifying the primitive element type.
+    """
+
     atype: ArrayType
 
 
 @dataclass
 class MultiANewArray(InsnInfo):
+    """Operand for the ``multianewarray`` instruction (§6.5.multianewarray).
+
+    Attributes:
+        index: Constant pool index to the array class.
+        dimensions: Number of dimensions to allocate (≥ 1).
+    """
+
     index: int
     dimensions: int
 
 
 @dataclass
 class MatchOffsetPair:
+    """A single match-offset entry used in a ``lookupswitch`` table.
+
+    Attributes:
+        match: The integer case value.
+        offset: Branch offset relative to the ``lookupswitch`` instruction.
+    """
+
     match: int
     offset: int
 
 
 @dataclass
 class LookupSwitch(InsnInfo):
+    """Operand for the ``lookupswitch`` instruction (§6.5.lookupswitch).
+
+    Attributes:
+        default: Default branch offset when no key matches.
+        npairs: Number of match-offset pairs.
+        pairs: Sorted list of ``MatchOffsetPair`` entries.
+    """
+
     default: int
     npairs: int
     pairs: list[MatchOffsetPair]
@@ -96,6 +233,15 @@ class LookupSwitch(InsnInfo):
 
 @dataclass
 class TableSwitch(InsnInfo):
+    """Operand for the ``tableswitch`` instruction (§6.5.tableswitch).
+
+    Attributes:
+        default: Default branch offset when the index is out of range.
+        low: Lowest case index value.
+        high: Highest case index value.
+        offsets: Branch offsets for each case from *low* to *high* inclusive.
+    """
+
     default: int
     low: int
     high: int
@@ -103,6 +249,12 @@ class TableSwitch(InsnInfo):
 
 
 class InsnInfoType(IntEnum):
+    """Enum mapping every JVM opcode to its operand format.
+
+    Each member's integer value is the opcode byte, and its ``instinfo``
+    attribute is the ``InsnInfo`` subclass that describes the operand layout.
+    """
+
     AALOAD = 0x32, InsnInfo
     AASTORE = 0x53, InsnInfo
     ACONST_NULL = 0x01, InsnInfo
@@ -328,6 +480,11 @@ class InsnInfoType(IntEnum):
 
 
 class ArrayType(IntEnum):
+    """Primitive array element types for the ``newarray`` instruction (§6.5.newarray).
+
+    Each member's value corresponds to the ``atype`` operand byte.
+    """
+
     BOOLEAN = 4
     CHAR = 5
     FLOAT = 6

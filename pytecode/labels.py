@@ -1,3 +1,12 @@
+"""Label-based bytecode instruction editing.
+
+Provides symbolic ``Label`` targets and label-aware instruction types
+(``BranchInsn``, ``LookupSwitchInsn``, ``TableSwitchInsn``) so that bytecode
+can be manipulated without tracking raw offsets.  ``lower_code`` converts a
+label-based ``CodeModel`` into an offset-based ``CodeAttr`` ready for
+serialisation, and ``resolve_labels`` computes the offset mapping.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -69,6 +78,22 @@ if TYPE_CHECKING:
     from .hierarchy import ClassResolver
     from .model import CodeModel, MethodModel
 
+__all__ = [
+    "BranchInsn",
+    "CodeItem",
+    "ExceptionHandler",
+    "Label",
+    "LabelResolution",
+    "LineNumberEntry",
+    "LocalVariableEntry",
+    "LocalVariableTypeEntry",
+    "LookupSwitchInsn",
+    "TableSwitchInsn",
+    "lower_code",
+    "resolve_catch_type",
+    "resolve_labels",
+]
+
 _I2_MIN = -(1 << 15)
 _I2_MAX = (1 << 15) - 1
 _I4_MIN = -(1 << 31)
@@ -101,7 +126,14 @@ _INVERTED_CONDITIONAL_BRANCHES: dict[InsnInfoType, InsnInfoType] = {
 
 @dataclass(eq=False)
 class Label:
-    """Identity-based marker for a bytecode position."""
+    """Identity-based marker for a bytecode position.
+
+    Labels use identity equality so that distinct instances targeting the same
+    logical position remain distinguishable.
+
+    Attributes:
+        name: Optional human-readable name for debugging output.
+    """
 
     name: str | None = None
 
@@ -116,6 +148,16 @@ type CodeItem = InsnInfo | Label
 
 @dataclass
 class ExceptionHandler:
+    """An exception handler entry that uses labels for range and target.
+
+    Attributes:
+        start: Label marking the beginning of the protected region (inclusive).
+        end: Label marking the end of the protected region (exclusive).
+        handler: Label marking the entry point of the handler code.
+        catch_type: Internal name of the caught exception class, or ``None``
+            for a catch-all (``finally``) handler.
+    """
+
     start: Label
     end: Label
     handler: Label
@@ -124,12 +166,29 @@ class ExceptionHandler:
 
 @dataclass
 class LineNumberEntry:
+    """Maps a label position to a source line number.
+
+    Attributes:
+        label: Label marking the bytecode position.
+        line_number: Corresponding source-file line number.
+    """
+
     label: Label
     line_number: int
 
 
 @dataclass
 class LocalVariableEntry:
+    """A local variable debug entry using labels for the live range.
+
+    Attributes:
+        start: Label marking the start of the variable's scope (inclusive).
+        end: Label marking the end of the variable's scope (exclusive).
+        name: Variable name as it appears in source.
+        descriptor: JVM field descriptor of the variable's type.
+        slot: Local variable table slot index.
+    """
+
     start: Label
     end: Label
     name: str
@@ -139,6 +198,19 @@ class LocalVariableEntry:
 
 @dataclass
 class LocalVariableTypeEntry:
+    """A local variable type debug entry using labels for the live range.
+
+    Similar to ``LocalVariableEntry`` but carries a generic signature instead
+    of a plain descriptor.
+
+    Attributes:
+        start: Label marking the start of the variable's scope (inclusive).
+        end: Label marking the end of the variable's scope (exclusive).
+        name: Variable name as it appears in source.
+        signature: Generic signature of the variable's type.
+        slot: Local variable table slot index.
+    """
+
     start: Label
     end: Label
     name: str
@@ -148,7 +220,15 @@ class LocalVariableTypeEntry:
 
 @dataclass(init=False)
 class BranchInsn(InsnInfo):
-    """Editing-model branch instruction that targets a label."""
+    """A branch instruction that targets a label instead of a raw offset.
+
+    Supports both narrow (2-byte offset) and wide (4-byte offset) branch
+    opcodes.  During lowering, narrow branches that overflow are automatically
+    widened or inverted as needed.
+
+    Attributes:
+        target: The ``Label`` this branch jumps to.
+    """
 
     target: Label
 
@@ -161,7 +241,12 @@ class BranchInsn(InsnInfo):
 
 @dataclass(init=False)
 class LookupSwitchInsn(InsnInfo):
-    """Editing-model LOOKUPSWITCH that targets labels."""
+    """A ``lookupswitch`` instruction that uses labels for jump targets.
+
+    Attributes:
+        default_target: Label for the default branch.
+        pairs: Match-value / label pairs for each case.
+    """
 
     default_target: Label
     pairs: list[tuple[int, Label]]
@@ -179,7 +264,14 @@ class LookupSwitchInsn(InsnInfo):
 
 @dataclass(init=False)
 class TableSwitchInsn(InsnInfo):
-    """Editing-model TABLESWITCH that targets labels."""
+    """A ``tableswitch`` instruction that uses labels for jump targets.
+
+    Attributes:
+        default_target: Label for the default branch.
+        low: Minimum match value (inclusive).
+        high: Maximum match value (inclusive).
+        targets: Labels for each case in the ``low..high`` range.
+    """
 
     default_target: Label
     low: int
@@ -208,6 +300,14 @@ class TableSwitchInsn(InsnInfo):
 
 @dataclass
 class LabelResolution:
+    """Result of resolving labels to bytecode offsets.
+
+    Attributes:
+        label_offsets: Mapping from each ``Label`` to its resolved bytecode offset.
+        instruction_offsets: Bytecode offset of each item in the instruction list.
+        total_code_length: Total byte length of the lowered bytecode.
+    """
+
     label_offsets: dict[Label, int]
     instruction_offsets: list[int]
     total_code_length: int
@@ -413,9 +513,18 @@ def resolve_labels(
 ) -> LabelResolution:
     """Resolve label and instruction offsets for a mixed instruction stream.
 
-    When the stream contains single-slot ``LdcInsn`` values, pass the current
-    ``ConstantPoolBuilder`` so their byte size can be resolved exactly without
-    mutating the live pool.
+    Args:
+        items: Instruction stream containing ``InsnInfo`` and ``Label`` items.
+        cp: Constant-pool builder, required when the stream contains
+            single-slot ``LdcInsn`` values so their byte size can be
+            determined without mutating the live pool.
+
+    Returns:
+        A ``LabelResolution`` with the computed offsets and total code length.
+
+    Raises:
+        ValueError: If a label appears more than once, or if a
+            ``ConstantPoolBuilder`` is needed but not provided.
     """
 
     ldc_index_cache: dict[int, int] | None = None
@@ -782,15 +891,32 @@ def lower_code(
 ) -> CodeAttr:
     """Lower a label-based ``CodeModel`` into a raw ``CodeAttr``.
 
-    When *recompute_frames* is ``True``, the frame computation pipeline
-    runs automatically: ``max_stack`` and ``max_locals`` are recomputed
-    via stack simulation, and a fresh ``StackMapTable`` attribute is
-    generated and attached to the returned ``CodeAttr``.  This requires
-    *method* and *class_name* to be provided. ``debug_info`` controls
-    whether lifted LineNumberTable/LocalVariableTable/LocalVariableTypeTable
-    entries are preserved or stripped during lowering. Explicitly stale
-    code-debug metadata is stripped automatically even when
-    ``debug_info="preserve"``.
+    Converts symbolic label references into concrete bytecode offsets,
+    automatically widening branches that overflow the signed 16-bit range.
+
+    Args:
+        code: The label-based code model to lower.
+        cp: Constant-pool builder used to allocate pool entries for operands.
+        method: Method that owns *code*.  Required when *recompute_frames*
+            is ``True``.
+        class_name: Internal name of the class containing the method.
+            Required when *recompute_frames* is ``True``.
+        resolver: Optional class hierarchy resolver for frame computation.
+        recompute_frames: When ``True``, ``max_stack``, ``max_locals``, and
+            the ``StackMapTable`` attribute are recomputed via stack
+            simulation.
+        debug_info: Policy controlling whether debug attributes
+            (``LineNumberTable``, ``LocalVariableTable``,
+            ``LocalVariableTypeTable``) are preserved or stripped.
+            Stale debug metadata is stripped automatically regardless.
+
+    Returns:
+        A fully resolved ``CodeAttr`` ready for binary serialisation.
+
+    Raises:
+        ValueError: If *recompute_frames* is ``True`` but *method* or
+            *class_name* is ``None``, or if the resulting code length
+            exceeds the JVM maximum of 65 535 bytes.
     """
     if recompute_frames and (method is None or class_name is None):
         raise ValueError("method and class_name are required when recompute_frames=True")
@@ -842,7 +968,21 @@ def lower_code(
 
 
 def resolve_catch_type(cp: ConstantPoolBuilder, catch_type_index: int) -> str | None:
-    """Resolve an exception handler catch type index to a class name."""
+    """Resolve an exception handler catch-type constant-pool index.
+
+    Args:
+        cp: Constant-pool builder to look up the entry in.
+        catch_type_index: Index into the constant pool.  ``0`` denotes a
+            catch-all (``finally``) handler.
+
+    Returns:
+        The internal class name of the caught exception type, or ``None``
+        for a catch-all handler.
+
+    Raises:
+        ValueError: If the index is non-zero but does not point to a
+            ``CONSTANT_Class`` entry.
+    """
 
     if catch_type_index == 0:
         return None

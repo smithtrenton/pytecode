@@ -1,8 +1,18 @@
+"""Mutable editing models for JVM class files.
+
+Provides dataclass-based wrappers (``ClassModel``, ``MethodModel``,
+``FieldModel``, ``CodeModel``) that resolve raw constant-pool indexes
+into symbolic string references, making class-file content easy to
+inspect and transform programmatically.
+"""
+
 from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+__all__ = ["ClassModel", "CodeModel", "FieldModel", "MethodModel"]
 
 from .attributes import (
     AttributeInfo,
@@ -99,11 +109,23 @@ if TYPE_CHECKING:
 
 @dataclass
 class CodeModel:
-    """Mutable wrapper around a method's code body.
+    """Mutable wrapper around a method's Code attribute (JVMS §4.7.3).
 
-    Carries a mixed instruction stream of raw instructions plus ``Label``
-    pseudo-instructions, symbolic exception/debug metadata, and stack/local
-    limits from the parsed ``CodeAttr``.
+    Carries a mixed instruction stream of raw opcodes and ``Label``
+    pseudo-instructions, symbolic exception/debug metadata, and
+    stack/local limits lifted from the parsed ``CodeAttr``.
+
+    Attributes:
+        max_stack: Maximum operand-stack depth for this method.
+        max_locals: Maximum number of local-variable slots.
+        instructions: Interleaved opcodes and ``Label`` pseudo-instructions.
+        exception_handlers: Symbolic exception-table entries.
+        line_numbers: Line-number debug entries (may be empty).
+        local_variables: LocalVariableTable debug entries (may be empty).
+        local_variable_types: LocalVariableTypeTable debug entries
+            (may be empty).
+        attributes: Non-lifted Code sub-attributes (e.g. StackMapTable).
+        debug_info_state: Tracks whether debug tables are fresh or stale.
     """
 
     max_stack: int
@@ -120,7 +142,14 @@ class CodeModel:
 
 @dataclass
 class FieldModel:
-    """Mutable representation of a class field with symbolic references."""
+    """Mutable wrapper around a class field (JVMS §4.5).
+
+    Attributes:
+        access_flags: Field access and property flags.
+        name: Unqualified field name.
+        descriptor: Field descriptor (e.g. ``I``, ``Ljava/lang/String;``).
+        attributes: Raw field-level attributes (e.g. ConstantValue).
+    """
 
     access_flags: FieldAccessFlag
     name: str
@@ -130,11 +159,18 @@ class FieldModel:
 
 @dataclass
 class MethodModel:
-    """Mutable representation of a class method with symbolic references.
+    """Mutable wrapper around a class method (JVMS §4.6).
 
     The ``code`` field is ``None`` for abstract and native methods.
-    The ``attributes`` list contains non-Code attributes only; the Code
+    The ``attributes`` list holds non-Code attributes only; the Code
     attribute is lifted into the ``code`` field.
+
+    Attributes:
+        access_flags: Method access and property flags.
+        name: Unqualified method name (or ``<init>``/``<clinit>``).
+        descriptor: Method descriptor (e.g. ``(II)V``).
+        code: Lifted Code attribute, or ``None`` for abstract/native methods.
+        attributes: Non-Code method-level attributes (e.g. Exceptions).
     """
 
     access_flags: MethodAccessFlag
@@ -146,16 +182,29 @@ class MethodModel:
 
 @dataclass
 class ClassModel:
-    """Mutable editing model for a JVM class file.
+    """Mutable editing model for a JVM class file (JVMS §4.1).
 
-    Fields use symbolic (resolved) references—plain strings for class
-    names, field/method names, and descriptors—instead of raw
+    Fields use symbolic (resolved) references — plain strings for class
+    names, field/method names, and descriptors — instead of raw
     constant-pool indexes.
 
     A ``ConstantPoolBuilder`` is carried so that raw attributes and
     instructions (which still contain CP indexes) remain valid.  The
     builder is seeded from the original constant pool during
     ``from_classfile`` and can be used to allocate new entries.
+
+    Attributes:
+        version: ``(major, minor)`` class-file version pair.
+        access_flags: Class access and property flags.
+        name: Internal class name (e.g. ``java/lang/Object``).
+        super_name: Internal name of the superclass, or ``None`` for
+            ``java/lang/Object`` itself.
+        interfaces: Internal names of directly implemented interfaces.
+        fields: Mutable field models.
+        methods: Mutable method models.
+        attributes: Class-level attributes (e.g. SourceFile, InnerClasses).
+        constant_pool: Builder for allocating or resolving CP entries.
+        debug_info_state: Tracks whether debug metadata is fresh or stale.
     """
 
     version: tuple[int, int]
@@ -179,8 +228,19 @@ class ClassModel:
 
         Resolves constant-pool indexes to symbolic string values and
         seeds the ``ConstantPoolBuilder`` from the original pool so that
-        raw attributes and instructions remain valid. Pass ``skip_debug=True``
-        to omit ASM-style debug metadata before it enters the mutable model.
+        raw attributes and instructions remain valid.
+
+        Args:
+            cf: Parsed class-file structure to lift.
+            skip_debug: If true, strip debug metadata (line numbers,
+                local-variable tables, source-file attributes) during
+                lifting.
+
+        Returns:
+            A fully resolved ``ClassModel``.
+
+        Raises:
+            ValueError: If a constant-pool entry has an unexpected type.
         """
         cp = ConstantPoolBuilder.from_pool(cf.constant_pool)
 
@@ -229,7 +289,15 @@ class ClassModel:
 
     @classmethod
     def from_bytes(cls, data: bytes | bytearray, *, skip_debug: bool = False) -> ClassModel:
-        """Parse raw class-file bytes and build a ``ClassModel``."""
+        """Parse raw class-file bytes and build a ``ClassModel``.
+
+        Args:
+            data: Raw ``.class`` file content.
+            skip_debug: If true, strip debug metadata during lifting.
+
+        Returns:
+            A fully resolved ``ClassModel``.
+        """
         reader = ClassReader(data)
         return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
 
@@ -250,10 +318,18 @@ class ClassModel:
         entries for every symbolic reference and reassembles the raw
         ``FieldInfo``/``MethodInfo``/``CodeAttr`` structures.
 
-        When *recompute_frames* is ``True``, ``max_stack``, ``max_locals``,
-        and ``StackMapTable`` are recomputed for every method that has code.
-        ``debug_info`` controls whether lifted code-debug tables and class-level
-        source-debug attributes are preserved or stripped during lowering.
+        Args:
+            recompute_frames: When true, recompute ``max_stack``,
+                ``max_locals``, and ``StackMapTable`` for every method
+                that has code.
+            resolver: Class hierarchy resolver required when
+                *recompute_frames* is true.
+            debug_info: Controls whether lifted debug tables and
+                class-level source-debug attributes are preserved or
+                stripped during lowering.
+
+        Returns:
+            A fully assembled ``ClassFile`` ready for serialization.
         """
         cp = self.constant_pool
         debug_policy = normalize_debug_info_policy(debug_info)
@@ -310,7 +386,19 @@ class ClassModel:
         resolver: ClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
     ) -> bytes:
-        """Lower this model and serialize the resulting ``ClassFile`` to bytes."""
+        """Lower this model and serialize the resulting ``ClassFile`` to bytes.
+
+        Args:
+            recompute_frames: When true, recompute stack-map frames
+                for every method that has code.
+            resolver: Class hierarchy resolver required when
+                *recompute_frames* is true.
+            debug_info: Controls whether debug metadata is preserved
+                or stripped during lowering.
+
+        Returns:
+            Raw ``.class`` file content.
+        """
         return ClassWriter.write(
             self.to_classfile(
                 recompute_frames=recompute_frames,

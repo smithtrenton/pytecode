@@ -1,15 +1,16 @@
-"""Constant-pool management utilities for building and editing JVM class files.
+"""Constant-pool builder for JVM class files.
 
-Provides :class:`ConstantPoolBuilder`, a mutable accumulator that manages a JVM
-constant pool with deduplication on insertion, symbol-table-style lookups, and
-deterministic ordering.  It is the constant-pool component intended for use by
-the editing model (#6) and emission layer (#12).
+Provides ``ConstantPoolBuilder``, a mutable accumulator that manages a JVM
+constant pool (§4.4) with deduplication on insertion, symbol-table-style
+lookups, and deterministic ordering.
 """
 
 from __future__ import annotations
 
 import copy
 from typing import TYPE_CHECKING
+
+__all__ = ["ConstantPoolBuilder"]
 
 from .constant_pool import (
     ClassInfo,
@@ -254,24 +255,25 @@ def _validate_import_pool(pool: list[ConstantPoolInfo | None]) -> None:
 
 
 class ConstantPoolBuilder:
-    """Builds a JVM constant pool with deduplication and symbol-table lookups.
+    """Mutable accumulator for building a JVM constant pool with deduplication.
 
     Entries are assigned indexes in insertion order starting at 1 (index 0 is
-    always *None* per the JVM spec).  Inserting an already-present entry returns
-    the existing index without growing the pool.
+    always ``None`` per the JVM spec §4.1).  Inserting an already-present entry
+    returns the existing index without growing the pool.
 
-    High-level convenience methods (e.g. :meth:`add_class`) automatically create
+    High-level convenience methods (e.g. ``add_class``) automatically create
     any prerequisite entries (e.g. the ``CONSTANT_Utf8`` name string) and
     deduplicate the entire chain.
 
-    Use :meth:`from_pool` to seed from a parsed :attr:`~pytecode.info.ClassFile.constant_pool`
-    list; new entries appended afterwards will not disturb existing indexes.
+    Use ``from_pool`` to seed from a parsed ``ClassFile.constant_pool`` list;
+    new entries appended afterwards will not disturb existing indexes.
 
-    Use :meth:`build` to export the pool as a ``list[ConstantPoolInfo | None]``
-    compatible with :attr:`~pytecode.info.ClassFile.constant_pool`.
+    Use ``build`` to export the pool as a ``list[ConstantPoolInfo | None]``
+    compatible with ``ClassFile.constant_pool``.
     """
 
     def __init__(self) -> None:
+        """Initialize an empty constant pool with only the index-0 placeholder."""
         # Index 0 is always None per the JVM spec.
         self._pool: list[ConstantPoolInfo | None] = [None]
         self._next_index: int = 1
@@ -288,12 +290,23 @@ class ConstantPoolBuilder:
     def from_pool(cls, pool: list[ConstantPoolInfo | None]) -> ConstantPoolBuilder:
         """Seed a new builder from an existing parsed constant pool.
 
-        The original indexes are preserved so that all existing CP references in
-        the classfile remain valid.  New entries appended after import receive
-        fresh indexes starting immediately after the last imported entry.
+        The original indexes are preserved so that all existing CP references
+        in the class file remain valid.  New entries appended after import
+        receive fresh indexes starting immediately after the last imported
+        entry.
 
-        *pool* is the ``list[ConstantPoolInfo | None]`` from
-        :attr:`~pytecode.info.ClassFile.constant_pool` (index 0 is *None*).
+        Args:
+            pool: Constant pool list where index 0 is ``None`` and each
+                subsequent element is a ``ConstantPoolInfo`` or ``None`` for
+                double-slot gaps.
+
+        Returns:
+            A new builder pre-populated with copies of the imported entries.
+
+        Raises:
+            ValueError: If the pool structure is invalid (e.g. missing
+                index-0 placeholder, mismatched entry indexes, or malformed
+                entries).
         """
         builder = cls()
         _validate_import_pool(pool)
@@ -363,11 +376,20 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def add_entry(self, entry: ConstantPoolInfo) -> int:
-        """Add any :class:`~pytecode.constant_pool.ConstantPoolInfo` entry directly.
+        """Insert an arbitrary constant pool entry with deduplication.
 
-        Returns the CP index of the entry (existing index if an identical entry
-        is already present, otherwise a newly allocated index).  The caller's
-        object is never mutated.
+        The caller's object is never mutated; an internal copy is stored.
+
+        Args:
+            entry: Any ``ConstantPoolInfo`` subclass instance to add.
+
+        Returns:
+            The CP index of the entry — existing if a duplicate was found,
+            otherwise newly allocated.
+
+        Raises:
+            ValueError: If the entry fails validation (e.g. invalid modified
+                UTF-8 or illegal ``MethodHandle`` reference kind).
         """
         entry_copy = copy.copy(entry)
         self._validate_entry(entry_copy)
@@ -378,7 +400,19 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def add_utf8(self, value: str) -> int:
-        """Add a ``CONSTANT_Utf8`` entry for *value*.  Returns the CP index."""
+        """Add a ``CONSTANT_Utf8`` entry for a Python string (§4.4.7).
+
+        The string is encoded to JVM modified UTF-8.
+
+        Args:
+            value: The Python string to store.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+
+        Raises:
+            ValueError: If the encoded form exceeds the 65 535-byte JVM limit.
+        """
         encoded = encode_modified_utf8(value)
         if len(encoded) > _UTF8_MAX_BYTES:
             raise ValueError(f"Modified UTF-8 payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes")
@@ -391,22 +425,52 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_integer(self, value: int) -> int:
-        """Add a ``CONSTANT_Integer`` entry.  *value* is the raw 4-byte integer bits."""
+        """Add a ``CONSTANT_Integer`` entry (§4.4.4).
+
+        Args:
+            value: Raw 4-byte integer value stored as the ``bytes`` field.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+        """
         entry = IntegerInfo(index=0, offset=0, tag=_TAG_INTEGER, value_bytes=value)
         return self._allocate(entry)
 
     def add_float(self, raw_bits: int) -> int:
-        """Add a ``CONSTANT_Float`` entry.  *raw_bits* is the raw IEEE 754 bit pattern."""
+        """Add a ``CONSTANT_Float`` entry (§4.4.4).
+
+        Args:
+            raw_bits: IEEE 754 single-precision bit pattern.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+        """
         entry = FloatInfo(index=0, offset=0, tag=_TAG_FLOAT, value_bytes=raw_bits)
         return self._allocate(entry)
 
     def add_long(self, high: int, low: int) -> int:
-        """Add a ``CONSTANT_Long`` entry (double-slot).  Returns the CP index."""
+        """Add a ``CONSTANT_Long`` entry (§4.4.5, double-slot).
+
+        Args:
+            high: Upper 32 bits of the long value.
+            low: Lower 32 bits of the long value.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+        """
         entry = LongInfo(index=0, offset=0, tag=_TAG_LONG, high_bytes=high, low_bytes=low)
         return self._allocate(entry)
 
     def add_double(self, high: int, low: int) -> int:
-        """Add a ``CONSTANT_Double`` entry (double-slot).  Returns the CP index."""
+        """Add a ``CONSTANT_Double`` entry (§4.4.5, double-slot).
+
+        Args:
+            high: Upper 32 bits of the double value.
+            low: Lower 32 bits of the double value.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+        """
         entry = DoubleInfo(index=0, offset=0, tag=_TAG_DOUBLE, high_bytes=high, low_bytes=low)
         return self._allocate(entry)
 
@@ -415,28 +479,47 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def add_class(self, name: str) -> int:
-        """Add a ``CONSTANT_Class`` entry for the class/interface *name*.
+        """Add a ``CONSTANT_Class`` entry (§4.4.1).
 
-        *name* must be in JVM internal form (e.g. ``java/lang/Object``).
         The required ``CONSTANT_Utf8`` name entry is created automatically.
+
+        Args:
+            name: Class or interface name in JVM internal form
+                (e.g. ``java/lang/Object``).
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         name_index = self.add_utf8(name)
         entry = ClassInfo(index=0, offset=0, tag=_TAG_CLASS, name_index=name_index)
         return self._allocate(entry)
 
     def add_string(self, value: str) -> int:
-        """Add a ``CONSTANT_String`` entry for *value*.
+        """Add a ``CONSTANT_String`` entry (§4.4.3).
 
         The required ``CONSTANT_Utf8`` entry is created automatically.
+
+        Args:
+            value: The string literal value.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         string_index = self.add_utf8(value)
         entry = StringInfo(index=0, offset=0, tag=_TAG_STRING, string_index=string_index)
         return self._allocate(entry)
 
     def add_name_and_type(self, name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_NameAndType`` entry.
+        """Add a ``CONSTANT_NameAndType`` entry (§4.4.6).
 
-        Both ``CONSTANT_Utf8`` entries (name and descriptor) are created automatically.
+        Both ``CONSTANT_Utf8`` entries are created automatically.
+
+        Args:
+            name: Unqualified field or method name.
+            descriptor: Field or method descriptor string.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         name_index = self.add_utf8(name)
         descriptor_index = self.add_utf8(descriptor)
@@ -450,10 +533,18 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_fieldref(self, class_name: str, field_name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_Fieldref`` entry.
+        """Add a ``CONSTANT_Fieldref`` entry (§4.4.2).
 
         Prerequisite ``CONSTANT_Class`` and ``CONSTANT_NameAndType`` entries
         (and their ``CONSTANT_Utf8`` dependencies) are created automatically.
+
+        Args:
+            class_name: Owning class in JVM internal form.
+            field_name: Unqualified field name.
+            descriptor: Field descriptor string.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(field_name, descriptor)
@@ -467,9 +558,17 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_methodref(self, class_name: str, method_name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_Methodref`` entry.
+        """Add a ``CONSTANT_Methodref`` entry (§4.4.2).
 
         Prerequisite entries are created automatically.
+
+        Args:
+            class_name: Owning class in JVM internal form.
+            method_name: Unqualified method name.
+            descriptor: Method descriptor string.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
@@ -483,9 +582,17 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_interface_methodref(self, class_name: str, method_name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_InterfaceMethodref`` entry.
+        """Add a ``CONSTANT_InterfaceMethodref`` entry (§4.4.2).
 
         Prerequisite entries are created automatically.
+
+        Args:
+            class_name: Owning interface in JVM internal form.
+            method_name: Unqualified method name.
+            descriptor: Method descriptor string.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
@@ -503,10 +610,20 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def add_method_handle(self, reference_kind: int, reference_index: int) -> int:
-        """Add a ``CONSTANT_MethodHandle`` entry.
+        """Add a ``CONSTANT_MethodHandle`` entry (§4.4.8).
 
-        *reference_kind* must be a valid JVM reference-kind value (1–9).
-        *reference_index* must already refer to a compatible existing CP entry.
+        Args:
+            reference_kind: JVM reference-kind value (1–9), denoting the
+                bytecode behavior of the handle.
+            reference_index: CP index of the target ``Fieldref``,
+                ``Methodref``, or ``InterfaceMethodref`` entry.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
+
+        Raises:
+            ValueError: If *reference_kind* is out of range or the target
+                entry type is incompatible with the specified kind.
         """
         _validate_method_handle(self._pool, reference_kind, reference_index)
         entry = MethodHandleInfo(
@@ -519,20 +636,35 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_method_type(self, descriptor: str) -> int:
-        """Add a ``CONSTANT_MethodType`` entry.
+        """Add a ``CONSTANT_MethodType`` entry (§4.4.9).
 
-        The required ``CONSTANT_Utf8`` descriptor entry is created automatically.
+        The required ``CONSTANT_Utf8`` descriptor entry is created
+        automatically.
+
+        Args:
+            descriptor: Method descriptor string.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         descriptor_index = self.add_utf8(descriptor)
         entry = MethodTypeInfo(index=0, offset=0, tag=_TAG_METHOD_TYPE, descriptor_index=descriptor_index)
         return self._allocate(entry)
 
     def add_dynamic(self, bootstrap_method_attr_index: int, name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_Dynamic`` entry.
+        """Add a ``CONSTANT_Dynamic`` entry (§4.4.10).
 
-        *bootstrap_method_attr_index* references an entry in the ``BootstrapMethods``
-        attribute.  The ``CONSTANT_NameAndType`` entry (and its Utf8 dependencies)
-        are created automatically.
+        The ``CONSTANT_NameAndType`` entry and its ``CONSTANT_Utf8``
+        dependencies are created automatically.
+
+        Args:
+            bootstrap_method_attr_index: Index into the
+                ``BootstrapMethods`` attribute table.
+            name: Unqualified name of the dynamically-computed constant.
+            descriptor: Field descriptor for the constant's type.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         nat_index = self.add_name_and_type(name, descriptor)
         entry = DynamicInfo(
@@ -545,11 +677,19 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_invoke_dynamic(self, bootstrap_method_attr_index: int, name: str, descriptor: str) -> int:
-        """Add a ``CONSTANT_InvokeDynamic`` entry.
+        """Add a ``CONSTANT_InvokeDynamic`` entry (§4.4.10).
 
-        *bootstrap_method_attr_index* references an entry in the ``BootstrapMethods``
-        attribute.  The ``CONSTANT_NameAndType`` entry (and its Utf8 dependencies)
-        are created automatically.
+        The ``CONSTANT_NameAndType`` entry and its ``CONSTANT_Utf8``
+        dependencies are created automatically.
+
+        Args:
+            bootstrap_method_attr_index: Index into the
+                ``BootstrapMethods`` attribute table.
+            name: Unqualified method name for the call site.
+            descriptor: Method descriptor for the call site.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         nat_index = self.add_name_and_type(name, descriptor)
         entry = InvokeDynamicInfo(
@@ -562,18 +702,30 @@ class ConstantPoolBuilder:
         return self._allocate(entry)
 
     def add_module(self, name: str) -> int:
-        """Add a ``CONSTANT_Module`` entry for the module *name*.
+        """Add a ``CONSTANT_Module`` entry (§4.4.11).
 
         The required ``CONSTANT_Utf8`` name entry is created automatically.
+
+        Args:
+            name: Module name.
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         name_index = self.add_utf8(name)
         entry = ModuleInfo(index=0, offset=0, tag=_TAG_MODULE, name_index=name_index)
         return self._allocate(entry)
 
     def add_package(self, name: str) -> int:
-        """Add a ``CONSTANT_Package`` entry for the package *name* (internal form).
+        """Add a ``CONSTANT_Package`` entry (§4.4.12).
 
         The required ``CONSTANT_Utf8`` name entry is created automatically.
+
+        Args:
+            name: Package name in JVM internal form (e.g. ``java/lang``).
+
+        Returns:
+            The CP index of the (possibly pre-existing) entry.
         """
         name_index = self.add_utf8(name)
         entry = PackageInfo(index=0, offset=0, tag=_TAG_PACKAGE, name_index=name_index)
@@ -584,24 +736,43 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def get(self, index: int) -> ConstantPoolInfo | None:
-        """Return the entry at *index*, or *None* for index 0 or double-slot gaps.
+        """Return the entry at a given CP index.
 
-        Returns a defensive copy of the stored entry.
+        Returns a defensive copy; ``None`` is returned for index 0 and
+        double-slot gap positions.
 
-        Raises :exc:`IndexError` if *index* is out of range.
+        Args:
+            index: Constant pool index to retrieve.
+
+        Returns:
+            A copy of the entry, or ``None`` for placeholder/gap slots.
+
+        Raises:
+            IndexError: If *index* is out of the pool's range.
         """
         if index < 0 or index >= len(self._pool):
             raise IndexError(f"CP index {index} out of range [0, {len(self._pool) - 1}]")
         return _copy_entry(self._pool[index])
 
     def find_utf8(self, value: str) -> int | None:
-        """Return the CP index of a ``CONSTANT_Utf8`` entry for *value*, or *None*."""
+        """Look up the CP index of a ``CONSTANT_Utf8`` entry by string value.
+
+        Args:
+            value: The Python string to search for.
+
+        Returns:
+            The CP index if found, otherwise ``None``.
+        """
         return self._utf8_to_index.get(encode_modified_utf8(value))
 
     def find_class(self, name: str) -> int | None:
-        """Return the CP index of a ``CONSTANT_Class`` entry for *name*, or *None*.
+        """Look up the CP index of a ``CONSTANT_Class`` entry by class name.
 
-        *name* is in JVM internal form (e.g. ``java/lang/Object``).
+        Args:
+            name: Class name in JVM internal form (e.g. ``java/lang/Object``).
+
+        Returns:
+            The CP index if found, otherwise ``None``.
         """
         utf8_idx = self.find_utf8(name)
         if utf8_idx is None:
@@ -610,7 +781,15 @@ class ConstantPoolBuilder:
         return self._key_to_index.get(key)
 
     def find_name_and_type(self, name: str, descriptor: str) -> int | None:
-        """Return the CP index of a ``CONSTANT_NameAndType`` entry, or *None*."""
+        """Look up the CP index of a ``CONSTANT_NameAndType`` entry.
+
+        Args:
+            name: Unqualified field or method name.
+            descriptor: Field or method descriptor string.
+
+        Returns:
+            The CP index if found, otherwise ``None``.
+        """
         name_idx = self.find_utf8(name)
         if name_idx is None:
             return None
@@ -621,9 +800,16 @@ class ConstantPoolBuilder:
         return self._key_to_index.get(key)
 
     def resolve_utf8(self, index: int) -> str:
-        """Decode the ``CONSTANT_Utf8`` entry at *index* to a Python string.
+        """Decode the ``CONSTANT_Utf8`` entry at a CP index to a Python string.
 
-        Raises :exc:`ValueError` if the entry at *index* is not a ``CONSTANT_Utf8``.
+        Args:
+            index: Constant pool index of the ``CONSTANT_Utf8`` entry.
+
+        Returns:
+            The decoded Python string.
+
+        Raises:
+            ValueError: If the entry at *index* is not a ``CONSTANT_Utf8``.
         """
         entry = self.get(index)
         if not isinstance(entry, Utf8Info):
@@ -635,21 +821,24 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     def build(self) -> list[ConstantPoolInfo | None]:
-        """Return a copy of the constant pool as a spec-format list.
+        """Export the constant pool as a spec-format list.
 
         The returned list has the same structure as
-        :attr:`~pytecode.info.ClassFile.constant_pool`: index 0 is *None*,
-        Long/Double second slots are *None*, and all other indexes hold a
-        copy of a :class:`~pytecode.constant_pool.ConstantPoolInfo` instance.
-        Use :attr:`count` as the ``constant_pool_count`` field when serializing.
+        ``ClassFile.constant_pool``: index 0 is ``None``, Long/Double
+        second slots are ``None``, and all other positions hold a copy of a
+        ``ConstantPoolInfo`` instance.  Use ``count`` as the
+        ``constant_pool_count`` field when serializing.
+
+        Returns:
+            A new list of entry copies suitable for class file emission.
         """
         return [_copy_entry(entry) for entry in self._pool]
 
     @property
     def count(self) -> int:
-        """The ``constant_pool_count`` field value (number of slots + 1)."""
+        """The ``constant_pool_count`` value (§4.1) for class file serialization."""
         return self._next_index
 
     def __len__(self) -> int:
-        """Number of logical entries (excludes index-0 placeholder and double-slot gaps)."""
+        """Return the number of logical entries, excluding placeholder and gap slots."""
         return sum(1 for e in self._pool if e is not None)

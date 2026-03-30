@@ -1,3 +1,5 @@
+"""Read, modify, and rewrite JAR archives with optional bytecode transformation."""
+
 from __future__ import annotations
 
 import copy
@@ -13,9 +15,19 @@ from .hierarchy import ClassResolver
 from .model import ClassModel
 from .transforms import ClassTransform
 
+__all__ = ["JarFile", "JarInfo"]
+
 
 @dataclass
 class JarInfo:
+    """Metadata and raw content for a single entry in a JAR archive.
+
+    Attributes:
+        filename: Normalized, OS-native relative path of the entry.
+        zipinfo: Original ZIP central-directory header for the entry.
+        bytes: Raw (uninterpreted) byte content of the entry.
+    """
+
     filename: str
     zipinfo: zipfile.ZipInfo
     bytes: bytes
@@ -79,13 +91,30 @@ def _read_archive_state(filename: str | os.PathLike[str]) -> tuple[list[zipfile.
 
 
 class JarFile:
+    """In-memory representation of a JAR (ZIP) archive.
+
+    On construction the archive is read into memory so entries can be
+    inspected, added, removed, and optionally transformed before being
+    written back to disk via ``rewrite``.
+
+    Signed-JAR artifacts (``META-INF/*.SF``, ``*.RSA``, etc.) are kept as
+    ordinary resources and are **not** re-signed when the archive is
+    rewritten.
+    """
+
     def __init__(self, filename: str | os.PathLike[str]) -> None:
+        """Open and read a JAR archive into memory.
+
+        Args:
+            filename: Path to an existing JAR file on disk.
+        """
         self.filename = os.fspath(filename)
         self.infolist: list[zipfile.ZipInfo] = []
         self.files: dict[str, JarInfo] = {}
         self.read()
 
     def read(self) -> None:
+        """Re-read the archive from disk, replacing all in-memory state."""
         self.infolist, self.files = _read_archive_state(self.filename)
 
     def add_file(
@@ -95,6 +124,19 @@ class JarFile:
         *,
         zipinfo: zipfile.ZipInfo | None = None,
     ) -> JarInfo:
+        """Add or replace an entry in the archive.
+
+        If *filename* already exists its ZIP metadata is reused unless an
+        explicit *zipinfo* is supplied.
+
+        Args:
+            filename: Relative path for the entry inside the JAR.
+            data: Raw bytes to store for this entry.
+            zipinfo: Optional ZIP header to use instead of the default.
+
+        Returns:
+            The ``JarInfo`` for the newly added entry.
+        """
         normalized = _normalize_filename(filename)
         if zipinfo is not None:
             entry_zipinfo = copy.copy(zipinfo)
@@ -109,6 +151,17 @@ class JarFile:
         return jar_info
 
     def remove_file(self, filename: str | os.PathLike[str]) -> JarInfo:
+        """Remove an entry from the archive.
+
+        Args:
+            filename: Relative path of the entry to remove.
+
+        Returns:
+            The ``JarInfo`` that was removed.
+
+        Raises:
+            KeyError: If the entry does not exist.
+        """
         normalized = _normalize_filename(filename)
         try:
             jar_info = self.files.pop(normalized)
@@ -118,6 +171,12 @@ class JarFile:
         return jar_info
 
     def parse_classes(self) -> tuple[list[tuple[JarInfo, ClassReader]], list[JarInfo]]:
+        """Parse all ``.class`` entries and separate them from other resources.
+
+        Returns:
+            A two-element tuple of (class entries, non-class entries).
+            Each class entry is a ``(JarInfo, ClassReader)`` pair.
+        """
         classes: list[tuple[JarInfo, ClassReader]] = []
         other_files: list[JarInfo] = []
         for jar_info in self.files.values():
@@ -139,15 +198,31 @@ class JarFile:
     ) -> Path:
         """Write the current archive state back to disk.
 
-        By default, the archive is rewritten in place. Pass *output_path* to
-        write a new archive instead. Any `.class` entries are copied verbatim
-        unless *transform* or non-default lowering options require re-lowering
-        through `ClassModel`. Pass *skip_debug=True* to omit ASM-style debug
-        metadata before class entries are lifted into ``ClassModel``.
+        By default the archive is rewritten in place.  ``.class`` entries are
+        copied verbatim unless *transform* or non-default lowering options
+        require re-lowering through ``ClassModel``.
 
-        Signature-related files under `META-INF` are treated as ordinary
-        resources and are preserved unchanged. If class bytes change, the
-        resulting archive may no longer verify as a signed JAR.
+        Signed-JAR artifacts under ``META-INF`` are preserved as ordinary
+        resources and are **not** re-signed; if class bytes change the
+        resulting archive may no longer verify.
+
+        Args:
+            output_path: Destination path.  When ``None`` the original file
+                is overwritten.
+            transform: Optional callable applied to each ``ClassModel``
+                in place.  Must return ``None``.
+            recompute_frames: Whether to recompute ``StackMapTable`` frames
+                when lowering classes.
+            resolver: Class hierarchy resolver used during frame computation.
+            debug_info: Policy controlling how debug attributes are emitted.
+            skip_debug: If ``True``, discard debug attributes when lifting
+                class bytes into ``ClassModel``.
+
+        Returns:
+            The resolved destination ``Path``.
+
+        Raises:
+            TypeError: If *transform* returns a non-``None`` value.
         """
 
         debug_policy = normalize_debug_info_policy(debug_info)

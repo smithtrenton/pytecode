@@ -1,13 +1,13 @@
-"""Structural validation for JVM classfiles with structured diagnostics.
+"""Structural validation for JVM classfiles (§4.8–4.10) with structured diagnostics.
 
 Provides two entry points:
 
-- ``verify_classfile(cf)`` — spec-level checks on the parsed ``ClassFile`` model
-- ``verify_classmodel(cm)`` — symbolic-level checks on the mutable ``ClassModel``
+    verify_classfile: Spec-level checks on a parsed ``ClassFile`` structure.
+    verify_classmodel: Symbolic-level checks on a mutable ``ClassModel``.
 
-Both return a list of :class:`Diagnostic` objects carrying severity, category,
-message, and location context.  By default all diagnostics are collected; pass
-``fail_fast=True`` to raise :class:`FailFastError` on the first ERROR.
+Both return a list of ``Diagnostic`` objects carrying severity, category,
+message, and location context.  By default all diagnostics are collected;
+pass ``fail_fast=True`` to raise ``FailFastError`` on the first ERROR.
 """
 
 from __future__ import annotations
@@ -86,11 +86,27 @@ from .labels import (
 from .model import ClassModel, CodeModel, FieldModel, MethodModel
 from .modified_utf8 import decode_modified_utf8
 
+__all__ = [
+    "Category",
+    "Diagnostic",
+    "FailFastError",
+    "Location",
+    "Severity",
+    "verify_classfile",
+    "verify_classmodel",
+]
+
 # ── Diagnostic model ──────────────────────────────────────────────────
 
 
 class Severity(Enum):
-    """Diagnostic severity level."""
+    """Severity level attached to each ``Diagnostic``.
+
+    Attributes:
+        ERROR: A spec violation that makes the classfile invalid.
+        WARNING: A suspicious but technically allowed construct.
+        INFO: An informational note with no correctness impact.
+    """
 
     ERROR = "error"
     WARNING = "warning"
@@ -98,7 +114,20 @@ class Severity(Enum):
 
 
 class Category(Enum):
-    """Diagnostic category grouping."""
+    """Classification of which JVM spec area a ``Diagnostic`` belongs to.
+
+    Attributes:
+        MAGIC: Magic number validation (§4.1).
+        VERSION: Class file version checks (§4.1).
+        CONSTANT_POOL: Constant pool structure and cross-references (§4.4).
+        ACCESS_FLAGS: Access flag combination rules (§4.1, §4.5, §4.6).
+        CLASS_STRUCTURE: Top-level class structure (this_class, super_class, interfaces).
+        FIELD: Field-level validation (§4.5).
+        METHOD: Method-level validation (§4.6).
+        CODE: Code attribute and bytecode validation (§4.7.3, §4.9).
+        ATTRIBUTE: Attribute structure and version constraints (§4.7).
+        DESCRIPTOR: Field and method descriptor syntax (§4.3).
+    """
 
     MAGIC = "magic"
     VERSION = "version"
@@ -114,7 +143,20 @@ class Category(Enum):
 
 @dataclass(frozen=True)
 class Location:
-    """Context for where a diagnostic was raised."""
+    """Source location context attached to a ``Diagnostic``.
+
+    All fields are optional; only the relevant ones are populated for a
+    given diagnostic.
+
+    Attributes:
+        class_name: Internal-form class name (e.g. ``java/lang/Object``).
+        field_name: Field name within the class, if applicable.
+        method_name: Method name within the class, if applicable.
+        method_descriptor: Method descriptor string, if applicable.
+        attribute_name: Attribute name, if the diagnostic is attribute-specific.
+        cp_index: Constant pool index, if the diagnostic targets a CP entry.
+        bytecode_offset: Bytecode offset within a Code attribute, if applicable.
+    """
 
     class_name: str | None = None
     field_name: str | None = None
@@ -127,7 +169,14 @@ class Location:
 
 @dataclass(frozen=True)
 class Diagnostic:
-    """A single validation finding."""
+    """A single validation finding produced by the verifier.
+
+    Attributes:
+        severity: How serious the finding is.
+        category: Which area of the JVM spec the finding relates to.
+        message: Human-readable description of the issue.
+        location: Where in the classfile the issue was detected.
+    """
 
     severity: Severity
     category: Category
@@ -135,6 +184,7 @@ class Diagnostic:
     location: Location = field(default_factory=Location)
 
     def __str__(self) -> str:
+        """Return a bracket-tagged human-readable summary."""
         parts = [f"[{self.severity.value.upper()}]", f"[{self.category.value}]", self.message]
         loc_parts: list[str] = []
         if self.location.class_name:
@@ -155,7 +205,11 @@ class Diagnostic:
 
 
 class FailFastError(Exception):
-    """Raised when ``fail_fast=True`` and an ERROR-severity diagnostic is found."""
+    """Raised when ``fail_fast=True`` and an ERROR-severity diagnostic is found.
+
+    Attributes:
+        diagnostic: The ``Diagnostic`` that triggered the early exit.
+    """
 
     def __init__(self, diagnostic: Diagnostic) -> None:
         self.diagnostic = diagnostic
@@ -1102,11 +1156,22 @@ def _verify_ldc_entry(entry: ConstantPoolInfo, idx: int, major: int, loc: Locati
 
 
 def verify_classfile(cf: ClassFile, *, fail_fast: bool = False) -> list[Diagnostic]:
-    """Validate a parsed ``ClassFile`` against JVM spec structural rules.
+    """Validate a parsed ``ClassFile`` against JVM spec structural rules (§4.8).
 
-    Returns a list of :class:`Diagnostic` objects.  By default all issues
-    are collected; set *fail_fast* to ``True`` to raise
-    :class:`FailFastError` on the first ERROR-severity diagnostic.
+    Checks magic number, version, constant pool integrity, access flags,
+    class structure, fields, methods, Code attributes, and bytecode
+    constant-pool references.
+
+    Args:
+        cf: Parsed class file structure to validate.
+        fail_fast: If ``True``, raise ``FailFastError`` on the first
+            ERROR-severity diagnostic instead of collecting all issues.
+
+    Returns:
+        List of diagnostics found during validation.
+
+    Raises:
+        FailFastError: If ``fail_fast`` is ``True`` and an ERROR is found.
     """
     dc = _Collector(fail_fast)
     class_name = _resolve_class_name(cf)
@@ -1280,14 +1345,21 @@ def _verify_model_code(
 
 
 def verify_classmodel(cm: ClassModel, *, fail_fast: bool = False) -> list[Diagnostic]:
-    """Validate a ``ClassModel`` against structural and naming rules.
+    """Validate a ``ClassModel`` against structural and naming rules (§4.8).
 
     Checks symbolic names, descriptors, access flags, code model structure
     (label validity, branch targets), and version-aware attribute rules.
 
-    Returns a list of :class:`Diagnostic` objects.  By default all issues
-    are collected; set *fail_fast* to ``True`` to raise
-    :class:`FailFastError` on the first ERROR-severity diagnostic.
+    Args:
+        cm: Class model to validate.
+        fail_fast: If ``True``, raise ``FailFastError`` on the first
+            ERROR-severity diagnostic instead of collecting all issues.
+
+    Returns:
+        List of diagnostics found during validation.
+
+    Raises:
+        FailFastError: If ``fail_fast`` is ``True`` and an ERROR is found.
     """
     dc = _Collector(fail_fast)
     class_loc = Location(class_name=cm.name)

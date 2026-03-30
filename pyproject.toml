@@ -31,6 +31,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
   "basedpyright>=1.38.3",
+  "pdoc",
   "pytest",
   "ruff",
 ]

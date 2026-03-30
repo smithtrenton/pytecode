@@ -1,4 +1,13 @@
-"""Helpers for JVM Modified UTF-8 (``CONSTANT_Utf8``) strings."""
+"""Encode and decode JVM Modified UTF-8 strings (§4.4.7).
+
+Modified UTF-8 is the encoding used by the JVM for ``CONSTANT_Utf8_info``
+entries in class files.  It differs from standard UTF-8 in two ways:
+
+* The null character (U+0000) is encoded as the two-byte sequence
+  ``0xC0 0x80`` rather than a single ``0x00`` byte.
+* Supplementary characters (U+10000–U+10FFFF) are represented as
+  surrogate pairs, each encoded independently as three bytes.
+"""
 
 from __future__ import annotations
 
@@ -37,7 +46,21 @@ def _encode_code_unit(code_unit: int, out: bytearray) -> None:
 
 
 def encode_modified_utf8(value: str) -> bytes:
-    """Encode *value* using JVM Modified UTF-8."""
+    """Encode a Python string to JVM Modified UTF-8 bytes (§4.4.7).
+
+    Supplementary characters (U+10000–U+10FFFF) are split into surrogate
+    pairs, each encoded as a three-byte sequence.  The null character
+    (U+0000) is encoded as ``0xC0 0x80``.
+
+    Args:
+        value: The Python string to encode.
+
+    Returns:
+        The Modified UTF-8 encoded byte string.
+
+    Raises:
+        ValueError: If any code point exceeds U+10FFFF.
+    """
 
     out = bytearray()
     for char in value:
@@ -59,7 +82,22 @@ def encode_modified_utf8(value: str) -> bytes:
 
 
 def decode_modified_utf8(data: bytes) -> str:
-    """Decode JVM Modified UTF-8 bytes into a Python string."""
+    """Decode JVM Modified UTF-8 bytes into a Python string (§4.4.7).
+
+    Interprets one-, two-, and three-byte Modified UTF-8 sequences,
+    reassembling surrogate pairs into supplementary characters.  Bare
+    ``0x00`` bytes and standard four-byte UTF-8 sequences are rejected.
+
+    Args:
+        data: The Modified UTF-8 encoded bytes to decode.
+
+    Returns:
+        The decoded Python string.
+
+    Raises:
+        UnicodeDecodeError: If *data* contains invalid, truncated, or
+            overlong sequences.
+    """
 
     utf16_bytes = bytearray()
     index = 0

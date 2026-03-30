@@ -1,28 +1,28 @@
 """Symbolic instruction operand wrappers for the editing model.
 
-Provides editing-model instruction types that replace raw constant-pool indexes
-and local-variable slot encodings with resolved symbolic values.  These types
-are used inside ``CodeModel.instructions`` and are lifted from raw
-``InsnInfo`` records during ``ClassModel.from_classfile()`` then lowered back
-to spec-faithful ``InsnInfo`` records during ``to_classfile()``.
+Provides editing-model instruction types that replace raw constant-pool
+indexes and local-variable slot encodings with resolved symbolic values.
+These types are used inside ``CodeModel.instructions`` and are lifted from
+raw ``InsnInfo`` records during ``ClassModel.from_classfile()``, then
+lowered back to spec-faithful ``InsnInfo`` records during
+``to_classfile()``.
 
 All wrapper types inherit from ``InsnInfo`` so the existing
 ``type CodeItem = InsnInfo | Label`` alias and ``_instruction_byte_size``
 dispatch remain valid without changes to their signatures.
 
-Scope
------
-- Constant-pool-backed instructions: field access, method invocation, type
-  operations, constant loading, invokedynamic, multianewarray.
-- Local-variable-backed instructions: all load/store families (including
-  implicit ``_0``–``_3`` variants and ``WIDE`` forms), ``RET``, ``IINC``.
+Covered instruction families:
+    Constant-pool-backed: field access, method invocation, type operations,
+    constant loading, invokedynamic, multianewarray.
 
-Out of scope (remain raw ``InsnInfo`` records)
-----------------------------------------------
-- ``BIPUSH`` / ``SIPUSH`` — immediate integer values, no CP or slot reference.
-- ``NEWARRAY`` — primitive-type enum, no CP reference.
-- No-operand instructions — nothing to symbolise.
-- Branch / switch instructions — already symbolic via ``labels.py``.
+    Local-variable-backed: all load/store families (including implicit
+    ``_0``–``_3`` variants and ``WIDE`` forms), ``RET``, ``IINC``.
+
+Out of scope (remain raw ``InsnInfo`` records):
+    ``BIPUSH`` / ``SIPUSH`` — immediate integer values, no CP or slot
+    reference.  ``NEWARRAY`` — primitive-type enum, no CP reference.
+    No-operand instructions — nothing to symbolise.  Branch / switch
+    instructions — already symbolic via ``labels.py``.
 """
 
 from __future__ import annotations
@@ -37,6 +37,28 @@ from .instructions import (
 
 if TYPE_CHECKING:
     pass
+
+__all__ = [
+    "FieldInsn",
+    "IIncInsn",
+    "InterfaceMethodInsn",
+    "InvokeDynamicInsn",
+    "LdcClass",
+    "LdcDouble",
+    "LdcDynamic",
+    "LdcFloat",
+    "LdcInsn",
+    "LdcInt",
+    "LdcLong",
+    "LdcMethodHandle",
+    "LdcMethodType",
+    "LdcString",
+    "LdcValue",
+    "MethodInsn",
+    "MultiANewArrayInsn",
+    "TypeInsn",
+    "VarInsn",
+]
 
 # ---------------------------------------------------------------------------
 # Opcode classification sets (used for validation in __init__)
@@ -201,28 +223,53 @@ def _require_u1(value: int, *, context: str, minimum: int = 0) -> int:
 
 @dataclass(frozen=True)
 class LdcInt:
-    """Integer constant for LDC (CONSTANT_Integer)."""
+    """Integer constant for ``ldc`` / ``ldc_w`` (CONSTANT_Integer, §4.4.4).
+
+    Attributes:
+        value: The signed 32-bit integer constant.
+    """
 
     value: int
 
 
 @dataclass(frozen=True)
 class LdcFloat:
-    """Float constant for LDC (CONSTANT_Float, raw IEEE 754 bit pattern)."""
+    """Float constant for ``ldc`` / ``ldc_w`` (CONSTANT_Float, §4.4.4).
+
+    Stored as a raw IEEE 754 bit pattern rather than a Python ``float`` to
+    preserve NaN bit patterns and signed zeros exactly.
+
+    Attributes:
+        raw_bits: IEEE 754 single-precision bit pattern as an unsigned
+            32-bit integer.
+    """
 
     raw_bits: int
 
 
 @dataclass(frozen=True)
 class LdcLong:
-    """Long constant for LDC2_W (CONSTANT_Long)."""
+    """Long constant for ``ldc2_w`` (CONSTANT_Long, §4.4.5).
+
+    Attributes:
+        value: The signed 64-bit integer constant.
+    """
 
     value: int
 
 
 @dataclass(frozen=True)
 class LdcDouble:
-    """Double constant for LDC2_W (CONSTANT_Double, high/low 32-bit words)."""
+    """Double constant for ``ldc2_w`` (CONSTANT_Double, §4.4.5).
+
+    Stored as split high/low 32-bit words to preserve exact bit patterns.
+
+    Attributes:
+        high_bytes: Upper 32 bits of the IEEE 754 double-precision bit
+            pattern.
+        low_bytes: Lower 32 bits of the IEEE 754 double-precision bit
+            pattern.
+    """
 
     high_bytes: int
     low_bytes: int
@@ -230,33 +277,54 @@ class LdcDouble:
 
 @dataclass(frozen=True)
 class LdcString:
-    """String constant for LDC (CONSTANT_String)."""
+    """String constant for ``ldc`` / ``ldc_w`` (CONSTANT_String, §4.4.3).
+
+    Attributes:
+        value: The string constant value.
+    """
 
     value: str
 
 
 @dataclass(frozen=True)
 class LdcClass:
-    """Class literal for LDC (CONSTANT_Class, JVM internal name)."""
+    """Class literal for ``ldc`` / ``ldc_w`` (CONSTANT_Class, §4.4.1).
+
+    Attributes:
+        name: JVM internal class name (e.g. ``java/lang/Object``).
+    """
 
     name: str
 
 
 @dataclass(frozen=True)
 class LdcMethodType:
-    """MethodType constant for LDC (CONSTANT_MethodType)."""
+    """MethodType constant for ``ldc`` / ``ldc_w`` (CONSTANT_MethodType, §4.4.9).
+
+    Attributes:
+        descriptor: JVM method descriptor (e.g. ``(II)V``).
+    """
 
     descriptor: str
 
 
 @dataclass(frozen=True)
 class LdcMethodHandle:
-    """MethodHandle constant for LDC (CONSTANT_MethodHandle).
+    """MethodHandle constant for ``ldc`` / ``ldc_w`` (CONSTANT_MethodHandle, §4.4.8).
 
-    ``owner``, ``name``, and ``descriptor`` describe the referenced member.
-    ``is_interface`` distinguishes CONSTANT_InterfaceMethodref targets from
-    CONSTANT_Methodref targets (reference kinds 1–4 use Fieldref; 5–8 use
-    Methodref or InterfaceMethodref; 9 uses InterfaceMethodref only).
+    Attributes:
+        reference_kind: Method handle behaviour kind (1–9, per
+            JVMS Table 5.4.3.5-A).  Kinds 1–4 reference a Fieldref;
+            5–8 reference a Methodref or InterfaceMethodref; 9 references
+            an InterfaceMethodref only.
+        owner: JVM internal name of the class owning the referenced member.
+        name: Name of the referenced field or method.
+        descriptor: JVM field or method descriptor of the referenced member.
+        is_interface: Whether the owner is an interface type.  Controls
+            emission of CONSTANT_InterfaceMethodref vs CONSTANT_Methodref.
+
+    Raises:
+        ValueError: If ``reference_kind`` is outside the [1, 9] range.
     """
 
     reference_kind: int
@@ -272,9 +340,17 @@ class LdcMethodHandle:
 
 @dataclass(frozen=True)
 class LdcDynamic:
-    """Dynamic constant for LDC (CONSTANT_Dynamic / condy).
+    """Dynamic constant for ``ldc`` / ``ldc_w`` (CONSTANT_Dynamic / condy, §4.4.10).
 
-    ``bootstrap_method_attr_index`` must fit the JVM ``u2`` range.
+    Attributes:
+        bootstrap_method_attr_index: Index into the ``BootstrapMethods``
+            attribute (must fit the JVM ``u2`` range).
+        name: Symbolic name of the dynamic constant.
+        descriptor: JVM field descriptor of the produced value.
+
+    Raises:
+        ValueError: If ``bootstrap_method_attr_index`` exceeds the ``u2``
+            range.
     """
 
     bootstrap_method_attr_index: int
@@ -299,10 +375,20 @@ type LdcValue = (
 
 @dataclass(init=False)
 class FieldInsn(InsnInfo):
-    """Editing-model instruction for field access (GET/PUT FIELD/STATIC).
+    """Symbolic instruction for field access (§6.5.getfield, §6.5.putfield, etc.).
 
-    ``owner`` is the JVM internal class name (e.g. ``java/lang/System``).
-    ``descriptor`` is the JVM field descriptor (e.g. ``I``, ``Ljava/lang/String;``).
+    Wraps GETFIELD, PUTFIELD, GETSTATIC, and PUTSTATIC with resolved
+    symbolic references instead of raw constant-pool indices.
+
+    Attributes:
+        owner: JVM internal name of the field's declaring class
+            (e.g. ``java/lang/System``).
+        name: Field name.
+        descriptor: JVM field descriptor (e.g. ``I``,
+            ``Ljava/lang/String;``).
+
+    Raises:
+        ValueError: If ``insn_type`` is not a field access opcode.
     """
 
     owner: str
@@ -327,14 +413,24 @@ class FieldInsn(InsnInfo):
 
 @dataclass(init=False)
 class MethodInsn(InsnInfo):
-    """Editing-model instruction for method invocation (INVOKE{VIRTUAL,SPECIAL,STATIC}).
+    """Symbolic instruction for method invocation (§6.5.invokevirtual, etc.).
 
-    ``owner`` is the JVM internal class or interface name.
-    ``descriptor`` is the JVM method descriptor.
-    ``is_interface`` must be ``True`` when ``owner`` is an interface; this
-    controls whether a ``CONSTANT_InterfaceMethodref`` or ``CONSTANT_Methodref``
-    entry is emitted in the constant pool (relevant for INVOKESTATIC and
-    INVOKESPECIAL on interface methods since Java 8+).
+    Wraps INVOKEVIRTUAL, INVOKESPECIAL, and INVOKESTATIC with resolved
+    symbolic references.  Use ``InterfaceMethodInsn`` for INVOKEINTERFACE.
+
+    Attributes:
+        owner: JVM internal name of the method's declaring class or
+            interface.
+        name: Method name.
+        descriptor: JVM method descriptor (e.g. ``(II)I``).
+        is_interface: Whether ``owner`` is an interface type.  Controls
+            emission of CONSTANT_InterfaceMethodref vs CONSTANT_Methodref
+            (relevant for INVOKESTATIC / INVOKESPECIAL on interface
+            methods since Java 8+).
+
+    Raises:
+        ValueError: If ``insn_type`` is not a supported method invocation
+            opcode.
     """
 
     owner: str
@@ -364,10 +460,15 @@ class MethodInsn(InsnInfo):
 
 @dataclass(init=False)
 class InterfaceMethodInsn(InsnInfo):
-    """Editing-model instruction for INVOKEINTERFACE.
+    """Symbolic instruction for INVOKEINTERFACE (§6.5.invokeinterface).
 
-    The ``count`` (argument word count) is computed automatically during
-    lowering from the method descriptor; callers do not set it.
+    The ``count`` operand (argument word count) is computed automatically
+    during lowering from the method descriptor; callers do not set it.
+
+    Attributes:
+        owner: JVM internal name of the interface declaring the method.
+        name: Method name.
+        descriptor: JVM method descriptor.
     """
 
     owner: str
@@ -389,11 +490,18 @@ class InterfaceMethodInsn(InsnInfo):
 
 @dataclass(init=False)
 class TypeInsn(InsnInfo):
-    """Editing-model instruction for type-based operations (NEW, CHECKCAST, INSTANCEOF, ANEWARRAY).
+    """Symbolic instruction for type operations (§6.5.new, §6.5.checkcast, etc.).
 
-    ``class_name`` is the JVM internal class name (e.g. ``java/lang/StringBuilder``).
-    For ANEWARRAY, it is the element type's internal name or descriptor
-    (e.g. ``java/lang/String`` for ``String[]``).
+    Wraps NEW, CHECKCAST, INSTANCEOF, and ANEWARRAY with resolved symbolic
+    class references.
+
+    Attributes:
+        class_name: JVM internal class name
+            (e.g. ``java/lang/StringBuilder``).  For ANEWARRAY, the
+            element type's internal name or descriptor.
+
+    Raises:
+        ValueError: If ``insn_type`` is not a type instruction opcode.
     """
 
     class_name: str
@@ -412,7 +520,7 @@ class TypeInsn(InsnInfo):
 
 @dataclass(init=False)
 class VarInsn(InsnInfo):
-    """Editing-model instruction for local variable access.
+    """Symbolic instruction for local variable access (§6.5.iload, §6.5.astore, etc.).
 
     Normalises all implicit slot-encoded opcodes (``ILOAD_0``–``ASTORE_3``),
     standard explicit forms (``ILOAD`` through ``ASTORE``, ``RET``), and WIDE
@@ -422,11 +530,19 @@ class VarInsn(InsnInfo):
     (e.g. ``ILOAD``, not ``ILOAD_0`` or ``ILOADW``).
 
     Lowering selects the optimal encoding automatically:
+
     - slot 0–3 with a matching implicit form → implicit 1-byte opcode
     - slot 0–255 → explicit 2-byte form (opcode + u1)
     - slot 256–65535 → WIDE 4-byte form (WIDE prefix + opcode + u2)
 
-    RET has no implicit forms, but it does support WIDE encoding for slots > 255.
+    RET has no implicit forms, but supports WIDE encoding for slots > 255.
+
+    Attributes:
+        slot: Local variable table index (``u2`` range, 0–65535).
+
+    Raises:
+        ValueError: If ``insn_type`` is not a local variable opcode or
+            ``slot`` exceeds the ``u2`` range.
     """
 
     slot: int
@@ -445,14 +561,21 @@ class VarInsn(InsnInfo):
 
 @dataclass(init=False)
 class IIncInsn(InsnInfo):
-    """Editing-model instruction for IINC / IINCW.
+    """Symbolic instruction for IINC / IINCW (§6.5.iinc).
 
     Normalises both the standard and WIDE forms.  Lowering selects the
     appropriate encoding:
+
     - slot 0–255 and increment fits in i1 (–128..127) → standard 3-byte form
     - slot > 255 or increment outside i1 range → WIDE 6-byte form
 
-    ``slot`` must fit the JVM ``u2`` range and ``increment`` must fit ``i2``.
+    Attributes:
+        slot: Local variable table index (``u2`` range, 0–65535).
+        increment: Signed increment value (``i2`` range, –32768..32767).
+
+    Raises:
+        ValueError: If ``slot`` exceeds the ``u2`` range or ``increment``
+            exceeds the ``i2`` range.
     """
 
     slot: int
@@ -471,13 +594,16 @@ class IIncInsn(InsnInfo):
 
 @dataclass(init=False)
 class LdcInsn(InsnInfo):
-    """Editing-model instruction for loading a constant (LDC / LDC_W / LDC2_W).
+    """Symbolic instruction for constant loading (§6.5.ldc, §6.5.ldc_w, §6.5.ldc2_w).
 
-    ``value`` is a tagged union over all supported constant types.  Lowering
-    selects the minimal encoding: ``LDC`` (2 bytes) when the constant-pool index
-    fits in one byte (≤ 255), ``LDC_W`` (3 bytes) otherwise, for single-category
-    constants (int, float, string, class, method-type, method-handle, dynamic).
-    Double-category constants (long, double) always use ``LDC2_W`` (3 bytes).
+    Lowering selects the minimal encoding: ``ldc`` (2 bytes) when the
+    constant-pool index fits in one byte (≤ 255), ``ldc_w`` (3 bytes)
+    otherwise, for single-slot constants (int, float, string, class,
+    method-type, method-handle, dynamic).  Double-slot constants (long,
+    double) always use ``ldc2_w`` (3 bytes).
+
+    Attributes:
+        value: Tagged constant determining the constant-pool entry type.
     """
 
     value: LdcValue
@@ -493,10 +619,17 @@ class LdcInsn(InsnInfo):
 
 @dataclass(init=False)
 class InvokeDynamicInsn(InsnInfo):
-    """Editing-model instruction for INVOKEDYNAMIC.
+    """Symbolic instruction for INVOKEDYNAMIC (§6.5.invokedynamic).
 
-    ``bootstrap_method_attr_index`` references an entry in the
-    ``BootstrapMethods`` attribute and must fit the JVM ``u2`` range.
+    Attributes:
+        bootstrap_method_attr_index: Index into the ``BootstrapMethods``
+            attribute (must fit the JVM ``u2`` range).
+        name: Symbolic method name resolved via the bootstrap method.
+        descriptor: JVM method descriptor of the call site.
+
+    Raises:
+        ValueError: If ``bootstrap_method_attr_index`` exceeds the ``u2``
+            range.
     """
 
     bootstrap_method_attr_index: int
@@ -521,11 +654,15 @@ class InvokeDynamicInsn(InsnInfo):
 
 @dataclass(init=False)
 class MultiANewArrayInsn(InsnInfo):
-    """Editing-model instruction for MULTIANEWARRAY.
+    """Symbolic instruction for MULTIANEWARRAY (§6.5.multianewarray).
 
-    ``class_name`` is the JVM internal name of the array type
-    (e.g. ``[[Ljava/lang/String;`` for ``String[][]``). ``dimensions`` must be
-    in the JVM ``u1`` range ``[1, 255]``.
+    Attributes:
+        class_name: JVM internal name of the array type
+            (e.g. ``[[Ljava/lang/String;`` for ``String[][]``).
+        dimensions: Number of dimensions to allocate (``u1`` range, 1–255).
+
+    Raises:
+        ValueError: If ``dimensions`` is outside the [1, 255] range.
     """
 
     class_name: str

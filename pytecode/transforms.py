@@ -1,3 +1,13 @@
+"""Composable transform pipeline and matcher DSL for JVM class-file models.
+
+Provides a declarative API for selecting and transforming classes, fields,
+methods, and code within JVM ``.class`` files.  Core building blocks are
+:class:`Matcher` (a composable predicate wrapper), the four transform
+protocols (:class:`ClassTransform`, :class:`FieldTransform`,
+:class:`MethodTransform`, :class:`CodeTransform`), and :class:`Pipeline`
+which sequences transforms into a single pass.
+"""
+
 from __future__ import annotations
 
 import re
@@ -31,14 +41,20 @@ class Matcher[T]:
         predicate: Predicate[U] | Matcher[U],
         description: str | None = None,
     ) -> Matcher[U]:
-        """Wrap *predicate* as a matcher."""
+        """Wrap a predicate as a ``Matcher``.
 
+        Args:
+            predicate: Callable or existing matcher to wrap.
+            description: Human-readable label shown in ``repr`` output.
+        """
         return _ensure_matcher(predicate, description)
 
     def __call__(self, value: T, /) -> bool:
+        """Evaluate this matcher against *value*."""
         return self._predicate(value)
 
     def __and__(self, other: Predicate[T] | Matcher[T], /) -> Matcher[T]:
+        """Combine with *other* using logical AND."""
         rhs = _ensure_matcher(other)
         return Matcher(
             lambda value: self(value) and rhs(value),
@@ -46,10 +62,12 @@ class Matcher[T]:
         )
 
     def __rand__(self, other: Predicate[T] | Matcher[T], /) -> Matcher[T]:
+        """Support ``predicate & matcher`` with a plain callable on the left."""
         lhs = _ensure_matcher(other)
         return lhs & self
 
     def __or__(self, other: Predicate[T] | Matcher[T], /) -> Matcher[T]:
+        """Combine with *other* using logical OR."""
         rhs = _ensure_matcher(other)
         return Matcher(
             lambda value: self(value) or rhs(value),
@@ -57,16 +75,19 @@ class Matcher[T]:
         )
 
     def __ror__(self, other: Predicate[T] | Matcher[T], /) -> Matcher[T]:
+        """Support ``predicate | matcher`` with a plain callable on the left."""
         lhs = _ensure_matcher(other)
         return lhs | self
 
     def __invert__(self) -> Matcher[T]:
+        """Return the logical negation of this matcher."""
         return Matcher(
             lambda value: not self(value),
             f"~{_parenthesize_description(self._description)}",
         )
 
     def __repr__(self) -> str:
+        """Return a human-readable description of this matcher."""
         return f"Matcher[{self._description}]"
 
 
@@ -76,45 +97,62 @@ type MethodMatcher = Matcher[MethodModel]
 
 
 class ClassTransform(Protocol):
-    """In-place transform over ``ClassModel``."""
+    """In-place transform applied to a ``ClassModel``."""
 
-    def __call__(self, model: ClassModel, /) -> None: ...
+    def __call__(self, model: ClassModel, /) -> None:
+        """Apply this transform to a class model."""
+        ...
 
 
 class FieldTransform(Protocol):
-    """In-place transform over ``FieldModel``.
+    """In-place transform applied to a ``FieldModel``."""
 
-    The *owner* parameter is the ``ClassModel`` that owns *field*.
-    """
+    def __call__(self, field: FieldModel, owner: ClassModel, /) -> None:
+        """Apply this transform to a field.
 
-    def __call__(self, field: FieldModel, owner: ClassModel, /) -> None: ...
+        Args:
+            field: The field to transform in place.
+            owner: The class that declares the field.
+        """
+        ...
 
 
 class MethodTransform(Protocol):
-    """In-place transform over ``MethodModel``.
+    """In-place transform applied to a ``MethodModel``."""
 
-    The *owner* parameter is the ``ClassModel`` that owns *method*.
-    """
+    def __call__(self, method: MethodModel, owner: ClassModel, /) -> None:
+        """Apply this transform to a method.
 
-    def __call__(self, method: MethodModel, owner: ClassModel, /) -> None: ...
+        Args:
+            method: The method to transform in place.
+            owner: The class that declares the method.
+        """
+        ...
 
 
 class CodeTransform(Protocol):
-    """In-place transform over ``CodeModel``.
+    """In-place transform applied to a ``CodeModel``."""
 
-    The *method* parameter is the ``MethodModel`` that owns *code*, and
-    *owner* is the ``ClassModel`` that owns that method.
-    """
+    def __call__(self, code: CodeModel, method: MethodModel, owner: ClassModel, /) -> None:
+        """Apply this transform to a code attribute.
 
-    def __call__(self, code: CodeModel, method: MethodModel, owner: ClassModel, /) -> None: ...
+        Args:
+            code: The code model to transform in place.
+            method: The method that owns the code attribute.
+            owner: The class that declares the method.
+        """
+        ...
 
 
 @dataclass(frozen=True)
 class Pipeline:
     """Composable sequence of class-level transforms applied in order.
 
-    Pipelines are themselves callable, so they can be passed anywhere a
+    Pipelines are themselves callable and can be passed anywhere a
     ``ClassTransform`` is accepted, including ``JarFile.rewrite()``.
+
+    Attributes:
+        transforms: The ordered tuple of class transforms in this pipeline.
     """
 
     transforms: tuple[ClassTransform, ...] = ()
@@ -131,6 +169,7 @@ class Pipeline:
         return Pipeline((*self.transforms, *_flatten_transforms(transforms)))
 
     def __call__(self, model: ClassModel, /) -> None:
+        """Apply all transforms in sequence to a class model."""
         for transform in self.transforms:
             _expect_none(
                 transform(model),
@@ -149,7 +188,12 @@ def on_classes(
     *,
     where: ClassPredicate | None = None,
 ) -> ClassTransform:
-    """Conditionally apply a class transform."""
+    """Conditionally apply a class transform.
+
+    Args:
+        transform: The class-level transform to apply.
+        where: Optional predicate that must match for the transform to run.
+    """
 
     def lifted(model: ClassModel) -> None:
         if where is not None and not where(model):
@@ -170,8 +214,13 @@ def on_fields(
 ) -> ClassTransform:
     """Lift a field transform into a class transform.
 
-    Traversal uses a snapshot of ``ClassModel.fields`` so collection edits do
-    not change which original fields are visited within the current pass.
+    Iterates over a snapshot of ``ClassModel.fields`` so that collection
+    edits do not affect which fields are visited within the current pass.
+
+    Args:
+        transform: The field-level transform to apply.
+        where: Optional predicate selecting which fields are visited.
+        owner: Optional predicate gating traversal at the class level.
     """
 
     def lifted(model: ClassModel) -> None:
@@ -196,8 +245,13 @@ def on_methods(
 ) -> ClassTransform:
     """Lift a method transform into a class transform.
 
-    Traversal uses a snapshot of ``ClassModel.methods`` so collection edits do
-    not change which original methods are visited within the current pass.
+    Iterates over a snapshot of ``ClassModel.methods`` so that collection
+    edits do not affect which methods are visited within the current pass.
+
+    Args:
+        transform: The method-level transform to apply.
+        where: Optional predicate selecting which methods are visited.
+        owner: Optional predicate gating traversal at the class level.
     """
 
     def lifted(model: ClassModel) -> None:
@@ -222,10 +276,12 @@ def on_code(
 ) -> ClassTransform:
     """Lift a code transform into a class transform.
 
-    Only methods that currently have code are visited. The optional *where*
-    predicate is evaluated on the owning ``MethodModel``. The optional *owner*
-    predicate is evaluated on the owning ``ClassModel`` before method
-    traversal begins.
+    Only methods that currently have a ``CodeModel`` are visited.
+
+    Args:
+        transform: The code-level transform to apply.
+        where: Optional predicate selecting which methods' code is visited.
+        owner: Optional predicate gating traversal at the class level.
     """
 
     def lifted(model: ClassModel) -> None:

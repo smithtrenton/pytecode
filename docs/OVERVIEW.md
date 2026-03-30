@@ -39,12 +39,13 @@ The project goal is to provide a Python alternative to Java libraries such as AS
 
 ### Not implemented yet
 
-- Generated API reference docs with full coverage of the supported public surface ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+All planned roadmap items have been implemented. See [project/roadmap.md](project/roadmap.md) for the full history.
 
 ## Documentation guide
 
 | Topic | Location |
 |-------|----------|
+| **API reference** (generated) | [api/](api/) |
 | Current architecture: runtime, entry points, modules, data flow, design characteristics, test coverage | [architecture/current-architecture.md](architecture/current-architecture.md) |
 | Recommended target architecture: layered design, cross-cutting concerns | [architecture/target-architecture.md](architecture/target-architecture.md) |
 | Editing model design rationale: candidate designs, comparison matrix, library survey | [design/editing-model.md](design/editing-model.md) |
