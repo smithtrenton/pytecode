@@ -82,21 +82,31 @@ class ClassTransform(Protocol):
 
 
 class FieldTransform(Protocol):
-    """In-place transform over ``FieldModel``."""
+    """In-place transform over ``FieldModel``.
 
-    def __call__(self, field: FieldModel, /) -> None: ...
+    The *owner* parameter is the ``ClassModel`` that owns *field*.
+    """
+
+    def __call__(self, field: FieldModel, owner: ClassModel, /) -> None: ...
 
 
 class MethodTransform(Protocol):
-    """In-place transform over ``MethodModel``."""
+    """In-place transform over ``MethodModel``.
 
-    def __call__(self, method: MethodModel, /) -> None: ...
+    The *owner* parameter is the ``ClassModel`` that owns *method*.
+    """
+
+    def __call__(self, method: MethodModel, owner: ClassModel, /) -> None: ...
 
 
 class CodeTransform(Protocol):
-    """In-place transform over ``CodeModel``."""
+    """In-place transform over ``CodeModel``.
 
-    def __call__(self, code: CodeModel, /) -> None: ...
+    The *method* parameter is the ``MethodModel`` that owns *code*, and
+    *owner* is the ``ClassModel`` that owns that method.
+    """
+
+    def __call__(self, code: CodeModel, method: MethodModel, owner: ClassModel, /) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -171,7 +181,7 @@ def on_fields(
             if where is not None and not where(field):
                 continue
             _expect_none(
-                transform(field),
+                transform(field, model),
                 "Field transforms must mutate FieldModel in place and return None",
             )
 
@@ -197,7 +207,7 @@ def on_methods(
             if where is not None and not where(method):
                 continue
             _expect_none(
-                transform(method),
+                transform(method, model),
                 "Method transforms must mutate MethodModel in place and return None",
             )
 
@@ -228,7 +238,7 @@ def on_code(
             if code is None:
                 continue
             _expect_none(
-                transform(code),
+                transform(code, method, model),
                 "Code transforms must mutate CodeModel in place and return None",
             )
 

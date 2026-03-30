@@ -165,9 +165,9 @@ For the design rationale behind this editing model, see [editing model design ra
 
 Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
 
-- **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes
+- **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes. `FieldTransform` and `MethodTransform` receive the owning `ClassModel` as a second argument; `CodeTransform` receives the owning `MethodModel` and `ClassModel` so transforms can inspect their traversal context
 - **`Pipeline` / `pipeline()`** — deterministic class-transform composition; pipelines are themselves callable so they slot directly into `JarFile.rewrite(transform=...)`
-- **Lifting helpers** — `on_classes()`, `on_fields()`, `on_methods()`, and `on_code()` adapt lower-level transforms onto `ClassModel` traversal while preserving in-place ownership boundaries; the field/method/code lifting helpers also support owner-class filtering
+- **Lifting helpers** — `on_classes()`, `on_fields()`, `on_methods()`, and `on_code()` adapt lower-level transforms onto `ClassModel` traversal while preserving in-place ownership boundaries and passing owning context; the field/method/code lifting helpers also support owner-class filtering
 - **`Matcher` DSL** — callable `Matcher` predicates with `&` / `|` / `~` composition and readable reprs
 - **Selection helpers** — exact-match, regex, semantic, and access-flag convenience helpers for classes, fields, and methods, plus predicate combinators `all_of()`, `any_of()`, and `not_()` for callers that prefer functional composition
 
@@ -305,7 +305,7 @@ A support tool used to generate or verify instruction enum data from a JVM instr
 - Most parser behavior lives in one large module (`class_reader.py`), so parsing remains a maintenance hotspot even though emission now lives in `class_writer.py`
 - The editing model now uses labels for control flow, exception ranges, and debug scopes, and symbolic operand wrappers for all major non-control-flow instruction families; only raw pass-through instructions (`BIPUSH`, `SIPUSH`, `NEWARRAY`, and zero-operand `InsnInfo`) remain in their spec-shaped form
 - Signed-JAR artifacts are preserved as pass-through bytes during rewrite, but `pytecode` does not generate replacement signatures for modified archives
-- Binary classfile emission, archive rewrite support, transform composition via `pytecode.transforms`, and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, `JarFile.rewrite()`, the current pipeline/matcher helpers, and the validation suite; the only remaining optional transform-surface follow-up is the visitor layer ([#21](https://github.com/smithtrenton/pytecode/issues/21))
+- Binary classfile emission, archive rewrite support, transform composition via `pytecode.transforms`, and the four validation tiers are implemented via `ClassWriter.write()`, `ClassModel.to_bytes()`, `JarFile.rewrite()`, the current pipeline/matcher helpers with context-passing transform protocols, and the validation suite
 
 ## Test coverage
 

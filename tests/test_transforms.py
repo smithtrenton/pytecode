@@ -229,7 +229,7 @@ def test_on_fields_uses_snapshot_iteration_when_collection_changes() -> None:
     model = _class(fields=fields.copy())
     visited: list[str] = []
 
-    def remove_field(field: FieldModel) -> None:
+    def remove_field(field: FieldModel, _owner: ClassModel) -> None:
         visited.append(field.name)
         model.fields.remove(field)
 
@@ -244,7 +244,7 @@ def test_on_fields_applies_where_predicate() -> None:
     other = _field("other")
     model = _class(fields=[target, other])
 
-    def make_static(field: FieldModel) -> None:
+    def make_static(field: FieldModel, _owner: ClassModel) -> None:
         field.access_flags |= FieldAccessFlag.STATIC
 
     on_fields(make_static, where=field_named("target"))(model)
@@ -256,7 +256,7 @@ def test_on_fields_applies_where_predicate() -> None:
 def test_on_fields_rejects_non_none_return() -> None:
     model = _class(fields=[_field("target")])
 
-    def bad(field: FieldModel) -> Any:
+    def bad(field: FieldModel, _owner: ClassModel) -> Any:
         return field.name
 
     with pytest.raises(TypeError, match="Field transforms must mutate FieldModel in place and return None"):
@@ -272,7 +272,7 @@ def test_on_methods_filters_by_name_descriptor_and_access() -> None:
     other = _method("other", "(I)V", access_flags=MethodAccessFlag.PUBLIC)
     model = _class(methods=[target, other])
 
-    def make_final(method: MethodModel) -> None:
+    def make_final(method: MethodModel, _owner: ClassModel) -> None:
         method.access_flags |= MethodAccessFlag.FINAL
 
     transform = on_methods(
@@ -292,7 +292,7 @@ def test_on_methods_filters_by_name_descriptor_and_access() -> None:
 def test_on_methods_rejects_non_none_return() -> None:
     model = _class(methods=[_method("target")])
 
-    def bad(method: MethodModel) -> Any:
+    def bad(method: MethodModel, _owner: ClassModel) -> Any:
         return method.name
 
     with pytest.raises(TypeError, match="Method transforms must mutate MethodModel in place and return None"):
@@ -306,7 +306,7 @@ def test_on_code_skips_methods_without_code_without_where_filter() -> None:
     model = _class(methods=[concrete, abstract, native])
     visited: list[str] = []
 
-    def grow_stack(code: CodeModel) -> None:
+    def grow_stack(code: CodeModel, _method: MethodModel, _owner: ClassModel) -> None:
         visited.append("code")
         code.max_stack += 1
 
@@ -326,7 +326,7 @@ def test_on_code_filters_by_method_predicate() -> None:
     model = _class(methods=[target, other, abstract])
     visited: list[str] = []
 
-    def grow_stack(code: CodeModel) -> None:
+    def grow_stack(code: CodeModel, _method: MethodModel, _owner: ClassModel) -> None:
         visited.append("code")
         code.max_stack += 1
 
@@ -343,7 +343,7 @@ def test_on_code_filters_by_method_predicate() -> None:
 def test_on_code_rejects_non_none_return() -> None:
     model = _class(methods=[_method("target")])
 
-    def bad(code: CodeModel) -> Any:
+    def bad(code: CodeModel, _method: MethodModel, _owner: ClassModel) -> Any:
         return code.max_stack
 
     with pytest.raises(TypeError, match="Code transforms must mutate CodeModel in place and return None"):
@@ -382,7 +382,7 @@ def test_jarfile_rewrite_accepts_pipeline_transform(tmp_path: Path) -> None:
     jar = JarFile(jar_path)
     out_path = tmp_path / "pipeline.jar"
 
-    def make_main_final(method: MethodModel) -> None:
+    def make_main_final(method: MethodModel, _owner: ClassModel) -> None:
         method.access_flags |= MethodAccessFlag.FINAL
 
     transform = pipeline(
@@ -786,7 +786,7 @@ def test_on_fields_owner_filters_classes() -> None:
     )
     other = _class("example/Other", fields=[_field("value")])
 
-    def make_static(field: FieldModel) -> None:
+    def make_static(field: FieldModel, _owner: ClassModel) -> None:
         field.access_flags |= FieldAccessFlag.STATIC
 
     transform = on_fields(
@@ -808,7 +808,7 @@ def test_on_methods_owner_short_circuits_before_where_evaluation() -> None:
         raise AssertionError(f"unexpected where evaluation for {method.name}")
 
     on_methods(
-        lambda method: None,
+        lambda method, _owner: None,
         where=fail_if_called,
         owner=class_named("example/Target"),
     )(model)
@@ -818,7 +818,7 @@ def test_on_code_owner_filters_classes() -> None:
     target = _class("example/Target", methods=[_method("run")])
     other = _class("example/Other", methods=[_method("run")])
 
-    def grow_stack(code: CodeModel) -> None:
+    def grow_stack(code: CodeModel, _method: MethodModel, _owner: ClassModel) -> None:
         code.max_stack += 1
 
     transform = on_code(
@@ -839,7 +839,7 @@ def test_where_and_owner_accept_plain_callable_predicates() -> None:
     target = _class("example/Target", methods=[_method("run")])
     other = _class("example/Other", methods=[_method("run")])
 
-    def make_final(method: MethodModel) -> None:
+    def make_final(method: MethodModel, _owner: ClassModel) -> None:
         method.access_flags |= MethodAccessFlag.FINAL
 
     transform = on_methods(
@@ -852,3 +852,213 @@ def test_where_and_owner_accept_plain_callable_predicates() -> None:
 
     assert MethodAccessFlag.FINAL in target.methods[0].access_flags
     assert MethodAccessFlag.FINAL not in other.methods[0].access_flags
+
+
+# ---------------------------------------------------------------------------
+# Context-aware transform tests
+# ---------------------------------------------------------------------------
+
+
+def test_on_code_passes_method_and_class_context() -> None:
+    """on_code should pass the owning MethodModel and ClassModel to the transform."""
+    run = _method("run", "(I)V")
+    model = _class("example/Widget", methods=[run])
+    captured: list[tuple[str, str, str]] = []
+
+    def record_context(code: CodeModel, method: MethodModel, owner: ClassModel) -> None:
+        captured.append((owner.name, method.name, method.descriptor))
+
+    on_code(record_context)(model)
+
+    assert captured == [("example/Widget", "run", "(I)V")]
+
+
+def test_on_methods_passes_class_context() -> None:
+    """on_methods should pass the owning ClassModel to the transform."""
+    model = _class("example/Service", methods=[_method("start"), _method("stop")])
+    captured: list[tuple[str, str]] = []
+
+    def record_context(method: MethodModel, owner: ClassModel) -> None:
+        captured.append((owner.name, method.name))
+
+    on_methods(record_context)(model)
+
+    assert captured == [("example/Service", "start"), ("example/Service", "stop")]
+
+
+def test_on_fields_passes_class_context() -> None:
+    """on_fields should pass the owning ClassModel to the transform."""
+    model = _class("example/Config", fields=[_field("host"), _field("port", "I")])
+    captured: list[tuple[str, str]] = []
+
+    def record_context(field: FieldModel, owner: ClassModel) -> None:
+        captured.append((owner.name, field.name))
+
+    on_fields(record_context)(model)
+
+    assert captured == [("example/Config", "host"), ("example/Config", "port")]
+
+
+def test_on_code_context_with_where_and_owner_predicates() -> None:
+    """Predicates should filter before the context-receiving transform is called."""
+    target = _class("example/Target", methods=[_method("run"), _method("stop")])
+    other = _class("example/Other", methods=[_method("run")])
+    captured: list[tuple[str, str]] = []
+
+    def record_context(code: CodeModel, method: MethodModel, owner: ClassModel) -> None:
+        captured.append((owner.name, method.name))
+
+    transform = on_code(
+        record_context,
+        where=method_named("run"),
+        owner=class_named("example/Target"),
+    )
+    transform(target)
+    transform(other)
+
+    assert captured == [("example/Target", "run")]
+
+
+def test_on_methods_context_with_where_predicate() -> None:
+    """where predicate should filter methods before context is passed."""
+    model = _class("example/App", methods=[_method("init"), _method("run"), _method("cleanup")])
+    captured: list[str] = []
+
+    def record(method: MethodModel, _owner: ClassModel) -> None:
+        captured.append(method.name)
+
+    on_methods(record, where=method_name_matches(r"init|cleanup"))(model)
+
+    assert captured == ["init", "cleanup"]
+
+
+def test_context_field_transform_rejects_non_none_return() -> None:
+    model = _class(fields=[_field("value")])
+
+    def bad(field: FieldModel, owner: ClassModel) -> Any:
+        return (field.name, owner.name)
+
+    with pytest.raises(TypeError, match="Field transforms must mutate FieldModel in place and return None"):
+        on_fields(bad)(model)
+
+
+def test_context_method_transform_rejects_non_none_return() -> None:
+    model = _class(methods=[_method("run")])
+
+    def bad(method: MethodModel, owner: ClassModel) -> Any:
+        return (method.name, owner.name)
+
+    with pytest.raises(TypeError, match="Method transforms must mutate MethodModel in place and return None"):
+        on_methods(bad)(model)
+
+
+def test_context_code_transform_rejects_non_none_return() -> None:
+    model = _class(methods=[_method("run")])
+
+    def bad(code: CodeModel, method: MethodModel, owner: ClassModel) -> Any:
+        return (code.max_stack, method.name, owner.name)
+
+    with pytest.raises(TypeError, match="Code transforms must mutate CodeModel in place and return None"):
+        on_code(bad)(model)
+
+
+def test_on_fields_context_uses_snapshot_iteration() -> None:
+    """Removing fields during traversal should not skip elements."""
+    model = _class(fields=[_field("a"), _field("b"), _field("c")])
+    visited: list[str] = []
+
+    def remove_and_record(field: FieldModel, _owner: ClassModel) -> None:
+        visited.append(field.name)
+        model.fields.remove(field)
+
+    on_fields(remove_and_record)(model)
+
+    assert visited == ["a", "b", "c"]
+    assert model.fields == []
+
+
+def test_on_code_skips_abstract_and_native_methods_with_context() -> None:
+    """on_code should skip methods without code even when context is expected."""
+    concrete = _method("run")
+    abstract = _method("shape", access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.ABSTRACT, code=None)
+    native = _method("nativeOp", access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.NATIVE, code=None)
+    model = _class(methods=[concrete, abstract, native])
+    visited: list[str] = []
+
+    def record(code: CodeModel, method: MethodModel, _owner: ClassModel) -> None:
+        visited.append(method.name)
+
+    on_code(record)(model)
+
+    assert visited == ["run"]
+
+
+def test_context_transforms_on_empty_class() -> None:
+    """Context transforms should be no-ops on a class with no fields or methods."""
+    model = _class("example/Empty", fields=[], methods=[])
+    field_calls: list[str] = []
+    method_calls: list[str] = []
+    code_calls: list[str] = []
+
+    on_fields(lambda f, o: field_calls.append(f.name))(model)
+    on_methods(lambda m, o: method_calls.append(m.name))(model)
+    on_code(lambda c, m, o: code_calls.append(m.name))(model)
+
+    assert field_calls == []
+    assert method_calls == []
+    assert code_calls == []
+
+
+def test_context_transform_composes_with_pipeline() -> None:
+    """Context-aware transforms lifted via on_* should compose in a Pipeline."""
+    model = _class("example/Widget", fields=[_field("value")], methods=[_method("run")])
+    log: list[str] = []
+
+    def field_xform(field: FieldModel, owner: ClassModel) -> None:
+        log.append(f"field:{owner.name}/{field.name}")
+        field.access_flags |= FieldAccessFlag.FINAL
+
+    def method_xform(method: MethodModel, owner: ClassModel) -> None:
+        log.append(f"method:{owner.name}/{method.name}")
+        method.access_flags |= MethodAccessFlag.FINAL
+
+    transform = pipeline(on_fields(field_xform), on_methods(method_xform))
+    transform(model)
+
+    assert log == ["field:example/Widget/value", "method:example/Widget/run"]
+    assert FieldAccessFlag.FINAL in model.fields[0].access_flags
+    assert MethodAccessFlag.FINAL in model.methods[0].access_flags
+
+
+def test_context_transform_with_jarfile_rewrite(tmp_path: Path) -> None:
+    """Context-aware transforms should work through JarFile.rewrite()."""
+    jar_path = make_compiled_jar(
+        tmp_path,
+        [TEST_RESOURCES / "HelloWorld.java"],
+        extra_files={"README.txt": b"fixture"},
+    )
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "context.jar"
+
+    captured_contexts: list[tuple[str, str]] = []
+
+    def record_and_finalize(method: MethodModel, owner: ClassModel) -> None:
+        captured_contexts.append((owner.name, method.name))
+        if method.name == "main":
+            method.access_flags |= MethodAccessFlag.FINAL
+
+    transform = pipeline(
+        on_methods(
+            record_and_finalize,
+            where=method_is_public(),
+            owner=class_named("HelloWorld"),
+        )
+    )
+    jar.rewrite(out_path, transform=transform)
+
+    assert any(ctx == ("HelloWorld", "main") for ctx in captured_contexts)
+
+    rewritten = JarFile(out_path)
+    model = ClassModel.from_bytes(rewritten.files["HelloWorld.class"].bytes)
+    methods = {m.name: m for m in model.methods}
+    assert MethodAccessFlag.FINAL in methods["main"].access_flags

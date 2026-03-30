@@ -98,7 +98,7 @@ The manipulation API uses Design A (direct mutable dataclasses) as the primary e
 
 - **Phase 1 (done)**: Mutable tree model — `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` with symbolic references, `ConstantPoolBuilder`, and label-based instruction editing.
 - **Phase 2 (done)**: Pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, owner-class filtering for the field/method/code lifting helpers, and a richer `Matcher` DSL with `&` / `|` / `~` composition, regex helpers, lightweight structural helpers, access-flag convenience matchers, plus the original functional combinators for callers that prefer them. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into `JarFile.rewrite(transform=...)` and the existing lowering/validation flow.
-- **Phase 3 (if needed)**: Optional visitor layer for streaming ([#21](https://github.com/smithtrenton/pytecode/issues/21)) — defer until there is an actual use case for high-throughput, memory-efficient bulk transformations.
+- **Phase 3 (evaluated — [#21](https://github.com/smithtrenton/pytecode/issues/21) — done)**: A full visitor/streaming API was evaluated and found not yet justified — no concrete use cases for high-throughput streaming or memory-efficient bulk processing exist. Instead, the existing `FieldTransform`, `MethodTransform`, and `CodeTransform` protocols were updated to receive owning context (`owner: ClassModel` and, for code transforms, `method: MethodModel`), addressing the real gap without introducing a second traversal model.
 
 See [editing model design rationale](../design/editing-model.md) for the full comparative analysis.
 
@@ -151,5 +151,5 @@ track the supported API rather than transient internal helpers.
 16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 18. ~~Add richer matcher DSL over `pytecode.transforms`.~~ ([#20](https://github.com/smithtrenton/pytecode/issues/20) — done)
-19. Evaluate optional visitor-style transform API. ([#21](https://github.com/smithtrenton/pytecode/issues/21))
+19. ~~Evaluate optional visitor-style transform API.~~ ([#21](https://github.com/smithtrenton/pytecode/issues/21) — done)
 20. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))
