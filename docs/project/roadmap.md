@@ -152,3 +152,5 @@ track the supported API rather than transient internal helpers.
 16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 18. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))
+19. Add richer matcher DSL over `pytecode.transforms`. ([#20](https://github.com/smithtrenton/pytecode/issues/20))
+20. Evaluate optional visitor-style transform API. ([#21](https://github.com/smithtrenton/pytecode/issues/21))
