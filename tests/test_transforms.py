@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +14,70 @@ from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFla
 from pytecode.jar import JarFile
 from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.transforms import (
+    ClassPredicate,
+    FieldPredicate,
+    Matcher,
+    MethodPredicate,
     Pipeline,
     all_of,
     any_of,
     class_access,
+    class_access_any,
+    class_is_abstract,
+    class_is_annotation,
+    class_is_enum,
+    class_is_final,
+    class_is_interface,
+    class_is_module,
+    class_is_package_private,
+    class_is_public,
+    class_is_synthetic,
+    class_name_matches,
     class_named,
+    class_version,
+    class_version_at_least,
+    class_version_below,
+    extends,
     field_access,
+    field_access_any,
     field_descriptor,
+    field_descriptor_matches,
+    field_is_enum_constant,
+    field_is_final,
+    field_is_package_private,
+    field_is_private,
+    field_is_protected,
+    field_is_public,
+    field_is_static,
+    field_is_synthetic,
+    field_is_transient,
+    field_is_volatile,
+    field_name_matches,
     field_named,
     has_code,
+    implements,
+    is_constructor,
+    is_static_initializer,
     method_access,
+    method_access_any,
     method_descriptor,
+    method_descriptor_matches,
+    method_is_abstract,
+    method_is_bridge,
+    method_is_final,
+    method_is_native,
+    method_is_package_private,
+    method_is_private,
+    method_is_protected,
+    method_is_public,
+    method_is_static,
+    method_is_strict,
+    method_is_synchronized,
+    method_is_synthetic,
+    method_is_varargs,
+    method_name_matches,
     method_named,
+    method_returns,
     not_,
     on_classes,
     on_code,
@@ -331,7 +385,13 @@ def test_jarfile_rewrite_accepts_pipeline_transform(tmp_path: Path) -> None:
     def make_main_final(method: MethodModel) -> None:
         method.access_flags |= MethodAccessFlag.FINAL
 
-    transform = pipeline(on_methods(make_main_final, where=method_named("main")))
+    transform = pipeline(
+        on_methods(
+            make_main_final,
+            where=method_name_matches(r"main") & method_is_public() & method_is_static(),
+            owner=class_named("HelloWorld"),
+        )
+    )
     jar.rewrite(out_path, transform=transform)
 
     rewritten = JarFile(out_path)
@@ -340,3 +400,443 @@ def test_jarfile_rewrite_accepts_pipeline_transform(tmp_path: Path) -> None:
 
     assert MethodAccessFlag.FINAL in methods["main"].access_flags
     assert MethodAccessFlag.FINAL not in methods["<init>"].access_flags
+
+
+def test_matcher_of_is_idempotent_and_can_override_description() -> None:
+    def starts_with_run(method: MethodModel) -> bool:
+        return method.name.startswith("run")
+
+    matcher = Matcher.of(starts_with_run)
+
+    assert Matcher.of(matcher) is matcher
+    assert matcher(_method("runNow")) is True
+    assert repr(matcher) == "Matcher[starts_with_run]"
+
+    custom = Matcher.of(matcher, "starts_with_run()")
+
+    assert custom is not matcher
+    assert custom(_method("runLater")) is True
+    assert repr(custom) == "Matcher[starts_with_run()]"
+
+
+def test_matcher_of_rejects_non_callable_predicates() -> None:
+    with pytest.raises(TypeError, match="Matcher predicates must be callable"):
+        Matcher.of(1)  # pyright: ignore[reportArgumentType]
+
+
+def test_matcher_operator_composition_supports_and_or_not() -> None:
+    matcher = (method_named("run") & ~method_is_static()) | is_constructor()
+
+    assert matcher(_method("run")) is True
+    assert matcher(_method("<init>")) is True
+    assert matcher(_method("run", access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.STATIC)) is False
+    assert repr(matcher) == "Matcher[((method_named('run') & ~method_is_static()) | is_constructor())]"
+
+
+def test_matcher_operators_accept_plain_callables_on_either_side() -> None:
+    def is_run(method: MethodModel) -> bool:
+        return method.name == "run"
+
+    left = is_run & has_code()
+    right = method_is_static() | is_run
+
+    assert left(_method("run")) is True
+    assert left(_method("other")) is False
+    assert right(_method("run", access_flags=MethodAccessFlag.PUBLIC)) is True
+    assert right(_method("other", access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.STATIC)) is True
+    assert right(_method("other", access_flags=MethodAccessFlag.PUBLIC)) is False
+
+
+def test_all_of_and_any_of_handle_empty_input() -> None:
+    method = _method("run")
+
+    assert all_of()(method) is True
+    assert any_of()(method) is False
+
+
+@pytest.mark.parametrize(
+    ("matcher", "matching", "non_matching"),
+    [
+        (
+            class_name_matches(r"example/.+"),
+            _class("example/Test"),
+            _class("other/Test"),
+        ),
+        (
+            field_name_matches(r"value\d+"),
+            _field("value7"),
+            _field("prefix_value7"),
+        ),
+        (
+            field_descriptor_matches(r"L.+;"),
+            _field("value", "Ljava/lang/String;"),
+            _field("value", "[Ljava/lang/String;"),
+        ),
+        (
+            method_name_matches(r"get[A-Z].+"),
+            _method("getValue"),
+            _method("helper"),
+        ),
+        (
+            method_descriptor_matches(r"\(I\)V"),
+            _method("run", "(I)V"),
+            _method("run", "(II)V"),
+        ),
+    ],
+)
+def test_regex_matchers_use_fullmatch_semantics(
+    matcher: Matcher[object],
+    matching: object,
+    non_matching: object,
+) -> None:
+    assert matcher(matching) is True
+    assert matcher(non_matching) is False
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        class_name_matches,
+        field_name_matches,
+        field_descriptor_matches,
+        method_name_matches,
+        method_descriptor_matches,
+    ],
+)
+def test_regex_matchers_raise_for_invalid_patterns(factory: Any) -> None:
+    with pytest.raises(re.error):
+        factory("[")
+
+
+def test_access_any_matchers_require_any_requested_flag() -> None:
+    assert class_access_any(ClassAccessFlag.PUBLIC | ClassAccessFlag.FINAL)(
+        _class(access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER)
+    )
+    assert not class_access_any(ClassAccessFlag.FINAL | ClassAccessFlag.INTERFACE)(_class())
+
+    assert field_access_any(FieldAccessFlag.STATIC | FieldAccessFlag.FINAL)(
+        _field("value", access_flags=FieldAccessFlag.PRIVATE | FieldAccessFlag.STATIC)
+    )
+    assert not field_access_any(FieldAccessFlag.PROTECTED | FieldAccessFlag.ENUM)(_field("value"))
+
+    assert method_access_any(MethodAccessFlag.STATIC | MethodAccessFlag.FINAL)(
+        _method("run", access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.STATIC)
+    )
+    assert not method_access_any(MethodAccessFlag.ABSTRACT | MethodAccessFlag.NATIVE)(_method("run"))
+
+
+@pytest.mark.parametrize(
+    ("matcher_factory", "matching_flags", "non_matching_flags"),
+    [
+        (
+            class_is_public,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_package_private,
+            ClassAccessFlag.SUPER,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_final,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.FINAL,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_interface,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.INTERFACE | ClassAccessFlag.ABSTRACT,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_abstract,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.ABSTRACT,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_synthetic,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SYNTHETIC,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_annotation,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.ANNOTATION | ClassAccessFlag.INTERFACE,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_enum,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.ENUM,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+        (
+            class_is_module,
+            ClassAccessFlag.MODULE,
+            ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        ),
+    ],
+)
+def test_class_access_convenience_matchers(
+    matcher_factory: Callable[[], ClassPredicate],
+    matching_flags: ClassAccessFlag,
+    non_matching_flags: ClassAccessFlag,
+) -> None:
+    assert matcher_factory()(_class(access_flags=matching_flags)) is True
+    assert matcher_factory()(_class(access_flags=non_matching_flags)) is False
+
+
+@pytest.mark.parametrize(
+    ("matcher_factory", "matching_flags", "non_matching_flags"),
+    [
+        (
+            field_is_public,
+            FieldAccessFlag.PUBLIC,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_private,
+            FieldAccessFlag.PRIVATE,
+            FieldAccessFlag.PUBLIC,
+        ),
+        (
+            field_is_protected,
+            FieldAccessFlag.PROTECTED,
+            FieldAccessFlag.PUBLIC,
+        ),
+        (
+            field_is_package_private,
+            FieldAccessFlag.STATIC,
+            FieldAccessFlag.PUBLIC,
+        ),
+        (
+            field_is_static,
+            FieldAccessFlag.STATIC,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_final,
+            FieldAccessFlag.FINAL,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_volatile,
+            FieldAccessFlag.VOLATILE,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_transient,
+            FieldAccessFlag.TRANSIENT,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_synthetic,
+            FieldAccessFlag.SYNTHETIC,
+            FieldAccessFlag.PRIVATE,
+        ),
+        (
+            field_is_enum_constant,
+            FieldAccessFlag.ENUM,
+            FieldAccessFlag.PRIVATE,
+        ),
+    ],
+)
+def test_field_access_convenience_matchers(
+    matcher_factory: Callable[[], FieldPredicate],
+    matching_flags: FieldAccessFlag,
+    non_matching_flags: FieldAccessFlag,
+) -> None:
+    assert matcher_factory()(_field("value", access_flags=matching_flags)) is True
+    assert matcher_factory()(_field("value", access_flags=non_matching_flags)) is False
+
+
+@pytest.mark.parametrize(
+    ("matcher_factory", "matching_flags", "non_matching_flags"),
+    [
+        (
+            method_is_public,
+            MethodAccessFlag.PUBLIC,
+            MethodAccessFlag.PRIVATE,
+        ),
+        (
+            method_is_private,
+            MethodAccessFlag.PRIVATE,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_protected,
+            MethodAccessFlag.PROTECTED,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_package_private,
+            MethodAccessFlag.FINAL,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_static,
+            MethodAccessFlag.STATIC,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_final,
+            MethodAccessFlag.FINAL,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_synchronized,
+            MethodAccessFlag.SYNCHRONIZED,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_bridge,
+            MethodAccessFlag.BRIDGE,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_varargs,
+            MethodAccessFlag.VARARGS,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_native,
+            MethodAccessFlag.NATIVE,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_abstract,
+            MethodAccessFlag.ABSTRACT,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_strict,
+            MethodAccessFlag.STRICT,
+            MethodAccessFlag.PUBLIC,
+        ),
+        (
+            method_is_synthetic,
+            MethodAccessFlag.SYNTHETIC,
+            MethodAccessFlag.PUBLIC,
+        ),
+    ],
+)
+def test_method_access_convenience_matchers(
+    matcher_factory: Callable[[], MethodPredicate],
+    matching_flags: MethodAccessFlag,
+    non_matching_flags: MethodAccessFlag,
+) -> None:
+    assert matcher_factory()(_method("run", access_flags=matching_flags)) is True
+    assert matcher_factory()(_method("run", access_flags=non_matching_flags)) is False
+
+
+def test_class_semantic_matchers_cover_super_interface_and_version() -> None:
+    model = _class("example/Widget")
+    model.super_name = "example/BaseWidget"
+    model.interfaces = ["java/io/Serializable", "java/lang/Runnable"]
+    model.version = (61, 0)
+
+    assert extends("example/BaseWidget")(model) is True
+    assert extends("java/lang/Object")(model) is False
+    assert implements("java/io/Serializable")(model) is True
+    assert implements("java/lang/Cloneable")(model) is False
+    assert class_version(61)(model) is True
+    assert class_version(52)(model) is False
+    assert class_version_at_least(55)(model) is True
+    assert class_version_below(65)(model) is True
+    assert class_version_below(61)(model) is False
+
+
+def test_method_semantic_matchers_cover_constructor_initializer_and_returns() -> None:
+    constructor = _method("<init>", "(Ljava/lang/String;)V")
+    initializer = _method(
+        "<clinit>",
+        "()V",
+        access_flags=MethodAccessFlag.STATIC,
+    )
+    object_return = _method("name", "()Ljava/lang/String;")
+    array_return = _method("matrix", "()[[I")
+    invalid = _method("broken", "not-a-descriptor")
+
+    assert is_constructor()(constructor) is True
+    assert is_constructor()(initializer) is False
+    assert is_static_initializer()(initializer) is True
+    assert is_static_initializer()(constructor) is False
+    assert method_returns("V")(constructor) is True
+    assert method_returns("Ljava/lang/String;")(object_return) is True
+    assert method_returns("[[I")(array_return) is True
+    assert method_returns("I")(object_return) is False
+    assert method_returns("V")(invalid) is False
+
+
+def test_on_fields_owner_filters_classes() -> None:
+    target = _class(
+        "example/Target",
+        fields=[_field("value")],
+        access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER | ClassAccessFlag.ENUM,
+    )
+    other = _class("example/Other", fields=[_field("value")])
+
+    def make_static(field: FieldModel) -> None:
+        field.access_flags |= FieldAccessFlag.STATIC
+
+    transform = on_fields(
+        make_static,
+        where=field_named("value"),
+        owner=class_is_enum(),
+    )
+    transform(target)
+    transform(other)
+
+    assert FieldAccessFlag.STATIC in target.fields[0].access_flags
+    assert FieldAccessFlag.STATIC not in other.fields[0].access_flags
+
+
+def test_on_methods_owner_short_circuits_before_where_evaluation() -> None:
+    model = _class("example/Other", methods=[_method("run")])
+
+    def fail_if_called(method: MethodModel) -> bool:
+        raise AssertionError(f"unexpected where evaluation for {method.name}")
+
+    on_methods(
+        lambda method: None,
+        where=fail_if_called,
+        owner=class_named("example/Target"),
+    )(model)
+
+
+def test_on_code_owner_filters_classes() -> None:
+    target = _class("example/Target", methods=[_method("run")])
+    other = _class("example/Other", methods=[_method("run")])
+
+    def grow_stack(code: CodeModel) -> None:
+        code.max_stack += 1
+
+    transform = on_code(
+        grow_stack,
+        where=method_is_public() & has_code(),
+        owner=class_named("example/Target"),
+    )
+    transform(target)
+    transform(other)
+
+    assert target.methods[0].code is not None
+    assert other.methods[0].code is not None
+    assert target.methods[0].code.max_stack == 2
+    assert other.methods[0].code.max_stack == 1
+
+
+def test_where_and_owner_accept_plain_callable_predicates() -> None:
+    target = _class("example/Target", methods=[_method("run")])
+    other = _class("example/Other", methods=[_method("run")])
+
+    def make_final(method: MethodModel) -> None:
+        method.access_flags |= MethodAccessFlag.FINAL
+
+    transform = on_methods(
+        make_final,
+        where=lambda method: method.name == "run",
+        owner=lambda model: model.name == "example/Target",
+    )
+    transform(target)
+    transform(other)
+
+    assert MethodAccessFlag.FINAL in target.methods[0].access_flags
+    assert MethodAccessFlag.FINAL not in other.methods[0].access_flags

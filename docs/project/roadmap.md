@@ -97,8 +97,7 @@ Now implemented in `pytecode.verify`. The `Diagnostic` dataclass carries severit
 The manipulation API uses Design A (direct mutable dataclasses) as the primary editing surface, chosen for its Pythonic feel, low learning curve, and natural fit with the existing `@dataclass`-based codebase. The phased extension plan is:
 
 - **Phase 1 (done)**: Mutable tree model — `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` with symbolic references, `ConstantPoolBuilder`, and label-based instruction editing.
-- **Phase 2 (done)**: Minimal pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, and basic selectors/combinators for name, descriptor, access flags, and `has_code()` matching. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into `JarFile.rewrite(transform=...)` and the existing lowering/validation flow.
-- **Future follow-up**: A richer matcher DSL ([#20](https://github.com/smithtrenton/pytecode/issues/20)) may still be layered on top of the current predicate helpers if real-world transform usage justifies it.
+- **Phase 2 (done)**: Pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, owner-class filtering for the field/method/code lifting helpers, and a richer `Matcher` DSL with `&` / `|` / `~` composition, regex helpers, semantic helpers, access-flag convenience matchers, plus the original functional combinators for callers that prefer them. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into `JarFile.rewrite(transform=...)` and the existing lowering/validation flow.
 - **Phase 3 (if needed)**: Optional visitor layer for streaming ([#21](https://github.com/smithtrenton/pytecode/issues/21)) — defer until there is an actual use case for high-throughput, memory-efficient bulk transformations.
 
 See [editing model design rationale](../design/editing-model.md) for the full comparative analysis.
@@ -151,6 +150,6 @@ track the supported API rather than transient internal helpers.
 15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#18](https://github.com/smithtrenton/pytecode/issues/18) — done)
 16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
-18. Add richer matcher DSL over `pytecode.transforms`. ([#20](https://github.com/smithtrenton/pytecode/issues/20))
+18. ~~Add richer matcher DSL over `pytecode.transforms`.~~ ([#20](https://github.com/smithtrenton/pytecode/issues/20) — done)
 19. Evaluate optional visitor-style transform API. ([#21](https://github.com/smithtrenton/pytecode/issues/21))
 20. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))

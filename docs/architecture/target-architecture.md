@@ -31,7 +31,7 @@ This is the layer you already have today.
 
 ## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phases 1-2 landed)
 
-Phase 1 of this layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, and the minimal Phase 2 extension now lives in `pytecode.transforms`. Together, these give pytecode a higher-level object model plus a lightweight composition layer for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, `ConstantPoolBuilder`, and callable transform pipelines.
+Phase 1 of this layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, and the Phase 2 extension now lives in `pytecode.transforms`. Together, these give pytecode a higher-level object model plus a lightweight composition layer for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, `ConstantPoolBuilder`, callable transform pipelines, and the richer matcher DSL.
 
 Responsibilities:
 
@@ -44,9 +44,9 @@ Responsibilities:
 - exception handler ranges bound to labels, not byte offsets
 - transparent `WIDE` instruction handling (users should never need to think about wide-form variants)
 - preservation of unknown attributes through transformations
-- composable class/method/field/code transforms with deterministic pass ordering and basic selection predicates
+- composable class/method/field/code transforms with deterministic pass ordering, owner-filtered lifting, and composable selection predicates
 
-This layer is now the core user-facing manipulation surface behind the requested "API to manipulate the classfiles." `pytecode.transforms` provides the landed minimal Phase 2 composition layer (`Pipeline`, `pipeline()`, `on_*` lifting helpers, and basic selectors), while richer matcher DSL work ([#20](https://github.com/smithtrenton/pytecode/issues/20)) and any optional visitor layer ([#21](https://github.com/smithtrenton/pytecode/issues/21)) remain deferred follow-ups rather than current prerequisites.
+This layer is now the core user-facing manipulation surface behind the requested "API to manipulate the classfiles." `pytecode.transforms` provides the landed Phase 2 composition layer (`Pipeline`, `pipeline()`, `Matcher`, `on_*` lifting helpers, owner filters, and the current selector/semantic helper surface), while only the optional visitor layer ([#21](https://github.com/smithtrenton/pytecode/issues/21)) remains a deferred follow-up rather than a current prerequisite.
 
 After evaluating five candidate designs — **(A)** direct mutable dataclasses, **(B)** builder objects (BCEL-style), **(C)** visitor/transformer pattern (ASM-style), **(D)** pass pipelines, and **(E)** dual tree+visitor — **Design A (Mutable Dataclasses)** was chosen as the primary editing API. The tree model is designed so that pass-style composition (Design D) can be layered on top, and a visitor layer (Design E) can be added later if streaming becomes necessary. See [editing model design rationale](../design/editing-model.md) for the full analysis, comparative feature matrix, library survey, and phased implementation plan.
 

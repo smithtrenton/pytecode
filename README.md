@@ -11,7 +11,7 @@ See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current classfil
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, parses classes via `ClassReader`, and can add/remove entries plus rewrite archives safely.
 - `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path. `ClassModel.from_classfile()` and `ClassModel.from_bytes()` also accept `skip_debug=True` when you want an ASM-like lift path that omits debug metadata before it enters the mutable model.
 
-For composable in-place transformations — `Pipeline`, `pipeline()`, `on_classes()`, `on_fields()`, `on_methods()`, `on_code()`, and the basic selector/combinator helpers such as `class_named()`, `field_named()`, `method_named()`, `class_access()`, `field_access()`, `method_access()`, `field_descriptor()`, `method_descriptor()`, `has_code()`, `all_of()`, `any_of()`, and `not_()` — import from `pytecode.transforms`. Pipelines are callable and can be passed directly to `JarFile.rewrite(transform=...)`.
+For composable in-place transformations, import from `pytecode.transforms`. That module now provides callable `Pipeline` objects, `Matcher` predicates with `&` / `|` / `~` composition, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, optional owner-class filtering on the field/method/code lifting helpers, name/descriptor/access matchers, regex matchers, semantic helpers such as `extends()`, `implements()`, `is_constructor()`, and `is_static_initializer()`, plus the original `all_of()`, `any_of()`, and `not_()` combinators for callers that prefer functional composition. Pipelines remain callable and can be passed directly to `JarFile.rewrite(transform=...)`.
 
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, `LabelResolution`, and `lower_code()`, import directly from `pytecode.labels`.
 
@@ -43,7 +43,14 @@ A minimal transform pipeline looks like:
 from pytecode import JarFile
 from pytecode.constants import MethodAccessFlag
 from pytecode.model import MethodModel
-from pytecode.transforms import method_named, on_methods, pipeline
+from pytecode.transforms import (
+    class_named,
+    method_is_public,
+    method_is_static,
+    method_name_matches,
+    on_methods,
+    pipeline,
+)
 
 
 def make_final(method: MethodModel) -> None:
@@ -52,7 +59,13 @@ def make_final(method: MethodModel) -> None:
 
 JarFile("input.jar").rewrite(
     "output.jar",
-    transform=pipeline(on_methods(make_final, where=method_named("main"))),
+    transform=pipeline(
+        on_methods(
+            make_final,
+            where=method_name_matches(r"main") & method_is_public() & method_is_static(),
+            owner=class_named("HelloWorld"),
+        )
+    ),
 )
 ```
 
