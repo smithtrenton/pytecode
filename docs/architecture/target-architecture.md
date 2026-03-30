@@ -90,9 +90,9 @@ Max stack/max locals recomputation and StackMapTable generation are now implemen
 
 Max stack/max locals recomputation and StackMapTable generation are now complete ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done), built on the analysis layer.
 
-## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; Tier 2+ in [#14](https://github.com/smithtrenton/pytecode/issues/14))
+## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; four tiers implemented in [#14](https://github.com/smithtrenton/pytecode/issues/14))
 
-Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is organized as a four-tier framework. Tier 1 is landed today; the higher external-tool tiers remain future work. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
+Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`, while `tests/test_validation.py`, `tests/javap_parser.py`, and `tests/jvm_harness.py` cover the higher external-tool tiers. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|

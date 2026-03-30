@@ -32,6 +32,8 @@ This document describes the architecture for validating pytecode's classfile emi
 
 Each tier catches different classes of bugs and is independently testable.
 
+All four tiers are now implemented in the current repository. The sections below describe both the architecture and the concrete workflow exercised by `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, and `tests/jvm_harness.py`.
+
 ## External tool landscape
 
 The framework leverages existing JDK and OpenJDK tools rather than reimplementing verification logic:
@@ -146,30 +148,23 @@ This ordering is implemented in the CP builder's allocation strategy, not as a p
 
 ## Validation test infrastructure
 
-Validation tests integrate with the existing `tests/helpers.py` caching infrastructure and use pytest markers for tier-based test selection:
+Validation tests integrate with the existing `tests/helpers.py` caching infrastructure and are split across a small set of focused modules:
 
 ```
 tests/
-├── validation/
-│   ├── __init__.py
-│   ├── conftest.py              # Validation-specific fixtures and markers
-│   ├── roundtrip.py             # Roundtrip utilities (Tier 1)
-│   ├── verifier.py              # Internal verifier (Tier 2)
-│   ├── javap_parser.py          # javap output parser
-│   ├── semantic_diff.py         # Semantic comparison engine (Tier 3)
-│   ├── jvm_harness.py           # JVM loading harness (Tier 4)
-│   ├── test_roundtrip.py        # Tier 1 tests
-│   ├── test_structural.py       # Tier 2 tests
-│   ├── test_javac_comparison.py # Tier 3 tests
-│   └── test_jvm_loading.py      # Tier 4 tests
+├── helpers.py                   # Shared fixture compilation / caching helpers
+├── test_class_writer.py         # Tier 1 byte-for-byte roundtrip coverage
+├── test_validation.py           # End-to-end Tier 1-4 validation matrix
+├── javap_parser.py              # Tier 3 parser + semantic diff engine
+├── test_javap_parser.py         # Unit coverage for Tier 3 parsing / diffing
+├── jvm_harness.py               # Tier 4 Python wrapper for JVM verification
+├── validation_fixtures.py       # Fixture registry and (fixture, release) matrix
 ├── resources/
-│   ├── validation/              # Validation-specific Java fixtures
-│   └── verifier/
-│       └── VerifierHarness.java
+│   └── VerifierHarness.java
 └── ...existing test files...
 ```
 
-Pytest markers (`@pytest.mark.tier1` through `@pytest.mark.tier4`) enable running fast roundtrip tests independently of slow subprocess-based tests. Tier 1 tests run in CI on every commit; Tiers 2–4 run on a slower schedule or on-demand.
+The repository currently exposes the `oracle` marker for the JVM-backed CFG differential suite. The four validation tiers themselves are exercised primarily through `tests/test_class_writer.py`, `tests/test_validation.py`, and `tests/test_javap_parser.py`, while fixture selection and batching are handled by `tests/helpers.py` and `tests/validation_fixtures.py`.
 
 ## Validation data flow
 
@@ -183,15 +178,13 @@ Pytest markers (`@pytest.mark.tier1` through `@pytest.mark.tier4`) enable runnin
                           └──pytecode──▶ parse ──▶ Tier 1 roundtrip
 ```
 
-## Prerequisites and phasing
+## Implementation status
 
-- **Issue #12 (ClassWriter)**: Implemented. Tier 1 can now be exercised end-to-end.
-- **Issue #10 (StackMapTable computation)**: Required for Tier 4 JVM verification of *generated* (non-roundtrip) classes.
-- **Phase 1**: Implement Tier 1 (roundtrip) — done.
-- **Phase 2**: Implement Tier 2 (structural verifier + javap cross-check).
-- **Phase 3**: Implement Tier 3 (javap parser + semantic diff engine).
-- **Phase 4**: Implement Tier 4 (VerifierHarness + execution tests).
-- **Phase 5**: CI integration with tier-based markers and caching.
+- **Issue #12 (ClassWriter)**: Implemented.
+- **Issue #10 (StackMapTable computation)**: Implemented.
+- **Issue #14 (round-trip and verifier-focused validation)**: Implemented end-to-end.
+- **Current module split**: `tests/test_class_writer.py` focuses on Tier 1 byte-for-byte roundtrips; `tests/test_validation.py` exercises Tiers 1-4 across the compiled Java fixture corpus and selected execution fixtures; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; `tests/jvm_harness.py` wraps `tests/resources/VerifierHarness.java` for Tier 4 JVM verification and execution checks.
+- **Fixture selection**: `tests/validation_fixtures.py` derives the `(fixture, release)` matrix from `tests/helpers.py`, so new Java fixtures join the validation matrix once their minimum release is declared.
 
 ## Open questions
 
