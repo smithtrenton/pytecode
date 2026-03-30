@@ -6,8 +6,17 @@ from pathlib import Path
 import pytest
 
 import pytecode.jar as jar_module
+from pytecode.attributes import (
+    CodeAttr,
+    LineNumberTableAttr,
+    LocalVariableTableAttr,
+    LocalVariableTypeTableAttr,
+    SourceDebugExtensionAttr,
+    SourceFileAttr,
+)
 from pytecode.class_reader import ClassReader
 from pytecode.constants import ClassAccessFlag
+from pytecode.info import MethodInfo
 from pytecode.jar import JarFile, JarInfo
 from pytecode.model import ClassModel
 from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
@@ -47,6 +56,10 @@ def make_jar_with_infos(entries: list[tuple[zipfile.ZipInfo, bytes]], path: Path
         for info, data in entries:
             zf.writestr(info, data)
     return JarFile(path)
+
+
+def _find_raw_code(method: MethodInfo) -> CodeAttr | None:
+    return next((attribute for attribute in method.attributes if isinstance(attribute, CodeAttr)), None)
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +352,26 @@ def test_rewrite_applies_class_transform(tmp_path: Path):
     assert [jar_info.filename for jar_info, _ in classes] == ["HelloWorld.class"]
     assert ClassAccessFlag.FINAL in classes[0][1].class_info.access_flags
     assert [other.filename for other in others] == ["README.txt"]
+
+
+def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "skip-debug.jar"
+
+    jar.rewrite(out_path, skip_debug=True)
+
+    rewritten = JarFile(out_path)
+    class_info = ClassReader(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert not any(isinstance(attr, (SourceFileAttr, SourceDebugExtensionAttr)) for attr in class_info.attributes)
+    for method in class_info.methods:
+        code_attr = _find_raw_code(method)
+        if code_attr is None:
+            continue
+        assert not any(
+            isinstance(attr, (LineNumberTableAttr, LocalVariableTableAttr, LocalVariableTypeTableAttr))
+            for attr in code_attr.attributes
+        )
 
 
 def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_path: Path):

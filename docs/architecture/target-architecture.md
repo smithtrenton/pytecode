@@ -140,11 +140,13 @@ Responsibilities:
 
 `JarFile.add_file()` and `JarFile.remove_file()` mutate the in-memory archive state, while `JarFile.rewrite()` serializes that state back to disk, optionally lifting `.class` entries through `ClassModel` for in-place transforms and class-level lowering controls. Existing signature-related files are preserved as pass-through resources; rewritten signed JARs are not re-signed automatically and may therefore no longer verify as signed.
 
-## Cross-cutting concern: debug info management ([#18](https://github.com/smithtrenton/pytecode/issues/18))
+## Cross-cutting concern: debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#18](https://github.com/smithtrenton/pytecode/issues/18) — done)
 
-Mutation invalidates debug attributes (LineNumberTable, LocalVariableTable, LocalVariableTypeTable) because they bind to bytecode offsets. The current editing model already covers two practical policies:
+Mutation can leave debug metadata semantically stale even when label rebinding keeps offset-bound tables structurally valid. The current editing model now covers four explicit pieces of behavior:
 
-- rebind debug info to labels so it survives instruction edits automatically
-- provide explicit preserve/strip helpers so callers can omit debug metadata deliberately
+- rebind lifted code-debug metadata to labels so ordinary instruction edits keep offset-based tables aligned automatically
+- provide explicit preserve/strip helpers so callers can omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata deliberately during lowering
+- model known-stale debug metadata explicitly on `CodeModel` and `ClassModel` via `DebugInfoState`, with helper functions in `pytecode.debug_info`; explicitly stale class/code debug metadata is stripped automatically during lowering, and `verify_classmodel()` warns before emission
+- provide `skip_debug=True` lift controls on `ClassModel.from_classfile()`, `ClassModel.from_bytes()`, and `JarFile.rewrite()` for an ASM-like path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before the mutable model is materialized
 
-The remaining open design question is whether debug metadata should also gain a first-class stale state after mutation. Without a clear policy here, mutated classes can still produce confusing stack traces and debugger behavior when preserved debug tables are no longer semantically fresh.
+Staleness is defined semantically rather than by raw bytecode-offset movement alone. Offsets can move safely under label rebinding; metadata becomes stale when callers mutate source mapping or local-variable meaning/scope/signature/slot usage without updating the corresponding debug metadata.

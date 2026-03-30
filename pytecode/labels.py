@@ -17,7 +17,7 @@ from .attributes import (
 )
 from .constant_pool import ClassInfo
 from .constant_pool_builder import ConstantPoolBuilder
-from .debug_info import DebugInfoPolicy, normalize_debug_info_policy
+from .debug_info import DebugInfoPolicy, is_code_debug_info_stale, normalize_debug_info_policy
 from .descriptors import parameter_slot_count, parse_method_descriptor
 from .instructions import (
     Branch,
@@ -788,13 +788,15 @@ def lower_code(
     generated and attached to the returned ``CodeAttr``.  This requires
     *method* and *class_name* to be provided. ``debug_info`` controls
     whether lifted LineNumberTable/LocalVariableTable/LocalVariableTypeTable
-    entries are preserved or stripped during lowering.
+    entries are preserved or stripped during lowering. Explicitly stale
+    code-debug metadata is stripped automatically even when
+    ``debug_info="preserve"``.
     """
     if recompute_frames and (method is None or class_name is None):
         raise ValueError("method and class_name are required when recompute_frames=True")
 
     debug_policy = normalize_debug_info_policy(debug_info)
-    keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE
+    keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE and not is_code_debug_info_stale(code)
     items = [_clone_code_item(item) for item in code.instructions]
 
     while True:

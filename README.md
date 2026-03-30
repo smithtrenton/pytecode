@@ -9,11 +9,11 @@ See [`docs/OVERVIEW.md`](docs/OVERVIEW.md) for a summary of the current classfil
 - `pytecode.ClassReader` parses `.class` bytes eagerly into an `info.ClassFile` tree.
 - `pytecode.ClassWriter` serializes an `info.ClassFile` tree back to `.class` bytes.
 - `pytecode.JarFile` reads JARs, separates `.class` entries from non-class resources, parses classes via `ClassReader`, and can add/remove entries plus rewrite archives safely.
-- `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path.
+- `pytecode.ClassModel` provides the current mutable editing model with symbolic class, field, method, and label-aware code references. Use `ClassModel.to_bytes()` for a lowering-plus-emission convenience path. `ClassModel.from_classfile()` and `ClassModel.from_bytes()` also accept `skip_debug=True` when you want an ASM-like lift path that omits debug metadata before it enters the mutable model.
 
 For instruction-level editing helpers such as `Label`, `BranchInsn`, `LookupSwitchInsn`, `TableSwitchInsn`, `ExceptionHandler`, `LineNumberEntry`, `LocalVariableEntry`, `LocalVariableTypeEntry`, the `CodeItem` type alias, `LabelResolution`, and `lower_code()`, import directly from `pytecode.labels`.
 
-For debug-info policy helpers — `DebugInfoPolicy`, `apply_debug_info_policy()`, and `strip_debug_info()` — import from `pytecode.debug_info`. `ClassModel.to_classfile()`, `ClassModel.to_bytes()`, and `lower_code()` preserve lifted debug metadata by default and also accept `debug_info="strip"` (or `DebugInfoPolicy.STRIP`) when you want to omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata from output.
+For debug-info helpers — `DebugInfoPolicy`, `DebugInfoState`, `apply_debug_info_policy()`, `strip_debug_info()`, `mark_class_debug_info_stale()`, and `mark_code_debug_info_stale()` — import from `pytecode.debug_info`. `ClassModel.to_classfile()`, `ClassModel.to_bytes()`, and `lower_code()` preserve lifted debug metadata by default and also accept `debug_info="strip"` (or `DebugInfoPolicy.STRIP`) when you want to omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata from output. Explicitly stale class/code debug metadata is also stripped automatically during lowering, and `verify_classmodel()` warns before emission when that stale state is present.
 
 For symbolic operand wrappers — `FieldInsn`, `MethodInsn`, `InterfaceMethodInsn`, `TypeInsn`, `VarInsn`, `IIncInsn`, `LdcInsn`, `InvokeDynamicInsn`, `MultiANewArrayInsn`, and the `LdcValue` union types — import from `pytecode.operands`. These wrappers are lifted automatically by `ClassModel.from_classfile()` and lowered automatically by `ClassModel.to_classfile()`.
 
@@ -33,7 +33,7 @@ If you call `resolve_labels()` directly on code that contains single-slot `LdcIn
 
 For direct classfile emission, call `ClassWriter.write(classfile)`. `ClassModel.to_bytes()` is a thin convenience wrapper over `to_classfile()` plus `ClassWriter.write()`.
 
-For archive-level edits, use `JarFile.add_file()`, `JarFile.remove_file()`, and `JarFile.rewrite()`. `rewrite()` can copy entries verbatim, or lift `.class` entries through `ClassModel` for in-place transforms plus the usual `recompute_frames`, `resolver`, and `debug_info` lowering controls. Signature-related files are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed.
+For archive-level edits, use `JarFile.add_file()`, `JarFile.remove_file()`, and `JarFile.rewrite()`. `rewrite()` can copy entries verbatim, or lift `.class` entries through `ClassModel` for in-place transforms plus the usual `recompute_frames`, `resolver`, and `debug_info` lowering controls. Pass `skip_debug=True` for an ASM-like lift path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before transformation. Signature-related files are preserved as raw resources and are not re-signed automatically, so rewritten signed JARs may no longer verify as signed.
 
 ## Requirements
 

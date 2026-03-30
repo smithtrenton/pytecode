@@ -62,6 +62,7 @@ from .constant_pool import (
     Utf8Info,
 )
 from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from .debug_info import is_class_debug_info_stale, is_code_debug_info_stale
 from .descriptors import is_valid_field_descriptor, is_valid_method_descriptor
 from .info import ClassFile, FieldInfo, MethodInfo
 from .instructions import (
@@ -1227,6 +1228,14 @@ def _verify_model_code(
 ) -> None:
     loc = Location(class_name=class_name, method_name=method_name, method_descriptor=method_desc)
 
+    if is_code_debug_info_stale(code):
+        dc.add(
+            Severity.WARNING,
+            Category.CODE,
+            "Code debug metadata is marked stale and will be stripped during lowering",
+            loc,
+        )
+
     if not code.instructions:
         dc.add(Severity.WARNING, Category.CODE, "Code has empty instruction list", loc)
         return
@@ -1281,9 +1290,17 @@ def verify_classmodel(cm: ClassModel, *, fail_fast: bool = False) -> list[Diagno
     :class:`FailFastError` on the first ERROR-severity diagnostic.
     """
     dc = _Collector(fail_fast)
+    class_loc = Location(class_name=cm.name)
 
     _verify_model_names(cm, dc)
-    _check_class_flags(cm.access_flags, Location(class_name=cm.name), dc)
+    _check_class_flags(cm.access_flags, class_loc, dc)
+    if is_class_debug_info_stale(cm):
+        dc.add(
+            Severity.WARNING,
+            Category.ATTRIBUTE,
+            "Class debug metadata is marked stale and will be stripped during lowering",
+            class_loc,
+        )
     _verify_model_duplicates(cm, dc)
 
     for fm in cm.fields:
@@ -1292,6 +1309,6 @@ def verify_classmodel(cm: ClassModel, *, fail_fast: bool = False) -> list[Diagno
     for mm in cm.methods:
         _verify_model_method(mm, cm, dc)
 
-    _verify_attr_versions(cm.attributes, cm.version[0], Location(class_name=cm.name), dc)
+    _verify_attr_versions(cm.attributes, cm.version[0], class_loc, dc)
 
     return dc.diagnostics

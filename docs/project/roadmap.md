@@ -102,11 +102,13 @@ The manipulation API uses Design A (direct mutable dataclasses) as the primary e
 
 See [editing model design rationale](../design/editing-model.md) for the full comparative analysis.
 
-#### 12. Debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13) — preserve/strip policies landed)
+#### 12. Debug info management ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#18](https://github.com/smithtrenton/pytecode/issues/18) — done)
 
-The label-based editing model already preserved debug metadata through instruction edits by rebinding `LineNumberTable`, `LocalVariableTable`, and `LocalVariableTypeTable` entries to labels instead of raw offsets. That foundation is now complemented by explicit debug-info policy helpers in `pytecode.debug_info` plus `debug_info=` lowering controls on `lower_code()`, `ClassModel.to_classfile()`, and `ClassModel.to_bytes()`. Users can therefore keep debug info by default or strip it deliberately during mutation/emission without hand-editing nested attributes.
+The label-based editing model already preserved debug metadata through instruction edits by rebinding `LineNumberTable`, `LocalVariableTable`, and `LocalVariableTypeTable` entries to labels instead of raw offsets. That foundation is now complemented by explicit debug-info policy helpers in `pytecode.debug_info`, `debug_info=` lowering controls on `lower_code()`, `ClassModel.to_classfile()`, and `ClassModel.to_bytes()`, first-class `DebugInfoState` stale markers on `CodeModel` and `ClassModel`, and explicit `mark_class_debug_info_stale()` / `mark_code_debug_info_stale()` helpers.
 
-What remains future work is a richer first-class stale-state model for debug metadata when preserve-or-strip is not expressive enough. That follow-up is tracked separately in [#18](https://github.com/smithtrenton/pytecode/issues/18).
+Staleness is modeled semantically rather than by offset movement alone: label rebinding keeps offset-bound tables structurally aligned, but callers can still mark class/code debug metadata stale when source mapping or local-variable meaning/scope/signature/slot usage has changed without synchronized debug updates. Lowering strips explicitly stale class/code debug metadata automatically, and `verify_classmodel()` warns while that stale state remains on the mutable model.
+
+Separately, `ClassModel.from_classfile()`, `ClassModel.from_bytes()`, and `JarFile.rewrite()` now accept `skip_debug=True` for an ASM-like lift path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before model materialization. This read/lift-side skip path is intentionally distinct from the lowering-time preserve/strip controls.
 
 #### 13. JSR/RET legacy support
 
@@ -145,7 +147,7 @@ track the supported API rather than transient internal helpers.
 12. ~~Implement max stack, max locals, and stack map frame recomputation.~~ ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done)
 13. ~~Implement validation with structured diagnostics and version-aware rules.~~ ([#11](https://github.com/smithtrenton/pytecode/issues/11) — done)
 14. ~~Add classfile emission with deterministic constant-pool layout.~~ ([#12](https://github.com/smithtrenton/pytecode/issues/12) — done)
-15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13) — done; explicit stale-state modeling moved to [#18](https://github.com/smithtrenton/pytecode/issues/18))
+15. ~~Broaden debug info management beyond label rebinding.~~ ([#13](https://github.com/smithtrenton/pytecode/issues/13), [#18](https://github.com/smithtrenton/pytecode/issues/18) — done)
 16. ~~Add round-trip and verifier-focused regression coverage.~~ ([#14](https://github.com/smithtrenton/pytecode/issues/14) — done)
 17. ~~Add optional JAR rewrite support.~~ ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 18. Add pydoc-based API reference generation with full public-surface coverage. ([#19](https://github.com/smithtrenton/pytecode/issues/19))

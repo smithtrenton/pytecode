@@ -39,6 +39,7 @@ from pytecode.constants import (
     FieldAccessFlag,
     MethodAccessFlag,
 )
+from pytecode.debug_info import mark_class_debug_info_stale, mark_code_debug_info_stale
 from pytecode.info import ClassFile, FieldInfo, MethodInfo
 from pytecode.instructions import (
     Branch,
@@ -1347,6 +1348,30 @@ class TestClassModel:
         cm = self._minimal_model()
         diags = verify_classmodel(cm)
         assert _errors(diags) == []
+
+    def test_stale_class_debug_info_warning(self) -> None:
+        class_file = cached_java_resource_classes("HelloWorld.java")[0]
+        cm = ClassModel.from_bytes(class_file.read_bytes())
+        mark_class_debug_info_stale(cm)
+
+        diags = verify_classmodel(cm)
+
+        warns = _by_cat(_warnings(diags), Category.ATTRIBUTE)
+        assert any("Class debug metadata is marked stale" in warning.message for warning in warns)
+
+    def test_stale_code_debug_info_warning(self) -> None:
+        class_file = cached_java_resource_classes("HelloWorld.java")[0]
+        cm = ClassModel.from_bytes(class_file.read_bytes())
+        method = next(method for method in cm.methods if method.code is not None and method.code.line_numbers)
+        mark_code_debug_info_stale(method)
+
+        diags = verify_classmodel(cm)
+
+        warns = _by_cat(_warnings(diags), Category.CODE)
+        assert any(
+            "Code debug metadata is marked stale" in warning.message and warning.location.method_name == method.name
+            for warning in warns
+        )
 
     def test_invalid_class_name_dots(self) -> None:
         cm = self._minimal_model(name="com.example.Test")

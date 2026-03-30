@@ -31,7 +31,14 @@ from .constant_pool import (
 )
 from .constant_pool_builder import ConstantPoolBuilder
 from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from .debug_info import DebugInfoPolicy, normalize_debug_info_policy, strip_class_debug_attributes
+from .debug_info import (
+    DebugInfoPolicy,
+    DebugInfoState,
+    is_class_debug_info_stale,
+    normalize_debug_info_policy,
+    skip_debug_method_attributes,
+    strip_class_debug_attributes,
+)
 from .info import ClassFile, FieldInfo, MethodInfo
 from .instructions import (
     Branch,
@@ -108,6 +115,7 @@ class CodeModel:
     local_variable_types: list[LocalVariableTypeEntry] = field(default_factory=list)
     attributes: list[AttributeInfo] = field(default_factory=list)
     _nested_attribute_layout: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+    debug_info_state: DebugInfoState = DebugInfoState.FRESH
 
 
 @dataclass
@@ -159,18 +167,20 @@ class ClassModel:
     methods: list[MethodModel]
     attributes: list[AttributeInfo]
     constant_pool: ConstantPoolBuilder = field(default_factory=ConstantPoolBuilder)
+    debug_info_state: DebugInfoState = DebugInfoState.FRESH
 
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_classfile(cls, cf: ClassFile) -> ClassModel:
+    def from_classfile(cls, cf: ClassFile, *, skip_debug: bool = False) -> ClassModel:
         """Build a ``ClassModel`` from a parsed ``ClassFile``.
 
         Resolves constant-pool indexes to symbolic string values and
         seeds the ``ConstantPoolBuilder`` from the original pool so that
-        raw attributes and instructions remain valid.
+        raw attributes and instructions remain valid. Pass ``skip_debug=True``
+        to omit ASM-style debug metadata before it enters the mutable model.
         """
         cp = ConstantPoolBuilder.from_pool(cf.constant_pool)
 
@@ -200,7 +210,10 @@ class ClassModel:
         fields = [_field_from_info(fi, cp) for fi in cf.fields]
 
         # Convert methods.
-        methods = [_method_from_info(mi, cp) for mi in cf.methods]
+        methods = [_method_from_info(mi, cp, skip_debug=skip_debug) for mi in cf.methods]
+        class_attributes = copy.deepcopy(cf.attributes)
+        if skip_debug:
+            class_attributes = strip_class_debug_attributes(class_attributes)
 
         return cls(
             version=(cf.major_version, cf.minor_version),
@@ -210,15 +223,15 @@ class ClassModel:
             interfaces=interfaces,
             fields=fields,
             methods=methods,
-            attributes=copy.deepcopy(cf.attributes),
+            attributes=class_attributes,
             constant_pool=cp,
         )
 
     @classmethod
-    def from_bytes(cls, data: bytes | bytearray) -> ClassModel:
+    def from_bytes(cls, data: bytes | bytearray, *, skip_debug: bool = False) -> ClassModel:
         """Parse raw class-file bytes and build a ``ClassModel``."""
         reader = ClassReader(data)
-        return cls.from_classfile(reader.class_info)
+        return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
 
     # ------------------------------------------------------------------
     # Lowering
@@ -268,7 +281,7 @@ class ClassModel:
 
         pool = cp.build()
         class_attributes = self.attributes
-        if debug_policy is DebugInfoPolicy.STRIP:
+        if debug_policy is DebugInfoPolicy.STRIP or is_class_debug_info_stale(self):
             class_attributes = strip_class_debug_attributes(class_attributes)
 
         return ClassFile(
@@ -321,15 +334,17 @@ def _field_from_info(fi: FieldInfo, cp: ConstantPoolBuilder) -> FieldModel:
     )
 
 
-def _method_from_info(mi: MethodInfo, cp: ConstantPoolBuilder) -> MethodModel:
+def _method_from_info(mi: MethodInfo, cp: ConstantPoolBuilder, *, skip_debug: bool = False) -> MethodModel:
     code: CodeModel | None = None
     non_code_attrs: list[AttributeInfo] = []
 
     for attr in mi.attributes:
         if isinstance(attr, CodeAttr):
-            code = _code_from_attr(attr, cp)
+            code = _code_from_attr(attr, cp, skip_debug=skip_debug)
         else:
             non_code_attrs.append(copy.deepcopy(attr))
+    if skip_debug:
+        non_code_attrs = skip_debug_method_attributes(non_code_attrs)
 
     return MethodModel(
         access_flags=mi.access_flags,
@@ -400,7 +415,7 @@ def _branch_target_offset(insn: Branch | BranchW, code_length: int) -> int:
     )
 
 
-def _collect_labels(code_attr: CodeAttr) -> dict[int, Label]:
+def _collect_labels(code_attr: CodeAttr, *, skip_debug: bool = False) -> dict[int, Label]:
     labels_by_offset: dict[int, Label] = {}
 
     def ensure_label(offset: int, *, context: str) -> None:
@@ -451,6 +466,9 @@ def _collect_labels(code_attr: CodeAttr) -> dict[int, Label]:
         ensure_label(exception.start_pc, context="exception handler start")
         ensure_label(exception.end_pc, context="exception handler end")
         ensure_label(exception.handler_pc, context="exception handler target")
+
+    if skip_debug:
+        return labels_by_offset
 
     for attribute in code_attr.attributes:
         if isinstance(attribute, LineNumberTableAttr):
@@ -607,6 +625,8 @@ def _lift_nested_code_attributes(
     code_attr: CodeAttr,
     labels_by_offset: dict[int, Label],
     cp: ConstantPoolBuilder,
+    *,
+    skip_debug: bool = False,
 ) -> tuple[
     list[LineNumberEntry],
     list[LocalVariableEntry],
@@ -623,6 +643,8 @@ def _lift_nested_code_attributes(
     for attribute in code_attr.attributes:
         if isinstance(attribute, LineNumberTableAttr):
             layout.append("line_numbers")
+            if skip_debug:
+                continue
             line_numbers.extend(
                 LineNumberEntry(
                     label=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -632,6 +654,8 @@ def _lift_nested_code_attributes(
             )
         elif isinstance(attribute, LocalVariableTableAttr):
             layout.append("local_variables")
+            if skip_debug:
+                continue
             local_variables.extend(
                 LocalVariableEntry(
                     start=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -644,6 +668,8 @@ def _lift_nested_code_attributes(
             )
         elif isinstance(attribute, LocalVariableTypeTableAttr):
             layout.append("local_variable_types")
+            if skip_debug:
+                continue
             local_variable_types.extend(
                 LocalVariableTypeEntry(
                     start=_label_for_offset(labels_by_offset, entry.start_pc),
@@ -661,12 +687,13 @@ def _lift_nested_code_attributes(
     return line_numbers, local_variables, local_variable_types, attributes, tuple(layout)
 
 
-def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder) -> CodeModel:
-    labels_by_offset = _collect_labels(attr)
+def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder, *, skip_debug: bool = False) -> CodeModel:
+    labels_by_offset = _collect_labels(attr, skip_debug=skip_debug)
     line_numbers, local_variables, local_variable_types, attributes, layout = _lift_nested_code_attributes(
         attr,
         labels_by_offset,
         cp,
+        skip_debug=skip_debug,
     )
     return CodeModel(
         max_stack=attr.max_stacks,

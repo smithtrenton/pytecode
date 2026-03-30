@@ -135,13 +135,15 @@ class JarFile:
         recompute_frames: bool = False,
         resolver: ClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
+        skip_debug: bool = False,
     ) -> Path:
         """Write the current archive state back to disk.
 
         By default, the archive is rewritten in place. Pass *output_path* to
         write a new archive instead. Any `.class` entries are copied verbatim
         unless *transform* or non-default lowering options require re-lowering
-        through `ClassModel`.
+        through `ClassModel`. Pass *skip_debug=True* to omit ASM-style debug
+        metadata before class entries are lifted into ``ClassModel``.
 
         Signature-related files under `META-INF` are treated as ordinary
         resources and are preserved unchanged. If class bytes change, the
@@ -154,6 +156,7 @@ class JarFile:
             or recompute_frames
             or resolver is not None
             or debug_policy is not DebugInfoPolicy.PRESERVE
+            or skip_debug
         )
 
         destination = Path(self.filename if output_path is None else output_path)
@@ -168,7 +171,7 @@ class JarFile:
                 for jar_info in self.files.values():
                     data = jar_info.bytes
                     if should_rewrite_classes and _is_class_filename(jar_info.filename):
-                        model = ClassModel.from_bytes(data)
+                        model = ClassModel.from_bytes(data, skip_debug=skip_debug)
                         if transform is not None:
                             result = transform(model)
                             if result is not None:
