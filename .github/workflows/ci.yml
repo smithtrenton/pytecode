@@ -6,19 +6,20 @@ on:
   pull_request:
     branches: ["main", "master"]
 
+env:
+  PYTHON_VERSION: "3.14"
+  JAVA_VERSION: "25"
+
 jobs:
-  test:
-    name: Validate on Python ${{ matrix.python-version }}
+  quality:
+    name: Style, types, and docs
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
       - name: Sync dependencies
@@ -29,5 +30,55 @@ jobs:
         run: uv run ruff format --check .
       - name: Type-check
         run: uv run basedpyright
-      - name: Run validation suite
-        run: uv run python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Validate API docs coverage
+        run: uv run python tools/generate_api_docs.py --check
+
+  test:
+    name: Pytest (non-oracle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Run pytest (excluding oracle)
+        run: uv run pytest -q -m "not oracle"
+
+  oracle:
+    name: Oracle CFG suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Prime ASM oracle dependencies
+        run: |
+          uv run python - <<'PY'
+          from tests.helpers import ensure_asm_jars
+          
+          for path in ensure_asm_jars():
+              print(path)
+          PY
+      - name: Run oracle suite
+        run: uv run pytest -q -m oracle
