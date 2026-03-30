@@ -7,6 +7,7 @@ from enum import IntFlag
 from typing import Protocol, cast
 
 from .constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from .descriptors import VoidType, parse_method_descriptor, to_descriptor
 from .model import ClassModel, CodeModel, FieldModel, MethodModel
 
 type Predicate[T] = Callable[[T], bool]
@@ -668,13 +669,13 @@ def has_code() -> MethodMatcher:
 
 
 def is_constructor() -> MethodMatcher:
-    """Match instance constructors (``<init>``)."""
+    """Match methods named ``<init>``."""
 
     return _ensure_matcher(method_named("<init>"), "is_constructor()")
 
 
 def is_static_initializer() -> MethodMatcher:
-    """Match class initializers (``<clinit>``)."""
+    """Match methods named ``<clinit>``."""
 
     return _ensure_matcher(method_named("<clinit>"), "is_static_initializer()")
 
@@ -794,12 +795,15 @@ def _any_flags_matcher[T, F: IntFlag](
 
 
 def _method_return_descriptor(descriptor: str) -> str | None:
-    if not descriptor.startswith("("):
+    try:
+        parsed = parse_method_descriptor(descriptor)
+    except ValueError:
         return None
-    prefix, sep, return_descriptor = descriptor.rpartition(")")
-    if not sep or not prefix:
-        return None
-    return return_descriptor
+
+    return_type = parsed.return_type
+    if isinstance(return_type, VoidType):
+        return return_type.value
+    return to_descriptor(return_type)
 
 
 __all__ = [

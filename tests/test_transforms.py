@@ -754,6 +754,8 @@ def test_method_semantic_matchers_cover_constructor_initializer_and_returns() ->
     object_return = _method("name", "()Ljava/lang/String;")
     array_return = _method("matrix", "()[[I")
     invalid = _method("broken", "not-a-descriptor")
+    missing_return = _method("missingReturn", "()")
+    extra_close = _method("extraClose", "())V")
 
     assert is_constructor()(constructor) is True
     assert is_constructor()(initializer) is False
@@ -764,6 +766,16 @@ def test_method_semantic_matchers_cover_constructor_initializer_and_returns() ->
     assert method_returns("[[I")(array_return) is True
     assert method_returns("I")(object_return) is False
     assert method_returns("V")(invalid) is False
+    assert method_returns("")(missing_return) is False
+    assert method_returns("V")(extra_close) is False
+
+
+def test_special_method_name_matchers_remain_lightweight() -> None:
+    odd_constructor = _method("<init>", "()I")
+    odd_initializer = _method("<clinit>", "()I")
+
+    assert is_constructor()(odd_constructor) is True
+    assert is_static_initializer()(odd_initializer) is True
 
 
 def test_on_fields_owner_filters_classes() -> None:
