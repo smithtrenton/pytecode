@@ -122,7 +122,7 @@ Signature-related `META-INF` artifacts are preserved as raw resources and are no
 
 #### 15. Generated API reference and pydoc coverage ([#19](https://github.com/smithtrenton/pytecode/issues/19) — done)
 
-Generated API reference documentation now covers the full public surface (363 symbols across 20 modules) using `pdoc`. All public symbols have Google-style docstrings, and the validation script (`tools/generate_api_docs.py`) checks for 100% docstring coverage. Generated HTML lives in `docs/api/` and is committed to the repository. The test suite (`tests/test_api_docs.py`) validates the public-surface manifest and docstring coverage as part of the regular test run.
+Generated API reference documentation now covers the full public surface (363 symbols across 20 modules) using `pdoc`. All public symbols have Google-style docstrings, and the validation script (`tools/generate_api_docs.py`) checks for 100% docstring coverage. The generated HTML is published via GitHub Pages and can also be regenerated locally into the ignored `docs/api/` directory. The test suite (`tests/test_api_docs.py`) validates the public-surface manifest and docstring coverage as part of the regular test run.
 
 ## Recommended implementation order
 

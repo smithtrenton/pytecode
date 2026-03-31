@@ -4,7 +4,7 @@
 
 `pytecode` is a Python library for parsing, inspecting, manipulating, and emitting JVM class files and bytecode.
 
-The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, a richer matcher-based transform DSL with context-passing transform protocols, hierarchy resolution, control-flow analysis, multi-release four-tier validation, optional JAR rewrite support, and explicit debug-info stale-state / skip-debug controls. The remaining roadmap work is generated API reference coverage.
+The project goal is to provide a Python alternative to Java libraries such as ASM and BCEL. Today, the library covers parsing, deterministic classfile emission, a mutable symbolic editing model, a richer matcher-based transform DSL with context-passing transform protocols, hierarchy resolution, control-flow analysis, multi-release four-tier validation, optional JAR rewrite support, explicit debug-info stale-state / skip-debug controls, and generated API reference coverage.
 
 ## Current status
 
@@ -45,7 +45,7 @@ All planned roadmap items have been implemented. See [project/roadmap.md](projec
 
 | Topic | Location |
 |-------|----------|
-| **API reference** (generated) | [api/](api/) |
+| **API reference** (generated) | GitHub Pages: [smithtrenton.github.io/pytecode/](https://smithtrenton.github.io/pytecode/) or generate locally with `uv run python tools\generate_api_docs.py` |
 | Current architecture: runtime, entry points, modules, data flow, design characteristics, test coverage | [architecture/current-architecture.md](architecture/current-architecture.md) |
 | Recommended target architecture: layered design, cross-cutting concerns | [architecture/target-architecture.md](architecture/target-architecture.md) |
 | Editing model design rationale: candidate designs, comparison matrix, library survey | [design/editing-model.md](design/editing-model.md) |
