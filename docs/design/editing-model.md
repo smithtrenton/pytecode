@@ -1,6 +1,6 @@
 # Editing model design rationale
 
-This document records the design evaluation behind the choice of Design A (Mutable Dataclasses) as the editing API for Issue [#6](https://github.com/smithtrenton/pytecode/issues/6). Five candidate designs were analyzed against pytecode's existing codebase, planned feature roadmap, and Python ergonomics. A survey of eight additional JVM bytecode libraries identified further design patterns that inform the phased extension plan.
+This document records the design evaluation that led to the current editing API. It is historical rationale rather than an active implementation plan. Five candidate designs were analyzed against pytecode's existing codebase, the original feature roadmap, and Python ergonomics. A survey of eight additional JVM bytecode libraries identified further design patterns that informed the resulting extension strategy.
 
 ## Context
 

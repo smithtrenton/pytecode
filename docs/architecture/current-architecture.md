@@ -255,7 +255,7 @@ JAR container support. This module now covers archive reading, class/non-class s
 
 ### `run.py`
 
-A repository smoke-test script that parses a JAR and writes pretty-printed class output alongside copied resource files. This is primarily a manual validation utility for current parser behavior against the checked-in `225.jar` sample.
+A repository smoke-test script that parses a JAR, writes pretty-printed parsed class output under a `parsed` subtree, and writes `.class` files from lifted `ClassModel` instances under a `rewritten` subtree alongside copied resource files. This is primarily a manual validation utility for ad hoc inspection of real archives during development.
 
 ## Current data flow
 

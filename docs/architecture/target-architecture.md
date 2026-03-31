@@ -1,6 +1,6 @@
 # Recommended target architecture
 
-To reach the stated project goal, the library should evolve from a parser into a layered classfile toolkit.
+This document captures the intended layered architecture for pytecode. Most of the layers described here are now implemented; treat this as a reference model for future changes rather than as a list of missing features.
 
 ## 1. Binary I/O layer ([#4](https://github.com/smithtrenton/pytecode/issues/4))
 

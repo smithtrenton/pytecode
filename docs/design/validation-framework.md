@@ -1,6 +1,6 @@
 # Bytecode validation framework
 
-This document describes the architecture for validating pytecode's classfile emission output. The framework addresses three concerns: (1) structural validity per the JVM specification, (2) fidelity to javac-equivalent output, and (3) suitability for use in bytecode transformation toolchains. It is organized into four composable tiers.
+This document describes the validation architecture used by pytecode's classfile emission and transformation workflow. The framework addresses three concerns: (1) structural validity per the JVM specification, (2) fidelity to javac-equivalent output, and (3) suitability for use in bytecode transformation toolchains. It is organized into four composable tiers.
 
 ## Validation tiers
 
@@ -66,7 +66,7 @@ javac output (bytes₁)
     → ClassReader.read_class()       → ClassFile₃   (verify bytes₂ is parseable)
 ```
 
-Three levels of fidelity apply (see [round-trip fidelity](../project/roadmap.md#9-round-trip-fidelity-and-compatibility-testing-14) in the roadmap):
+Three levels of fidelity apply:
 
 - **Level A — Byte-for-byte identity**: `bytes₁ == bytes₂`. The gold standard for no-modification roundtrips. Achievable because `ConstantPoolBuilder.from_pool()` preserves original indexes.
 - **Level B — Structural equivalence**: `parse(bytes₁) ≅ parse(bytes₂)`, comparing parsed structures with CP references resolved to symbolic values.
@@ -80,7 +80,7 @@ Tier 1 is now implemented in `tests/test_class_writer.py`: the suite covers byte
 
 Verify that emitted output satisfies JVM spec format checking (§4.8) and static constraints (§4.9.1).
 
-**Internal verifier** (`pytecode/verify.py`): A pure-Python `ClassFileVerifier` that checks spec constraints without external tools. Key checks include:
+**Internal verifier** (`pytecode.verify`): `verify_classfile()` and `verify_classmodel()` perform pure-Python spec checks without external tools. Key checks include:
 
 - Magic number, version bounds, access-flag mutual exclusions
 - Constant-pool well-formedness: all index references point to valid entries of the correct type
@@ -90,7 +90,7 @@ Verify that emitted output satisfies JVM spec format checking (§4.8) and static
 - Exception handler ranges are valid; `max_stack`/`max_locals` are consistent
 - Attribute versioning constraints (e.g., type annotations require version 52+)
 
-The verifier returns a list of structured `VerificationError` diagnostics (category, message, location) rather than raising on the first problem.
+The verifier returns a list of structured `Diagnostic` findings (severity, category, message, location) rather than raising on the first problem.
 
 **External cross-check** via `javap -v`: Writing emitted bytes to a temp `.class` file and running `javap -v -p -c` on it provides an independent format check — `javap` errors on malformed class files.
 
@@ -135,7 +135,7 @@ CP ordering is one of the most nuanced aspects of javac compatibility. The frame
 
 **Mode 1 — Preserve-on-roundtrip (default)**: When reading an existing class file and writing it back, preserve the original CP ordering. New entries are appended at the end. This is what `ConstantPoolBuilder.from_pool()` already supports. This mode is essential for bytecode transformation pipelines (ProGuard, R8, ByteBuddy all follow this pattern).
 
-**Mode 2 — javac-compatible ordering (future opt-in)**: A later compatibility mode could generate a class file from scratch using an ordering that matches javac's allocation pattern:
+**Mode 2 — javac-compatible ordering (not currently implemented)**: A later compatibility mode could generate a class file from scratch using an ordering that matches javac's allocation pattern:
 
 1. This-class name Utf8 → `CONSTANT_Class` for `this_class`
 2. Super-class name Utf8 → `CONSTANT_Class` for `super_class`
@@ -186,10 +186,10 @@ The repository currently exposes the `oracle` marker for the JVM-backed CFG diff
 - **Current module split**: `tests/test_class_writer.py` focuses on Tier 1 byte-for-byte roundtrips; `tests/test_validation.py` exercises the Tier 1/Tier 2/Tier 4 fixture matrix plus selected execution fixtures; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; `tests/jvm_harness.py` wraps `tests/resources/VerifierHarness.java` for Tier 4 JVM verification and execution checks.
 - **Fixture selection**: `tests/validation_fixtures.py` derives the `(fixture, release)` matrix from `tests/helpers.py`, so new Java fixtures join the validation matrix once their minimum release is declared.
 
-## Open questions
+## Known considerations
 
-1. **javap output stability**: `javap -v` output format varies across JDK versions. The parser should be resilient to minor format changes. Testing against a minimum JDK version (e.g., 17) is prudent.
-2. **AsmTools availability**: Should AsmTools be vendored in `tools/` or remain an optional dependency? It is not in Maven Central.
-3. **WIDE instruction promotion**: When `lower_code()` promotes `GOTO` to `GOTO_W` or introduces compensation branches, the output will differ from javac. These should be flagged as intentional deviations, not errors.
-4. **Debug info in roundtrips**: LineNumberTable and LocalVariableTable are technically optional, but javac always emits them. Recommendation: test preservation for roundtrip; allow omission for generated classes.
-5. **CP duplicate preservation**: If an input class has intentional CP duplicates (e.g., from obfuscation), roundtrip should preserve them for fidelity.
+1. **javap output stability**: `javap -v` output format varies across JDK versions, so the parser should stay resilient to minor formatting changes.
+2. **AsmTools availability**: AsmTools remains optional because it is not distributed through Maven Central and is not required for the default test flow.
+3. **WIDE instruction promotion**: When `lower_code()` promotes `GOTO` to `GOTO_W` or introduces compensation branches, the output will diverge from javac intentionally and should not be treated as a correctness failure.
+4. **Debug info in roundtrips**: LineNumberTable and LocalVariableTable are technically optional, but roundtrip flows should preserve them when present unless callers explicitly choose a stripping policy.
+5. **CP duplicate preservation**: If an input class has intentional constant-pool duplicates, roundtrip behavior should preserve them for fidelity.

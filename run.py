@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from pprint import pprint
 
-import pytecode
+from pytecode import ClassModel, ClassReader, JarFile
 from pytecode.jar import JarInfo
 
 
@@ -16,9 +16,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def write_outputs(
+def write_classfiles(
     output_dir: Path,
-    classes: list[tuple[JarInfo, pytecode.ClassReader]],
+    classes: list[tuple[JarInfo, ClassReader]],
     other_files: list[JarInfo],
 ) -> None:
     for jar_info, class_reader in classes:
@@ -34,13 +34,37 @@ def write_outputs(
             handle.write(other_file.bytes)
 
 
+def lift_models(classes: Sequence[tuple[JarInfo, ClassReader]]) -> list[tuple[JarInfo, ClassModel]]:
+    return [(jar_info, ClassModel.from_classfile(class_reader.class_info)) for jar_info, class_reader in classes]
+
+
+def write_classmodels(
+    output_dir: Path,
+    class_models: Sequence[tuple[JarInfo, ClassModel]],
+    other_files: Sequence[JarInfo],
+) -> None:
+    for jar_info, class_model in class_models:
+        output_path = output_dir / jar_info.filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as handle:
+            handle.write(class_model.to_bytes())
+
+    for other_file in other_files:
+        output_path = output_dir / other_file.filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as handle:
+            handle.write(other_file.bytes)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     jar_path = args.jar.expanduser().resolve()
     output_dir = jar_path.parent / "output" / jar_path.stem
+    parsed_output_dir = output_dir / "parsed"
+    rewritten_output_dir = output_dir / "rewritten"
 
     start = time.time()
-    jar = pytecode.JarFile(str(jar_path))
+    jar = JarFile(jar_path)
     end = time.time()
     print(f"Read time: {end - start}s")
 
@@ -52,10 +76,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"\tother_files: {len(other_files)}")
 
     start = time.time()
-    write_outputs(output_dir, classes, other_files)
+    class_models = lift_models(classes)
+    end = time.time()
+    print(f"Lift time: {end - start}s")
+    print(f"\tclass_models: {len(class_models)}")
+
+    start = time.time()
+    write_classfiles(parsed_output_dir, classes, other_files)
     end = time.time()
     print(f"Write time: {end - start}s")
-    print(f"\tdir: {output_dir}")
+    print(f"\tdir: {parsed_output_dir}")
+
+    start = time.time()
+    write_classmodels(rewritten_output_dir, class_models, other_files)
+    end = time.time()
+    print(f"Rewrite time: {end - start}s")
+    print(f"\tdir: {rewritten_output_dir}")
     return 0
 
 

@@ -1,5 +1,7 @@
 # Best way to validate `pytecode`'s new CFG feature
 
+This document records the research that led to the current ASM-based CFG differential suite. Keep it as design background and oracle-selection rationale rather than as an active implementation plan.
+
 ## Executive Summary
 
 `pytecode` already has a real control-flow graph builder: it computes leaders from branch targets and handler boundaries, builds ordered basic blocks, adds normal successors, and attaches block-level exception-handler edges.[^1][^2] The main validation gap is not fixture breadth; it is that the current compiled-Java integration tests mostly assert coarse shape properties such as "has at least N blocks" or "some block has exception edges" rather than exact edge equivalence.[^3][^4]

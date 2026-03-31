@@ -1,17 +1,17 @@
 # pytecode
 
-`pytecode` is a Python 3.14+ library for parsing, inspecting, editing, and emitting JVM class files, bytecode, and JAR archives.
+`pytecode` is a Python 3.14+ library for parsing, inspecting, editing, validating, and emitting JVM class files and JAR archives.
 
-It is aimed at tools that need to work with Java bytecode directly from Python: classfile readers and writers, archive rewriters, bytecode transforms, control-flow analysis, descriptor parsing, and validation.
+It is built for Python tooling that needs direct access to Java bytecode: classfile readers and writers, archive rewriters, transformation pipelines, control-flow analysis, descriptor utilities, hierarchy-aware frame computation, and verification-oriented workflows.
 
 ## Why pytecode?
 
-- Parse `.class` files into structured Python objects.
-- Edit classes, fields, methods, and instructions through a mutable model.
-- Rewrite JAR files while preserving non-class resources.
-- Recompute control-flow metadata such as `max_stack`, `max_locals`, and `StackMapTable`.
-- Validate classfiles and edited models before emission.
-- Work with descriptors, signatures, constant pools, labels, and symbolic operands.
+- Parse `.class` files into typed Python dataclasses.
+- Edit classes, fields, methods, and bytecode through a mutable symbolic model.
+- Rewrite JAR files while preserving non-class resources and ZIP metadata.
+- Recompute `max_stack`, `max_locals`, and `StackMapTable` when requested.
+- Validate parsed classfiles and edited models before emission.
+- Work with descriptors, signatures, labels, symbolic operands, constant pools, and debug-info policies.
 
 ## Installation
 
@@ -27,40 +27,45 @@ Or with `uv`:
 uv add pytecode
 ```
 
-`pytecode` currently requires Python `3.14+`.
+`pytecode` requires Python `3.14+`.
 
 ## Quick start
 
-Read a class, inspect it, and write it back out:
+### Parse and roundtrip a class file
 
 ```python
 from pathlib import Path
 
 from pytecode import ClassReader, ClassWriter
 
-data = Path("HelloWorld.class").read_bytes()
-classfile = ClassReader(data).read()
+reader = ClassReader.from_file("HelloWorld.class")
+classfile = reader.class_info
 
-print(classfile.this_class.name.value)
+print(classfile.major_version)
+print(classfile.methods_count)
 
-round_tripped = ClassWriter().write(classfile)
-Path("HelloWorld-copy.class").write_bytes(round_tripped)
+Path("HelloWorld-copy.class").write_bytes(ClassWriter.write(classfile))
 ```
 
-For higher-level editing, use `ClassModel`:
+### Lift to the editable model
 
 ```python
-from pytecode.model import ClassModel
+from pathlib import Path
+
+from pytecode import ClassModel
 
 model = ClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
 print(model.name)
 
 updated_bytes = model.to_bytes()
+Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 ```
+
+Use `recompute_frames=True` when an edit changes control flow or stack/local layout.
 
 ## JAR rewriting example
 
-`JarFile.rewrite()` can apply in-place transformations to matching classes and methods:
+`JarFile.rewrite()` can apply in-place transforms to matching classes and methods:
 
 ```python
 from pytecode import JarFile
@@ -92,27 +97,32 @@ JarFile("input.jar").rewrite(
 )
 ```
 
-## Main modules
+Transforms must mutate models in place and return `None`. For code-shape changes, pass `recompute_frames=True`. For an ASM-like lift path that omits debug metadata, pass `skip_debug=True`.
 
-The top-level package and companion modules cover the current public surface:
+## Public surface
+
+Top-level exports:
 
 - `pytecode.ClassReader` and `pytecode.ClassWriter` for raw classfile parsing and emission.
-- `pytecode.JarFile` for archive reads, writes, and class-aware rewriting.
-- `pytecode.ClassModel` for mutable editing with automatic lowering back to bytes.
+- `pytecode.JarFile` for archive reads, mutation, and safe rewrite-to-disk.
+- `pytecode.ClassModel` for mutable editing with symbolic references.
+
+Supported submodules:
+
 - `pytecode.transforms` for composable class, field, method, and code transforms.
-- `pytecode.labels` for label-aware instruction editing helpers.
+- `pytecode.labels` for label-aware bytecode editing helpers.
 - `pytecode.operands` for symbolic operand wrappers.
 - `pytecode.analysis` for CFG construction, frame simulation, and recomputation helpers.
 - `pytecode.verify` for structural validation and diagnostics.
 - `pytecode.hierarchy` for type and override resolution helpers.
-- `pytecode.descriptors` for parsing and producing JVM descriptors and signatures.
+- `pytecode.descriptors` for JVM descriptors and generic signatures.
 - `pytecode.constant_pool_builder` for deterministic constant-pool construction.
 - `pytecode.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
-- `pytecode.debug_info` for preserving or stripping debug metadata during lowering.
+- `pytecode.debug_info` for explicit debug-info preservation and stripping policies.
 
 ## Documentation
 
-- Project overview and roadmap: <https://github.com/smithtrenton/pytecode/blob/main/docs/OVERVIEW.md>
+- Development docs overview: [docs/OVERVIEW.md](https://github.com/smithtrenton/pytecode/blob/master/docs/OVERVIEW.md)
 - Hosted API reference: <https://smithtrenton.github.io/pytecode/>
 
 ## Development
@@ -123,7 +133,7 @@ Create a local environment with development tools:
 uv sync --extra dev
 ```
 
-Common commands:
+Common checks:
 
 ```powershell
 uv run ruff check .
@@ -133,7 +143,7 @@ uv run pytest -q
 uv run python tools\generate_api_docs.py --check
 ```
 
-Generate local API reference HTML:
+Generate local API reference HTML with:
 
 ```powershell
 uv run python tools\generate_api_docs.py
@@ -145,17 +155,11 @@ Build source and wheel distributions locally:
 uv build
 ```
 
-The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
+The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
 
 ## Release automation
 
 PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The release workflow reruns validation on the tagged commit, builds both `sdist` and `wheel` with `uv build`, and publishes from the protected `pypi` environment via PyPI Trusted Publishing.
-
-One-time setup for maintainers:
-
-1. In the PyPI project settings, add a Trusted Publisher for this repository.
-2. Authorize the `release.yml` workflow file (`.github/workflows/release.yml`).
-3. Set the GitHub Actions environment to `pypi`, and add any desired environment protection rules in GitHub before enabling publication.
 
 Release procedure:
 
@@ -173,16 +177,16 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The release workflow rejects tags that do not match `project.version`. Treat release tags as immutable: if a tag or published artifact is wrong, bump to a new version and publish a new tag instead of force-pushing the old one. If the workflow fails before the publish step because of an environment approval or a transient PyPI issue, rerun the workflow for the same tag instead of moving the tag.
+The release workflow rejects tags that do not match `project.version`. Treat release tags as immutable: if a tag or published artifact is wrong, bump to a new version and publish a new tag instead of force-pushing the old one. If the workflow fails before the publish step because of environment approval or a transient PyPI issue, rerun the workflow for the same tag instead of moving the tag.
 
 ## Repository utilities
 
-`run.py` is a manual smoke-test helper that parses a JAR file, pretty-prints parsed class structures, and copies non-class resources into an output directory next to the input JAR.
+`run.py` is a manual smoke-test helper that parses a JAR file, writes pretty-printed parsed class structures under `<jar parent>\output\<jar stem>\parsed\`, and writes class-model-derived rewritten `.class` files plus copied resources under `<jar parent>\output\<jar stem>\rewritten\`.
 
 Example:
 
 ```powershell
-uv run python .\run.py .\225.jar
+uv run python .\run.py .\path\to\input.jar
 ```
 
-When run against the checked-in sample, it writes extracted output under `.\output\225\` and prints timing plus class/resource counts to stdout.
+The script prints read, parse, lift, write, and rewrite timings plus class and resource counts to stdout.
