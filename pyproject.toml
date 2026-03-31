@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=82.0.1,<83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -30,10 +30,10 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-  "basedpyright>=1.38.3",
-  "pdoc",
-  "pytest",
-  "ruff",
+  "basedpyright>=1.38.3,<2.0.0",
+  "pdoc>=16.0.0,<17.0.0",
+  "pytest>=9.0.2,<10.0.0",
+  "ruff>=0.15.7,<0.16.0",
 ]
 
 [tool.basedpyright]
