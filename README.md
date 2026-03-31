@@ -159,7 +159,7 @@ The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_ca
 
 ## Release automation
 
-PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The release workflow reruns validation on the tagged commit, builds both `sdist` and `wheel` with `uv build`, and publishes from the protected `pypi` environment via PyPI Trusted Publishing.
+PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, builds both `sdist` and `wheel` with `uv build`, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
 
 Release procedure:
 
@@ -177,7 +177,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-The release workflow rejects tags that do not match `project.version`. Treat release tags as immutable: if a tag or published artifact is wrong, bump to a new version and publish a new tag instead of force-pushing the old one. If the workflow fails before the publish step because of environment approval or a transient PyPI issue, rerun the workflow for the same tag instead of moving the tag.
+The release workflow rejects tags that do not match `project.version`. Treat release tags as immutable: if a tag or published artifact is wrong, bump to a new version and publish a new tag instead of force-pushing the old one. For an existing tag, you can rerun the workflow directly or start it manually from Actions by providing the tag name. The workflow is safe to rerun for the same tag: PyPI uploads skip files that already exist, and the GitHub Release step updates the existing release assets in place if the release was already created.
 
 ## Repository utilities
 
