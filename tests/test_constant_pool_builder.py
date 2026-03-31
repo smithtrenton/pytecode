@@ -889,6 +889,51 @@ def test_find_compound_entries_from_imported_pool():
     assert imported.find_dynamic(7, "dyn", "I") == dynamic_idx
 
 
+def test_checkpoint_and_rollback_restore_allocation_state():
+    b = ConstantPoolBuilder()
+    original_idx = b.add_utf8("original")
+    checkpoint = b.checkpoint()
+
+    new_utf8 = b.add_utf8("later")
+    new_class = b.add_class("Owner")
+
+    assert new_utf8 != original_idx
+    assert new_class is not None
+
+    b.rollback(checkpoint)
+
+    assert b.find_utf8("original") == original_idx
+    assert b.find_utf8("later") is None
+    assert b.find_class("Owner") is None
+    assert b.count == 2
+
+
+def test_peek_returns_live_entry_without_copying():
+    b = fresh()
+    idx = b.add_utf8("x")
+
+    entry = b.peek(idx)
+
+    assert isinstance(entry, cp_module.Utf8Info)
+    entry.str_bytes = b"changed"
+    again = b.peek(idx)
+    assert isinstance(again, cp_module.Utf8Info)
+    assert again.str_bytes == b"changed"
+
+
+def test_get_still_returns_entry_copy_when_peek_exists():
+    b = fresh()
+    idx = b.add_utf8("x")
+
+    entry = b.get(idx)
+    assert isinstance(entry, cp_module.Utf8Info)
+    entry.str_bytes = b"changed"
+
+    original = b.peek(idx)
+    assert isinstance(original, cp_module.Utf8Info)
+    assert original.str_bytes == b"x"
+
+
 def test_from_pool_rejects_missing_index_zero_placeholder():
     pool: list[cp_module.ConstantPoolInfo | None] = [
         cp_module.Utf8Info(index=1, offset=0, tag=1, length=1, str_bytes=b"x")

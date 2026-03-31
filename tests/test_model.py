@@ -7,10 +7,18 @@ from pathlib import Path
 import pytest
 
 from pytecode import constant_pool as cp_module
-from pytecode.attributes import CodeAttr, InnerClassesAttr, SignatureAttr, SyntheticAttr
+from pytecode.attributes import (
+    CodeAttr,
+    InnerClassesAttr,
+    RuntimeVisibleAnnotationsAttr,
+    SignatureAttr,
+    StackMapTableAttr,
+    SyntheticAttr,
+)
 from pytecode.constant_pool_builder import ConstantPoolBuilder
 from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from pytecode.info import ClassFile
+from pytecode.info import ClassFile, FieldInfo, MethodInfo
+from pytecode.instructions import InsnInfo
 from pytecode.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
 from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.modified_utf8 import decode_modified_utf8
@@ -133,6 +141,34 @@ def _find_field(model: ClassModel, name: str) -> FieldModel:
         if f.name == name:
             return f
     raise AssertionError(f"Field {name!r} not found in ClassModel")
+
+
+def _find_method_info(cf: ClassFile, name: str) -> MethodInfo:
+    for method in cf.methods:
+        if _resolve_utf8(cf, method.name_index) == name:
+            return method
+    raise AssertionError(f"Method {name!r} not found in ClassFile")
+
+
+def _find_field_info(cf: ClassFile, name: str) -> FieldInfo:
+    for field in cf.fields:
+        if _resolve_utf8(cf, field.name_index) == name:
+            return field
+    raise AssertionError(f"Field {name!r} not found in ClassFile")
+
+
+def _find_method_with_stack_map(cf: ClassFile) -> tuple[str, StackMapTableAttr]:
+    for method in cf.methods:
+        code_attr = next((attr for attr in method.attributes if isinstance(attr, CodeAttr)), None)
+        if code_attr is None:
+            continue
+        stack_map = next(
+            (attr for attr in code_attr.attributes if isinstance(attr, StackMapTableAttr) and attr.entries),
+            None,
+        )
+        if stack_map is not None:
+            return _resolve_utf8(cf, method.name_index), stack_map
+    raise AssertionError("Method with non-empty StackMapTable not found in ClassFile")
 
 
 # ===========================================================================
@@ -571,6 +607,25 @@ class TestControlFlowModel:
         assert len(branch.code.line_numbers) > 0
         assert all(isinstance(entry.label, Label) for entry in branch.code.line_numbers)
 
+    def test_raw_instruction_items_are_independent_from_source(self, control_flow_class: Path) -> None:
+        cf = _read_class(control_flow_class)
+        source_method = _find_method_info(cf, "branch")
+        source_code = next(attr for attr in source_method.attributes if isinstance(attr, CodeAttr))
+        source_raw = next(
+            item for item in source_code.code if type(item).__name__ in {"InsnInfo", "ByteValue", "ShortValue"}
+        )
+
+        model = ClassModel.from_classfile(cf)
+        method = _find_method(model, "branch")
+        assert method.code is not None
+        model_raw = next(item for item in method.code.instructions if type(item).__name__ == type(source_raw).__name__)
+        assert isinstance(model_raw, InsnInfo)
+
+        assert model_raw is not source_raw
+        original_offset = source_raw.bytecode_offset
+        model_raw.bytecode_offset += 1
+        assert source_raw.bytecode_offset == original_offset
+
 
 class TestAnnotatedClassModel:
     def test_class_has_attributes(self, annotated_class: Path) -> None:
@@ -854,6 +909,98 @@ class TestOwnership:
         rest_code_attr = next(a for a in main_mi.attributes if isinstance(a, CodeAttr))
         rest_code_attr.code.clear()
         assert len(main_mm.code.instructions) == original_insn_count
+
+    def test_model_nested_class_attrs_independent_from_source(self, outer_class: Path) -> None:
+        """Mutating InnerClasses entries on the model must not affect the source ClassFile."""
+        cf = _read_class(outer_class)
+        original_inner = next(a for a in cf.attributes if isinstance(a, InnerClassesAttr))
+        original_name_index = original_inner.classes[0].inner_name_index
+        model = ClassModel.from_classfile(cf)
+        model_inner = next(a for a in model.attributes if isinstance(a, InnerClassesAttr))
+        model_inner.classes[0].inner_name_index += 1
+        assert original_inner.classes[0].inner_name_index == original_name_index
+
+    def test_classfile_nested_class_attrs_independent_from_model(self, outer_class: Path) -> None:
+        """Mutating lowered InnerClasses entries must not affect the model."""
+        model = ClassModel.from_bytes(outer_class.read_bytes())
+        model_inner = next(a for a in model.attributes if isinstance(a, InnerClassesAttr))
+        original_name_index = model_inner.classes[0].inner_name_index
+        cf = model.to_classfile()
+        lowered_inner = next(a for a in cf.attributes if isinstance(a, InnerClassesAttr))
+        lowered_inner.classes[0].inner_name_index += 1
+        assert model_inner.classes[0].inner_name_index == original_name_index
+
+    def test_model_nested_field_attrs_independent_from_source(self, annotated_class: Path) -> None:
+        """Mutating nested field annotation entries on the model must not affect the source FieldInfo."""
+        cf = _read_class(annotated_class)
+        source_field = _find_field_info(cf, "oldField")
+        source_attr = next(a for a in source_field.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        original_type_index = source_attr.annotations[0].type_index
+        model = ClassModel.from_classfile(cf)
+        field = _find_field(model, "oldField")
+        model_attr = next(a for a in field.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        model_attr.annotations[0].type_index += 1
+        assert source_attr.annotations[0].type_index == original_type_index
+
+    def test_classfile_nested_field_attrs_independent_from_model(self, annotated_class: Path) -> None:
+        """Mutating nested field annotation entries on lowered output must not affect the model."""
+        model = ClassModel.from_bytes(annotated_class.read_bytes())
+        field = _find_field(model, "oldField")
+        model_attr = next(a for a in field.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        original_type_index = model_attr.annotations[0].type_index
+        cf = model.to_classfile()
+        lowered_field = _find_field_info(cf, "oldField")
+        lowered_attr = next(a for a in lowered_field.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        lowered_attr.annotations[0].type_index += 1
+        assert model_attr.annotations[0].type_index == original_type_index
+
+    def test_model_nested_method_attrs_independent_from_source(self, annotated_class: Path) -> None:
+        """Mutating nested method annotation entries on the model must not affect the source MethodInfo."""
+        cf = _read_class(annotated_class)
+        source_method = _find_method_info(cf, "oldMethod")
+        source_attr = next(a for a in source_method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        original_type_index = source_attr.annotations[0].type_index
+        model = ClassModel.from_classfile(cf)
+        method = _find_method(model, "oldMethod")
+        model_attr = next(a for a in method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        model_attr.annotations[0].type_index += 1
+        assert source_attr.annotations[0].type_index == original_type_index
+
+    def test_classfile_nested_method_attrs_independent_from_model(self, annotated_class: Path) -> None:
+        """Mutating nested method annotation entries on lowered output must not affect the model."""
+        model = ClassModel.from_bytes(annotated_class.read_bytes())
+        method = _find_method(model, "oldMethod")
+        model_attr = next(a for a in method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        original_type_index = model_attr.annotations[0].type_index
+        cf = model.to_classfile()
+        lowered_method = _find_method_info(cf, "oldMethod")
+        lowered_attr = next(a for a in lowered_method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
+        lowered_attr.annotations[0].type_index += 1
+        assert model_attr.annotations[0].type_index == original_type_index
+
+    def test_model_nested_code_attrs_independent_from_source(self, control_flow_class: Path) -> None:
+        """Mutating nested StackMapTable frames on the model must not affect the source CodeAttr."""
+        cf = _read_class(control_flow_class)
+        method_name, source_stack_map = _find_method_with_stack_map(cf)
+        original_frame_type = source_stack_map.entries[0].frame_type
+        model = ClassModel.from_classfile(cf)
+        method = _find_method(model, method_name)
+        assert method.code is not None
+        model_stack_map = next(a for a in method.code.attributes if isinstance(a, StackMapTableAttr))
+        model_stack_map.entries[0].frame_type += 1
+        assert source_stack_map.entries[0].frame_type == original_frame_type
+
+    def test_classfile_nested_code_attrs_independent_from_model(self, control_flow_class: Path) -> None:
+        """Mutating nested StackMapTable frames on lowered output must not affect the model."""
+        model = ClassModel.from_bytes(control_flow_class.read_bytes())
+        cf = model.to_classfile()
+        method_name, lowered_stack_map = _find_method_with_stack_map(cf)
+        method = _find_method(model, method_name)
+        assert method.code is not None
+        model_stack_map = next(a for a in method.code.attributes if isinstance(a, StackMapTableAttr))
+        original_frame_type = model_stack_map.entries[0].frame_type
+        lowered_stack_map.entries[0].frame_type += 1
+        assert model_stack_map.entries[0].frame_type == original_frame_type
 
 
 # ===========================================================================

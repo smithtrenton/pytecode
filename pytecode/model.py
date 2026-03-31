@@ -8,12 +8,12 @@ inspect and transform programmatically.
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 __all__ = ["ClassModel", "CodeModel", "FieldModel", "MethodModel"]
 
+from ._attribute_clone import clone_attribute, clone_attributes
 from .attributes import (
     AttributeInfo,
     CodeAttr,
@@ -76,6 +76,7 @@ from .labels import (
     LocalVariableTypeEntry,
     LookupSwitchInsn,
     TableSwitchInsn,
+    clone_raw_instruction,
     lower_code,
     resolve_catch_type,
 )
@@ -245,7 +246,7 @@ class ClassModel:
         cp = ConstantPoolBuilder.from_pool(cf.constant_pool)
 
         # Resolve this_class → class name string.
-        this_class_entry = cp.get(cf.this_class)
+        this_class_entry = cp.peek(cf.this_class)
         if not isinstance(this_class_entry, ClassInfo):
             raise ValueError(f"this_class CP index {cf.this_class} is not a CONSTANT_Class")
         name = cp.resolve_utf8(this_class_entry.name_index)
@@ -253,7 +254,7 @@ class ClassModel:
         # Resolve super_class → class name string or None.
         super_name: str | None = None
         if cf.super_class != 0:
-            super_entry = cp.get(cf.super_class)
+            super_entry = cp.peek(cf.super_class)
             if not isinstance(super_entry, ClassInfo):
                 raise ValueError(f"super_class CP index {cf.super_class} is not a CONSTANT_Class")
             super_name = cp.resolve_utf8(super_entry.name_index)
@@ -261,7 +262,7 @@ class ClassModel:
         # Resolve interfaces.
         interfaces: list[str] = []
         for iface_index in cf.interfaces:
-            iface_entry = cp.get(iface_index)
+            iface_entry = cp.peek(iface_index)
             if not isinstance(iface_entry, ClassInfo):
                 raise ValueError(f"interface CP index {iface_index} is not a CONSTANT_Class")
             interfaces.append(cp.resolve_utf8(iface_entry.name_index))
@@ -271,7 +272,7 @@ class ClassModel:
 
         # Convert methods.
         methods = [_method_from_info(mi, cp, skip_debug=skip_debug) for mi in cf.methods]
-        class_attributes = copy.deepcopy(cf.attributes)
+        class_attributes = clone_attributes(cf.attributes)
         if skip_debug:
             class_attributes = strip_class_debug_attributes(class_attributes)
 
@@ -376,7 +377,7 @@ class ClassModel:
             methods_count=len(raw_methods),
             methods=raw_methods,
             attributes_count=len(class_attributes),
-            attributes=copy.deepcopy(class_attributes),
+            attributes=clone_attributes(class_attributes),
         )
 
     def to_bytes(
@@ -418,7 +419,7 @@ def _field_from_info(fi: FieldInfo, cp: ConstantPoolBuilder) -> FieldModel:
         access_flags=fi.access_flags,
         name=cp.resolve_utf8(fi.name_index),
         descriptor=cp.resolve_utf8(fi.descriptor_index),
-        attributes=copy.deepcopy(fi.attributes),
+        attributes=clone_attributes(fi.attributes),
     )
 
 
@@ -430,7 +431,7 @@ def _method_from_info(mi: MethodInfo, cp: ConstantPoolBuilder, *, skip_debug: bo
         if isinstance(attr, CodeAttr):
             code = _code_from_attr(attr, cp, skip_debug=skip_debug)
         else:
-            non_code_attrs.append(copy.deepcopy(attr))
+            non_code_attrs.append(clone_attribute(attr))
     if skip_debug:
         non_code_attrs = skip_debug_method_attributes(non_code_attrs)
 
@@ -449,7 +450,7 @@ def _field_to_info(fm: FieldModel, cp: ConstantPoolBuilder) -> FieldInfo:
         name_index=cp.add_utf8(fm.name),
         descriptor_index=cp.add_utf8(fm.descriptor),
         attributes_count=len(fm.attributes),
-        attributes=copy.deepcopy(fm.attributes),
+        attributes=clone_attributes(fm.attributes),
     )
 
 
@@ -462,7 +463,7 @@ def _method_to_info(
     resolver: ClassResolver | None = None,
     debug_info: DebugInfoPolicy = DebugInfoPolicy.PRESERVE,
 ) -> MethodInfo:
-    attrs: list[AttributeInfo] = copy.deepcopy(mm.attributes)
+    attrs: list[AttributeInfo] = clone_attributes(mm.attributes)
 
     if mm.code is not None:
         code_attr = lower_code(
@@ -660,7 +661,7 @@ def _lift_instruction(
     if implicit is not None:
         base_opcode, slot = implicit
         return VarInsn(base_opcode, slot)
-    return copy.deepcopy(insn)
+    return clone_raw_instruction(insn)
 
 
 def _lift_instructions(
@@ -770,7 +771,7 @@ def _lift_nested_code_attributes(
             )
         else:
             layout.append("other")
-            attributes.append(copy.deepcopy(attribute))
+            attributes.append(clone_attribute(attribute))
 
     return line_numbers, local_variables, local_variable_types, attributes, tuple(layout)
 
@@ -803,7 +804,7 @@ def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder, *, skip_debug: bool
 
 def _resolve_class_name(cp: ConstantPoolBuilder, index: int) -> str:
     """Resolve a CONSTANT_Class CP index to its internal name string."""
-    entry = cp.get(index)
+    entry = cp.peek(index)
     if not isinstance(entry, ClassInfo):
         raise ValueError(f"CP index {index} is not a CONSTANT_Class: {type(entry).__name__}")
     return cp.resolve_utf8(entry.name_index)
@@ -814,12 +815,12 @@ def _resolve_member_ref(
     index: int,
 ) -> tuple[str, str, str, bool]:
     """Resolve a Fieldref/Methodref/InterfaceMethodref to (owner, name, descriptor, is_interface)."""
-    entry = cp.get(index)
+    entry = cp.peek(index)
     if not isinstance(entry, (FieldrefInfo, MethodrefInfo, InterfaceMethodrefInfo)):
         raise ValueError(f"CP index {index} is not a member ref entry: {type(entry).__name__}")
     is_interface = isinstance(entry, InterfaceMethodrefInfo)
     owner = _resolve_class_name(cp, entry.class_index)
-    nat = cp.get(entry.name_and_type_index)
+    nat = cp.peek(entry.name_and_type_index)
     if not isinstance(nat, NameAndTypeInfo):
         raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
     name = cp.resolve_utf8(nat.name_index)
@@ -829,7 +830,7 @@ def _resolve_member_ref(
 
 def _resolve_ldc_value(cp: ConstantPoolBuilder, index: int) -> LdcValue:
     """Resolve an LDC/LDC_W/LDC2_W CP index to a typed ``LdcValue``."""
-    entry = cp.get(index)
+    entry = cp.peek(index)
     if isinstance(entry, IntegerInfo):
         return LdcInt(entry.value_bytes)
     if isinstance(entry, FloatInfo):
@@ -849,7 +850,7 @@ def _resolve_ldc_value(cp: ConstantPoolBuilder, index: int) -> LdcValue:
     if isinstance(entry, MethodHandleInfo):
         return _resolve_ldc_method_handle(cp, entry)
     if isinstance(entry, DynamicInfo):
-        nat = cp.get(entry.name_and_type_index)
+        nat = cp.peek(entry.name_and_type_index)
         if not isinstance(nat, NameAndTypeInfo):
             raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
         return LdcDynamic(
@@ -862,14 +863,14 @@ def _resolve_ldc_value(cp: ConstantPoolBuilder, index: int) -> LdcValue:
 
 def _resolve_ldc_method_handle(cp: ConstantPoolBuilder, entry: MethodHandleInfo) -> LdcMethodHandle:
     """Resolve a CONSTANT_MethodHandle entry to an ``LdcMethodHandle``."""
-    ref_entry = cp.get(entry.reference_index)
+    ref_entry = cp.peek(entry.reference_index)
     if not isinstance(ref_entry, (FieldrefInfo, MethodrefInfo, InterfaceMethodrefInfo)):
         raise ValueError(
             f"MethodHandle reference index {entry.reference_index} has unexpected type: {type(ref_entry).__name__}"
         )
     is_interface = isinstance(ref_entry, InterfaceMethodrefInfo)
     owner = _resolve_class_name(cp, ref_entry.class_index)
-    nat = cp.get(ref_entry.name_and_type_index)
+    nat = cp.peek(ref_entry.name_and_type_index)
     if not isinstance(nat, NameAndTypeInfo):
         raise ValueError(f"CP index {ref_entry.name_and_type_index} is not a CONSTANT_NameAndType")
     name = cp.resolve_utf8(nat.name_index)
@@ -905,15 +906,15 @@ def _lift_const_pool_index(insn: ConstPoolIndex, cp: ConstantPoolBuilder) -> Cod
     if opcode in (InsnInfoType.LDC_W, InsnInfoType.LDC2_W):
         return LdcInsn(_resolve_ldc_value(cp, insn.index))
     # Unknown ConstPoolIndex opcode: pass through unchanged (e.g. future opcodes).
-    return copy.deepcopy(insn)
+    return clone_raw_instruction(insn)
 
 
 def _lift_invoke_dynamic(insn: InvokeDynamic, cp: ConstantPoolBuilder) -> InvokeDynamicInsn:
     """Lift a raw ``InvokeDynamic`` instruction to an ``InvokeDynamicInsn``."""
-    entry = cp.get(insn.index)
+    entry = cp.peek(insn.index)
     if not isinstance(entry, InvokeDynamicInfo):
         raise ValueError(f"CP index {insn.index} is not a CONSTANT_InvokeDynamic: {type(entry).__name__}")
-    nat = cp.get(entry.name_and_type_index)
+    nat = cp.peek(entry.name_and_type_index)
     if not isinstance(nat, NameAndTypeInfo):
         raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
     return InvokeDynamicInsn(

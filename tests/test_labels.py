@@ -843,6 +843,17 @@ def test_build_ldc_index_cache_reuses_imported_entries_without_cloning() -> None
     assert cache[id(items[0])] == existing_index
 
 
+def test_build_ldc_index_cache_rolls_back_probe_allocations() -> None:
+    cp = ConstantPoolBuilder()
+    before = cp.build()
+    items: list[CodeItem] = [LdcInsn(LdcString("new-value"))]
+
+    cache = _build_ldc_index_cache(items, cp)
+
+    assert cache[id(items[0])] is not None
+    assert cp.build() == before
+
+
 def test_resolve_labels_empty_list() -> None:
     resolution = resolve_labels([])
 

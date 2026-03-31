@@ -13,6 +13,7 @@ import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ._attribute_clone import clone_attribute
 from .attributes import (
     AttributeInfo,
     CodeAttr,
@@ -78,6 +79,31 @@ if TYPE_CHECKING:
     from .hierarchy import ClassResolver
     from .model import CodeModel, MethodModel
 
+
+def _clone_raw_instruction(insn: InsnInfo, *, bytecode_offset: int | None = None) -> InsnInfo:
+    if isinstance(insn, LookupSwitch):
+        return LookupSwitch(
+            insn.type,
+            insn.bytecode_offset if bytecode_offset is None else bytecode_offset,
+            insn.default,
+            insn.npairs,
+            [MatchOffsetPair(pair.match, pair.offset) for pair in insn.pairs],
+        )
+    if isinstance(insn, TableSwitch):
+        return TableSwitch(
+            insn.type,
+            insn.bytecode_offset if bytecode_offset is None else bytecode_offset,
+            insn.default,
+            insn.low,
+            insn.high,
+            list(insn.offsets),
+        )
+    lowered = copy.copy(insn)
+    if bytecode_offset is not None:
+        lowered.bytecode_offset = bytecode_offset
+    return lowered
+
+
 __all__ = [
     "BranchInsn",
     "CodeItem",
@@ -93,6 +119,12 @@ __all__ = [
     "resolve_catch_type",
     "resolve_labels",
 ]
+
+
+def clone_raw_instruction(insn: InsnInfo, *, bytecode_offset: int | None = None) -> InsnInfo:
+    """Clone a raw JVM instruction without using ``copy.deepcopy``."""
+    return _clone_raw_instruction(insn, bytecode_offset=bytecode_offset)
+
 
 _I2_MIN = -(1 << 15)
 _I2_MAX = (1 << 15) - 1
@@ -359,7 +391,33 @@ def _refresh_code_attr_metadata(code_attr: CodeAttr) -> None:
 
 
 def _clone_code_item(item: CodeItem) -> CodeItem:
-    return item if isinstance(item, Label) else copy.copy(item)
+    if isinstance(item, Label):
+        return item
+    if isinstance(item, BranchInsn):
+        return BranchInsn(item.type, item.target, item.bytecode_offset)
+    if isinstance(item, LookupSwitchInsn):
+        return LookupSwitchInsn(item.default_target, list(item.pairs), item.bytecode_offset)
+    if isinstance(item, TableSwitchInsn):
+        return TableSwitchInsn(item.default_target, item.low, item.high, list(item.targets), item.bytecode_offset)
+    if isinstance(item, FieldInsn):
+        return FieldInsn(item.type, item.owner, item.name, item.descriptor, item.bytecode_offset)
+    if isinstance(item, MethodInsn):
+        return MethodInsn(item.type, item.owner, item.name, item.descriptor, item.is_interface, item.bytecode_offset)
+    if isinstance(item, InterfaceMethodInsn):
+        return InterfaceMethodInsn(item.owner, item.name, item.descriptor, item.bytecode_offset)
+    if isinstance(item, TypeInsn):
+        return TypeInsn(item.type, item.class_name, item.bytecode_offset)
+    if isinstance(item, VarInsn):
+        return VarInsn(item.type, item.slot, item.bytecode_offset)
+    if isinstance(item, IIncInsn):
+        return IIncInsn(item.slot, item.increment, item.bytecode_offset)
+    if isinstance(item, LdcInsn):
+        return LdcInsn(item.value, item.bytecode_offset)
+    if isinstance(item, InvokeDynamicInsn):
+        return InvokeDynamicInsn(item.bootstrap_method_attr_index, item.name, item.descriptor, item.bytecode_offset)
+    if isinstance(item, MultiANewArrayInsn):
+        return MultiANewArrayInsn(item.class_name, item.dimensions, item.bytecode_offset)
+    return copy.copy(item)
 
 
 def _lifted_debug_attrs(attributes: list[AttributeInfo]) -> list[AttributeInfo]:
@@ -379,7 +437,7 @@ def _ordered_nested_code_attributes(
     local_variable_attr: LocalVariableTableAttr | None,
     local_variable_type_attr: LocalVariableTypeTableAttr | None,
 ) -> list[AttributeInfo]:
-    other_attrs = copy.deepcopy(_lifted_debug_attrs(code.attributes))
+    other_attrs = [clone_attribute(attribute) for attribute in _lifted_debug_attrs(code.attributes)]
     if not code._nested_attribute_layout:
         attrs = other_attrs
         for debug_attr in (line_number_attr, local_variable_attr, local_variable_type_attr):
@@ -416,17 +474,13 @@ def _ordered_nested_code_attributes(
     return attrs
 
 
-def _clone_constant_pool_builder(cp: ConstantPoolBuilder) -> ConstantPoolBuilder:
-    return cp.clone()
-
-
 def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
     return any(isinstance(item, LdcInsn) and not isinstance(item.value, (LdcLong, LdcDouble)) for item in items)
 
 
 def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> dict[int, int]:
     cache: dict[int, int] = {}
-    probe_cp: ConstantPoolBuilder | None = None
+    checkpoint: tuple[int, int, dict[tuple[int | bytes, ...], int], dict[bytes, int]] | None = None
 
     for item in items:
         if not isinstance(item, LdcInsn):
@@ -437,9 +491,12 @@ def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> di
             cache[id(item)] = cached
             continue
 
-        if probe_cp is None:
-            probe_cp = _clone_constant_pool_builder(cp)
-        cache[id(item)] = _lower_ldc_value(item.value, probe_cp)
+        if checkpoint is None:
+            checkpoint = cp.checkpoint()
+        cache[id(item)] = _lower_ldc_value(item.value, cp)
+
+    if checkpoint is not None:
+        cp.rollback(checkpoint)
 
     return cache
 
@@ -740,8 +797,7 @@ def _lower_instruction(
         cp_index = cp.add_class(item.class_name)
         return MultiANewArray(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
 
-    lowered = copy.deepcopy(item)
-    lowered.bytecode_offset = offset
+    lowered = _clone_raw_instruction(item, bytecode_offset=offset)
     if isinstance(lowered, LookupSwitch):
         lowered.npairs = len(lowered.pairs)
     return lowered
@@ -957,12 +1013,12 @@ def lower_code(
         if not _promote_overflow_branches(items, resolution):
             break
 
-    probe_cp = _clone_constant_pool_builder(cp)
-    result = _lower_resolved_code(code, items, resolution, probe_cp, keep_debug_info)
-    cp._pool = probe_cp._pool
-    cp._next_index = probe_cp._next_index
-    cp._key_to_index = probe_cp._key_to_index
-    cp._utf8_to_index = probe_cp._utf8_to_index
+    checkpoint = cp.checkpoint()
+    try:
+        result = _lower_resolved_code(code, items, resolution, cp, keep_debug_info)
+    except Exception:
+        cp.rollback(checkpoint)
+        raise
 
     if recompute_frames:
         assert method is not None and class_name is not None
@@ -1012,7 +1068,7 @@ def resolve_catch_type(cp: ConstantPoolBuilder, catch_type_index: int) -> str | 
     if catch_type_index == 0:
         return None
 
-    entry = cp.get(catch_type_index)
+    entry = cp.peek(catch_type_index)
     if not isinstance(entry, ClassInfo):
         raise ValueError(f"catch_type CP index {catch_type_index} is not a CONSTANT_Class")
     return cp.resolve_utf8(entry.name_index)

@@ -7,8 +7,8 @@ lookups, and deterministic ordering.
 
 from __future__ import annotations
 
-import copy
-from typing import TYPE_CHECKING
+from dataclasses import fields
+from typing import TYPE_CHECKING, cast
 
 __all__ = ["ConstantPoolBuilder"]
 
@@ -76,6 +76,22 @@ _UTF8_MAX_BYTES: int = 65535
 # all other entries contain only int elements.
 type _CPKey = tuple[int | bytes, ...]
 
+_CP_FIELDS_BY_TYPE: dict[type[object], tuple[str, ...]] = {}
+
+
+def _field_names(cls: type[object]) -> tuple[str, ...]:
+    names = _CP_FIELDS_BY_TYPE.get(cls)
+    if names is None:
+        names = tuple(field.name for field in fields(cast(type[ConstantPoolInfo], cls)))
+        _CP_FIELDS_BY_TYPE[cls] = names
+    return names
+
+
+def _replace_dataclass[T](obj: T, /, **changes: object) -> T:
+    values = {name: getattr(obj, name) for name in _field_names(type(obj))}
+    values.update(changes)
+    return type(obj)(**values)
+
 
 def _entry_key(entry: ConstantPoolInfo) -> _CPKey:
     """Return the deduplication key for *entry* based solely on its content."""
@@ -122,7 +138,7 @@ def _is_double_slot(entry: ConstantPoolInfo) -> bool:
 
 
 def _copy_entry(entry: ConstantPoolInfo | None) -> ConstantPoolInfo | None:
-    return copy.copy(entry) if entry is not None else None
+    return _replace_dataclass(entry) if entry is not None else None
 
 
 def _require_pool_entry(
@@ -345,6 +361,25 @@ class ConstantPoolBuilder:
         clone._utf8_to_index = dict(self._utf8_to_index)
         return clone
 
+    def checkpoint(self) -> tuple[int, int, dict[_CPKey, int], dict[bytes, int]]:
+        """Capture the current allocation state for later rollback."""
+
+        return (
+            len(self._pool),
+            self._next_index,
+            dict(self._key_to_index),
+            dict(self._utf8_to_index),
+        )
+
+    def rollback(self, checkpoint: tuple[int, int, dict[_CPKey, int], dict[bytes, int]]) -> None:
+        """Restore the builder to a previously captured checkpoint."""
+
+        pool_len, next_index, key_to_index, utf8_to_index = checkpoint
+        del self._pool[pool_len:]
+        self._next_index = next_index
+        self._key_to_index = key_to_index
+        self._utf8_to_index = utf8_to_index
+
     # ------------------------------------------------------------------
     # Internal allocation
     # ------------------------------------------------------------------
@@ -411,7 +446,7 @@ class ConstantPoolBuilder:
             ValueError: If the entry fails validation (e.g. invalid modified
                 UTF-8 or illegal ``MethodHandle`` reference kind).
         """
-        entry_copy = copy.copy(entry)
+        entry_copy = _replace_dataclass(entry)
         self._validate_entry(entry_copy)
         return self._allocate(entry_copy)
 
@@ -774,6 +809,12 @@ class ConstantPoolBuilder:
             raise IndexError(f"CP index {index} out of range [0, {len(self._pool) - 1}]")
         return _copy_entry(self._pool[index])
 
+    def peek(self, index: int) -> ConstantPoolInfo | None:
+        """Return the entry at a CP index without allocating a defensive copy."""
+        if index < 0 or index >= len(self._pool):
+            raise IndexError(f"CP index {index} out of range [0, {len(self._pool) - 1}]")
+        return self._pool[index]
+
     def find_utf8(self, value: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_Utf8`` entry by string value.
 
@@ -914,7 +955,7 @@ class ConstantPoolBuilder:
         Raises:
             ValueError: If the entry at *index* is not a ``CONSTANT_Utf8``.
         """
-        entry = self.get(index)
+        entry = self.peek(index)
         if not isinstance(entry, Utf8Info):
             raise ValueError(f"CP index {index} is not a CONSTANT_Utf8 entry: {type(entry).__name__}")
         return decode_modified_utf8(entry.str_bytes)
