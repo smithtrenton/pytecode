@@ -425,8 +425,23 @@ def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
 
 
 def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> dict[int, int]:
-    probe_cp = _clone_constant_pool_builder(cp)
-    return {id(item): _lower_ldc_value(item.value, probe_cp) for item in items if isinstance(item, LdcInsn)}
+    cache: dict[int, int] = {}
+    probe_cp: ConstantPoolBuilder | None = None
+
+    for item in items:
+        if not isinstance(item, LdcInsn):
+            continue
+
+        cached = _find_existing_ldc_index(item.value, cp)
+        if cached is not None:
+            cache[id(item)] = cached
+            continue
+
+        if probe_cp is None:
+            probe_cp = _clone_constant_pool_builder(cp)
+        cache[id(item)] = _lower_ldc_value(item.value, probe_cp)
+
+    return cache
 
 
 def _resolve_labels_with_cache(
@@ -1032,6 +1047,29 @@ def _lower_ldc_value(value: LdcValue, cp: ConstantPoolBuilder) -> int:
     return cp.add_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
 
 
+def _find_existing_ldc_index(value: LdcValue, cp: ConstantPoolBuilder) -> int | None:
+    if isinstance(value, LdcInt):
+        return cp.find_integer(value.value)
+    if isinstance(value, LdcFloat):
+        return cp.find_float(value.raw_bits)
+    if isinstance(value, LdcLong):
+        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
+        high = (unsigned >> 32) & 0xFFFFFFFF
+        low = unsigned & 0xFFFFFFFF
+        return cp.find_long(high, low)
+    if isinstance(value, LdcDouble):
+        return cp.find_double(value.high_bytes, value.low_bytes)
+    if isinstance(value, LdcString):
+        return cp.find_string(value.value)
+    if isinstance(value, LdcClass):
+        return cp.find_class(value.name)
+    if isinstance(value, LdcMethodType):
+        return cp.find_method_type(value.descriptor)
+    if isinstance(value, LdcMethodHandle):
+        return _find_existing_ldc_method_handle(value, cp)
+    return cp.find_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
+
+
 def _lower_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) -> int:
     """Lower an ``LdcMethodHandle`` to a CONSTANT_MethodHandle CP index."""
     kind = value.reference_kind
@@ -1049,3 +1087,24 @@ def _lower_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) ->
     else:
         raise ValueError(f"invalid MethodHandle reference_kind: {kind}")
     return cp.add_method_handle(kind, ref_index)
+
+
+def _find_existing_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) -> int | None:
+    kind = value.reference_kind
+    if kind in (1, 2, 3, 4):
+        ref_index = cp.find_fieldref(value.owner, value.name, value.descriptor)
+    elif kind in (5, 8):
+        ref_index = cp.find_methodref(value.owner, value.name, value.descriptor)
+    elif kind == 9:
+        ref_index = cp.find_interface_methodref(value.owner, value.name, value.descriptor)
+    elif kind in (6, 7):
+        if value.is_interface:
+            ref_index = cp.find_interface_methodref(value.owner, value.name, value.descriptor)
+        else:
+            ref_index = cp.find_methodref(value.owner, value.name, value.descriptor)
+    else:
+        raise ValueError(f"invalid MethodHandle reference_kind: {kind}")
+
+    if ref_index is None:
+        return None
+    return cp.find_method_handle(kind, ref_index)

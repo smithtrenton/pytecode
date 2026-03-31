@@ -785,6 +785,29 @@ class ConstantPoolBuilder:
         """
         return self._utf8_to_index.get(encode_modified_utf8(value))
 
+    def _find_key(self, key: _CPKey) -> int | None:
+        return self._key_to_index.get(key)
+
+    def find_integer(self, value: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Integer`` entry."""
+
+        return self._find_key((_TAG_INTEGER, value))
+
+    def find_float(self, raw_bits: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Float`` entry."""
+
+        return self._find_key((_TAG_FLOAT, raw_bits))
+
+    def find_long(self, high: int, low: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Long`` entry."""
+
+        return self._find_key((_TAG_LONG, high, low))
+
+    def find_double(self, high: int, low: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Double`` entry."""
+
+        return self._find_key((_TAG_DOUBLE, high, low))
+
     def find_class(self, name: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_Class`` entry by class name.
 
@@ -797,8 +820,23 @@ class ConstantPoolBuilder:
         utf8_idx = self.find_utf8(name)
         if utf8_idx is None:
             return None
-        key: _CPKey = (_TAG_CLASS, utf8_idx)
-        return self._key_to_index.get(key)
+        return self._find_key((_TAG_CLASS, utf8_idx))
+
+    def find_string(self, value: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_String`` entry by value."""
+
+        string_index = self.find_utf8(value)
+        if string_index is None:
+            return None
+        return self._find_key((_TAG_STRING, string_index))
+
+    def find_method_type(self, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_MethodType`` entry."""
+
+        descriptor_index = self.find_utf8(descriptor)
+        if descriptor_index is None:
+            return None
+        return self._find_key((_TAG_METHOD_TYPE, descriptor_index))
 
     def find_name_and_type(self, name: str, descriptor: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_NameAndType`` entry.
@@ -816,8 +854,53 @@ class ConstantPoolBuilder:
         desc_idx = self.find_utf8(descriptor)
         if desc_idx is None:
             return None
-        key: _CPKey = (_TAG_NAME_AND_TYPE, name_idx, desc_idx)
-        return self._key_to_index.get(key)
+        return self._find_key((_TAG_NAME_AND_TYPE, name_idx, desc_idx))
+
+    def find_fieldref(self, class_name: str, field_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Fieldref`` entry."""
+
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(field_name, descriptor)
+        if nat_index is None:
+            return None
+        return self._find_key((_TAG_FIELDREF, class_index, nat_index))
+
+    def find_methodref(self, class_name: str, method_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Methodref`` entry."""
+
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(method_name, descriptor)
+        if nat_index is None:
+            return None
+        return self._find_key((_TAG_METHODREF, class_index, nat_index))
+
+    def find_interface_methodref(self, class_name: str, method_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_InterfaceMethodref`` entry."""
+
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(method_name, descriptor)
+        if nat_index is None:
+            return None
+        return self._find_key((_TAG_INTERFACE_METHODREF, class_index, nat_index))
+
+    def find_method_handle(self, reference_kind: int, reference_index: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_MethodHandle`` entry."""
+
+        return self._find_key((_TAG_METHOD_HANDLE, reference_kind, reference_index))
+
+    def find_dynamic(self, bootstrap_method_attr_index: int, name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Dynamic`` entry."""
+
+        nat_index = self.find_name_and_type(name, descriptor)
+        if nat_index is None:
+            return None
+        return self._find_key((_TAG_DYNAMIC, bootstrap_method_attr_index, nat_index))
 
     def resolve_utf8(self, index: int) -> str:
         """Decode the ``CONSTANT_Utf8`` entry at a CP index to a Python string.

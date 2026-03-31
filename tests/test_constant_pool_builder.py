@@ -868,6 +868,27 @@ def test_clone_preserves_indexes_and_dedup_lookups():
     assert b.count == 5
 
 
+def test_find_compound_entries_from_imported_pool():
+    b = ConstantPoolBuilder()
+    string_idx = b.add_string("hello")
+    method_type_idx = b.add_method_type("()V")
+    fieldref_idx = b.add_fieldref("Owner", "value", "I")
+    methodref_idx = b.add_methodref("Owner", "call", "()V")
+    interface_methodref_idx = b.add_interface_methodref("Owner", "iface", "()V")
+    method_handle_idx = b.add_method_handle(5, methodref_idx)
+    dynamic_idx = b.add_dynamic(7, "dyn", "I")
+
+    imported = ConstantPoolBuilder.from_pool(b.build())
+
+    assert imported.find_string("hello") == string_idx
+    assert imported.find_method_type("()V") == method_type_idx
+    assert imported.find_fieldref("Owner", "value", "I") == fieldref_idx
+    assert imported.find_methodref("Owner", "call", "()V") == methodref_idx
+    assert imported.find_interface_methodref("Owner", "iface", "()V") == interface_methodref_idx
+    assert imported.find_method_handle(5, methodref_idx) == method_handle_idx
+    assert imported.find_dynamic(7, "dyn", "I") == dynamic_idx
+
+
 def test_from_pool_rejects_missing_index_zero_placeholder():
     pool: list[cp_module.ConstantPoolInfo | None] = [
         cp_module.Utf8Info(index=1, offset=0, tag=1, length=1, str_bytes=b"x")
