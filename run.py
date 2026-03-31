@@ -27,8 +27,16 @@ def write_classfiles(
         with output_path.open("w", encoding="utf-8") as handle:
             pprint(class_reader.class_info, handle)
 
+    write_other_files(output_dir, other_files)
+
+
+def write_other_files(output_dir: Path, other_files: Sequence[JarInfo]) -> None:
     for other_file in other_files:
         output_path = output_dir / other_file.filename
+        if other_file.zipinfo.is_dir():
+            output_path.mkdir(parents=True, exist_ok=True)
+            continue
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("wb") as handle:
             handle.write(other_file.bytes)
@@ -49,11 +57,7 @@ def write_classmodels(
         with output_path.open("wb") as handle:
             handle.write(class_model.to_bytes())
 
-    for other_file in other_files:
-        output_path = output_dir / other_file.filename
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_path.open("wb") as handle:
-            handle.write(other_file.bytes)
+    write_other_files(output_dir, other_files)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

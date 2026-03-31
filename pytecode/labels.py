@@ -417,7 +417,7 @@ def _ordered_nested_code_attributes(
 
 
 def _clone_constant_pool_builder(cp: ConstantPoolBuilder) -> ConstantPoolBuilder:
-    return ConstantPoolBuilder.from_pool(cp.build())
+    return cp.clone()
 
 
 def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
@@ -427,6 +427,30 @@ def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
 def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> dict[int, int]:
     probe_cp = _clone_constant_pool_builder(cp)
     return {id(item): _lower_ldc_value(item.value, probe_cp) for item in items if isinstance(item, LdcInsn)}
+
+
+def _resolve_labels_with_cache(
+    items: list[CodeItem],
+    ldc_index_cache: dict[int, int] | None = None,
+) -> LabelResolution:
+    label_offsets: dict[Label, int] = {}
+    instruction_offsets: list[int] = []
+    offset = 0
+
+    for item in items:
+        instruction_offsets.append(offset)
+        if isinstance(item, Label):
+            if item in label_offsets:
+                raise ValueError(f"label {item!r} appears multiple times in CodeModel.instructions")
+            label_offsets[item] = offset
+            continue
+        offset += _instruction_byte_size(item, offset, ldc_index_cache)
+
+    return LabelResolution(
+        label_offsets=label_offsets,
+        instruction_offsets=instruction_offsets,
+        total_code_length=offset,
+    )
 
 
 def _instruction_byte_size(
@@ -535,24 +559,7 @@ def resolve_labels(
             )
         ldc_index_cache = _build_ldc_index_cache(items, cp)
 
-    label_offsets: dict[Label, int] = {}
-    instruction_offsets: list[int] = []
-    offset = 0
-
-    for item in items:
-        instruction_offsets.append(offset)
-        if isinstance(item, Label):
-            if item in label_offsets:
-                raise ValueError(f"label {item!r} appears multiple times in CodeModel.instructions")
-            label_offsets[item] = offset
-            continue
-        offset += _instruction_byte_size(item, offset, ldc_index_cache)
-
-    return LabelResolution(
-        label_offsets=label_offsets,
-        instruction_offsets=instruction_offsets,
-        total_code_length=offset,
-    )
+    return _resolve_labels_with_cache(items, ldc_index_cache)
 
 
 def _promote_overflow_branches(items: list[CodeItem], resolution: LabelResolution) -> bool:
@@ -924,20 +931,23 @@ def lower_code(
     debug_policy = normalize_debug_info_policy(debug_info)
     keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE and not is_code_debug_info_stale(code)
     items = [_clone_code_item(item) for item in code.instructions]
+    ldc_index_cache: dict[int, int] | None = None
+    if _needs_ldc_index_cache(items):
+        ldc_index_cache = _build_ldc_index_cache(items, cp)
 
     while True:
-        resolution = resolve_labels(items, cp)
+        resolution = _resolve_labels_with_cache(items, ldc_index_cache)
         if resolution.total_code_length > 65535:
             raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
         if not _promote_overflow_branches(items, resolution):
             break
 
-    resolution = resolve_labels(items, cp)
-    if resolution.total_code_length > 65535:
-        raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
-
-    _lower_resolved_code(code, items, resolution, _clone_constant_pool_builder(cp), keep_debug_info)
-    result = _lower_resolved_code(code, items, resolution, cp, keep_debug_info)
+    probe_cp = _clone_constant_pool_builder(cp)
+    result = _lower_resolved_code(code, items, resolution, probe_cp, keep_debug_info)
+    cp._pool = probe_cp._pool
+    cp._next_index = probe_cp._next_index
+    cp._key_to_index = probe_cp._key_to_index
+    cp._utf8_to_index = probe_cp._utf8_to_index
 
     if recompute_frames:
         assert method is not None and class_name is not None

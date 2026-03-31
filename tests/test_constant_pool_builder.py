@@ -853,6 +853,21 @@ def test_from_pool_build_round_trip():
             assert orig.index == copy_.index
 
 
+def test_clone_preserves_indexes_and_dedup_lookups():
+    b = ConstantPoolBuilder.from_pool(_make_small_pool())
+
+    cloned = b.clone()
+
+    assert cloned.build() == b.build()
+    assert cloned.count == b.count
+    assert cloned.find_utf8("Foo") == 1
+    assert cloned.find_class("Foo") == 3
+    assert cloned.add_utf8("Foo") == 1
+    assert cloned.add_utf8("new") == 5
+    assert b.find_utf8("new") is None
+    assert b.count == 5
+
+
 def test_from_pool_rejects_missing_index_zero_placeholder():
     pool: list[cp_module.ConstantPoolInfo | None] = [
         cp_module.Utf8Info(index=1, offset=0, tag=1, length=1, str_bytes=b"x")

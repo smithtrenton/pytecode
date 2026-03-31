@@ -287,7 +287,12 @@ class ConstantPoolBuilder:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_pool(cls, pool: list[ConstantPoolInfo | None]) -> ConstantPoolBuilder:
+    def from_pool(
+        cls,
+        pool: list[ConstantPoolInfo | None],
+        *,
+        skip_validation: bool = False,
+    ) -> ConstantPoolBuilder:
         """Seed a new builder from an existing parsed constant pool.
 
         The original indexes are preserved so that all existing CP references
@@ -309,7 +314,8 @@ class ConstantPoolBuilder:
                 entries).
         """
         builder = cls()
-        _validate_import_pool(pool)
+        if not skip_validation:
+            _validate_import_pool(pool)
         # Shallow-copy each entry.  All ConstantPoolInfo fields are int or
         # bytes (both immutable), so a shallow copy is sufficient to ensure
         # the builder owns independent objects.
@@ -324,6 +330,20 @@ class ConstantPoolBuilder:
             if isinstance(entry, Utf8Info):
                 builder._utf8_to_index.setdefault(entry.str_bytes, entry.index)
         return builder
+
+    def clone(self) -> ConstantPoolBuilder:
+        """Return a fast defensive copy of this builder.
+
+        The clone preserves the current pool contents, indexes, and dedup maps
+        without re-validating a pool that was already validated on import or
+        incremental insertion.
+        """
+        clone = type(self)()
+        clone._pool = [_copy_entry(entry) for entry in self._pool]
+        clone._next_index = self._next_index
+        clone._key_to_index = dict(self._key_to_index)
+        clone._utf8_to_index = dict(self._utf8_to_index)
+        return clone
 
     # ------------------------------------------------------------------
     # Internal allocation

@@ -37,6 +37,7 @@ from pytecode.instructions import (
 )
 from pytecode.labels import (
     BranchInsn,
+    CodeItem,
     ExceptionHandler,
     Label,
     LineNumberEntry,
@@ -44,6 +45,8 @@ from pytecode.labels import (
     LocalVariableTypeEntry,
     LookupSwitchInsn,
     TableSwitchInsn,
+    _build_ldc_index_cache,
+    _resolve_labels_with_cache,
     lower_code,
     resolve_labels,
 )
@@ -255,6 +258,29 @@ def test_lower_code_does_not_mutate_cp_on_failed_validation() -> None:
 
     assert cp.count == 1
     assert cp.build() == before
+
+
+def test_lower_code_commits_constant_pool_on_success() -> None:
+    cp = ConstantPoolBuilder()
+    code = CodeModel(
+        max_stack=1,
+        max_locals=0,
+        instructions=[
+            LdcInsn(LdcString("shared")),
+            LdcInsn(LdcString("shared")),
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, cp)
+
+    shared_utf8 = cp.find_utf8("shared")
+    assert shared_utf8 is not None
+    string_index = cp.add_string("shared")
+    assert cp.count > 1
+    assert isinstance(lowered.code[0], (LocalIndex, ConstPoolIndex))
+    assert isinstance(lowered.code[1], (LocalIndex, ConstPoolIndex))
+    assert lowered.code[0].index == lowered.code[1].index == string_index
 
 
 def test_lower_code_promotes_goto_to_goto_w() -> None:
@@ -785,6 +811,17 @@ def test_resolve_labels_multiple_branches_same_label() -> None:
     assert resolution.instruction_offsets[0] == 0
     assert resolution.instruction_offsets[1] == 3
     assert resolution.total_code_length == 7
+
+
+def test_resolve_labels_with_cache_matches_public_resolver() -> None:
+    end = Label("end")
+    items: list[CodeItem] = [LdcInsn(LdcInt(42)), end]
+    cp = ConstantPoolBuilder()
+
+    expected = resolve_labels(items, cp)
+    cached = _resolve_labels_with_cache(items, _build_ldc_index_cache(items, cp))
+
+    assert cached == expected
 
 
 def test_resolve_labels_empty_list() -> None:
