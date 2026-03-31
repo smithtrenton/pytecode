@@ -172,7 +172,7 @@ uv run pytest -q
 uv run python tools\generate_api_docs.py --check
 
 git commit -am "Bump version to X.Y.Z"
-git push origin <default-branch>
+git push origin master
 git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
