@@ -16,6 +16,7 @@ name = "pytecode"
 version = "0.0.1"
 description = "Python library for parsing, manipulating, and emitting JVM class files"
 readme = "README.md"
+authors = [{ name = "Trenton Smith" }]
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
@@ -27,6 +28,13 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/smithtrenton/pytecode"
+Documentation = "https://smithtrenton.github.io/pytecode/"
+Repository = "https://github.com/smithtrenton/pytecode"
+Issues = "https://github.com/smithtrenton/pytecode/issues"
+Changelog = "https://github.com/smithtrenton/pytecode/releases"
 
 [project.optional-dependencies]
 dev = [

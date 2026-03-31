@@ -257,10 +257,6 @@ JAR container support. This module now covers archive reading, class/non-class s
 
 A repository smoke-test script that parses a JAR and writes pretty-printed class output alongside copied resource files. This is primarily a manual validation utility for current parser behavior against the checked-in `225.jar` sample.
 
-### `tools\parse_wiki_instructions.py`
-
-A support tool used to generate or verify instruction enum data from a JVM instruction reference table. This reduces manual drift in opcode metadata.
-
 ## Current data flow
 
 ### Class parsing
