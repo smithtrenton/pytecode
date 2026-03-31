@@ -1,17 +1,39 @@
+"""Constants for JVM class file parsing (JVMS §4)."""
+
 from enum import Enum, IntEnum, IntFlag
 
-from . import attributes, constant_pool
+__all__ = [
+    "ClassAccessFlag",
+    "FieldAccessFlag",
+    "MAGIC",
+    "MethodAccessFlag",
+    "MethodParameterAccessFlag",
+    "ModuleAccessFlag",
+    "ModuleExportsAccessFlag",
+    "ModuleOpensAccessFlag",
+    "ModuleRequiresAccessFlag",
+    "NestedClassAccessFlag",
+    "TargetInfoType",
+    "TargetType",
+    "TypePathKind",
+    "VerificationType",
+]
 
 MAGIC = 0xCAFEBABE
+"""The magic number identifying a valid Java class file (§4.1)."""
 
 
 class ModuleAccessFlag(IntFlag):
+    """Access flags for modules (§4.7.25, Table 4.7.25-A)."""
+
     OPEN = 0x0020
     SYNTHETIC = 0x1000
     MANDATED = 0x8000
 
 
 class ModuleRequiresAccessFlag(IntFlag):
+    """Access flags for module requires directives (§4.7.25, Table 4.7.25-B)."""
+
     TRANSITIVE = 0x0020
     STATIC_PHASE = 0x0040
     SYNTHETIC = 0x1000
@@ -19,16 +41,22 @@ class ModuleRequiresAccessFlag(IntFlag):
 
 
 class ModuleExportsAccessFlag(IntFlag):
+    """Access flags for module exports directives (§4.7.25, Table 4.7.25-C)."""
+
     SYNTHETIC = 0x1000
     MANDATED = 0x8000
 
 
 class ModuleOpensAccessFlag(IntFlag):
+    """Access flags for module opens directives (§4.7.25, Table 4.7.25-D)."""
+
     SYNTHETIC = 0x1000
     MANDATED = 0x8000
 
 
 class ClassAccessFlag(IntFlag):
+    """Access flags for classes (§4.1, Table 4.1-B)."""
+
     PUBLIC = 0x0001
     FINAL = 0x0010
     SUPER = 0x0020
@@ -41,6 +69,8 @@ class ClassAccessFlag(IntFlag):
 
 
 class NestedClassAccessFlag(IntFlag):
+    """Access flags for nested classes (§4.7.6, Table 4.7.6-A)."""
+
     PUBLIC = 0x0001
     PRIVATE = 0x0002
     PROTECTED = 0x0004
@@ -54,6 +84,8 @@ class NestedClassAccessFlag(IntFlag):
 
 
 class MethodAccessFlag(IntFlag):
+    """Access flags for methods (§4.6, Table 4.6-A)."""
+
     PUBLIC = 0x0001
     PRIVATE = 0x0002
     PROTECTED = 0x0004
@@ -69,12 +101,16 @@ class MethodAccessFlag(IntFlag):
 
 
 class MethodParameterAccessFlag(IntFlag):
+    """Access flags for method parameters (§4.7.24, Table 4.7.24-A)."""
+
     FINAL = 0x0010
     SYNTHETIC = 0x1000
     MANDATED = 0x8000
 
 
 class FieldAccessFlag(IntFlag):
+    """Access flags for fields (§4.5, Table 4.5-A)."""
+
     PUBLIC = 0x0001
     PRIVATE = 0x0002
     PROTECTED = 0x0004
@@ -86,20 +122,9 @@ class FieldAccessFlag(IntFlag):
     ENUM = 0x4000
 
 
-class FieldType(Enum):
-    BYTE = "B"
-    CHAR = "C"
-    DOUBLE = "D"
-    FLOAT = "F"
-    INT = "I"
-    LONG = "J"
-    REF = "L"
-    SHORT = "S"
-    BOOL = "Z"
-    ARRAY = "["
-
-
 class TargetType(IntEnum):
+    """Target type values for type annotations (§4.7.20, Table 4.7.20-A/B)."""
+
     TYPE_PARAMETER_GENERIC_CLASS_OR_INTERFACE = 0x00
     TYPE_PARAMETER_GENERIC_METHOD_OR_CONSTRUCTOR = 0x01
     SUPERTYPE = 0x10
@@ -125,6 +150,8 @@ class TargetType(IntEnum):
 
 
 class TargetInfoType(Enum):
+    """Mapping from target_info union discriminants to target types (§4.7.20.1)."""
+
     TYPE_PARAMETER = (
         TargetType.TYPE_PARAMETER_GENERIC_CLASS_OR_INTERFACE,
         TargetType.TYPE_PARAMETER_GENERIC_METHOD_OR_CONSTRUCTOR,
@@ -159,6 +186,8 @@ class TargetInfoType(Enum):
 
 
 class TypePathKind(IntEnum):
+    """Kind values for type_path entries in type annotations (§4.7.20.2, Table 4.7.20.2-A)."""
+
     ARRAY_TYPE = 0
     NESTED_TYPE = 1
     WILDCARD_TYPE = 2
@@ -166,6 +195,8 @@ class TypePathKind(IntEnum):
 
 
 class VerificationType(IntEnum):
+    """Verification type info tags for StackMapTable entries (§4.7.4, Table 4.7.4-A)."""
+
     TOP = 0
     INTEGER = 1
     FLOAT = 2

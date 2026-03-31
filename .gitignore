@@ -72,6 +72,9 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# Generated API reference
+docs/api/
+
 # PyBuilder
 target/
 
@@ -131,3 +134,11 @@ dmypy.json
 
 # VS Code
 .vscode
+.ruff_cache/
+.basedpyright/
+
+# Ruff
+.ruff_cache/
+
+# uv
+uv.lock

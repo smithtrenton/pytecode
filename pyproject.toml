@@ -1,19 +1,67 @@
-[tool.black]
-line-length = 120
-extend-exclude = '''
-/(
-    \.git
-  | \.mypy_cache
-  | \.tox
-  | venv
-  | \.venv
-  | output
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
 
-[tool.isort]
-profile = "black"
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pytecode"]
+
+[tool.setuptools.package-data]
+pytecode = ["py.typed"]
+
+[project]
+name = "pytecode"
+version = "0.0.1"
+description = "Python library for parsing, manipulating, and emitting JVM class files"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+keywords = ["bytecode", "classfile", "java", "jvm"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "basedpyright>=1.38.3",
+  "pdoc",
+  "pytest",
+  "ruff",
+]
+
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["pytecode", "run.py", "tools", "tests"]
+exclude = ["output", "venv", ".venv"]
+reportMissingTypeStubs = false
+reportAttributeAccessIssue = false
+reportPrivateUsage = false
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+extend-exclude = [
+  "output",
+  "venv",
+  ".venv",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+  "oracle: JVM-backed differential CFG validation against the ASM oracle",
+]
+
+[tool.uv]
+required-version = ">=0.10.12"

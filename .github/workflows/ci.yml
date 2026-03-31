@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+env:
+  PYTHON_VERSION: "3.14"
+  JAVA_VERSION: "25"
+
+jobs:
+  quality:
+    name: Style, types, and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Type-check
+        run: uv run basedpyright
+      - name: Validate API docs coverage
+        run: uv run python tools/generate_api_docs.py --check
+
+  test:
+    name: Pytest (non-oracle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Run pytest (excluding oracle)
+        run: uv run pytest -q -m "not oracle"
+
+  oracle:
+    name: Oracle CFG suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Prime ASM oracle dependencies
+        run: |
+          uv run python - <<'PY'
+          from tests.helpers import ensure_asm_jars
+          
+          for path in ensure_asm_jars():
+              print(path)
+          PY
+      - name: Run oracle suite
+        run: uv run pytest -q -m oracle
+
+  pages-build:
+    name: Build GitHub Pages artifact
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    needs: [quality, test, oracle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Generate API docs
+        run: uv run python tools/generate_api_docs.py
+      - name: Disable Jekyll processing
+        run: touch docs/api/.nojekyll
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/api
+
+  deploy-pages:
+    name: Deploy GitHub Pages
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    needs: pages-build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
