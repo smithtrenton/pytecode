@@ -159,6 +159,40 @@ Contributors should generally rely on the hosted GitHub Pages site for browsing 
 
 The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, the oracle suite skips instead of failing the rest of the test run.
 
+Build source and wheel distributions locally:
+
+```powershell
+uv build
+```
+
+## Release automation
+
+PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The release workflow reruns validation on the tagged commit, builds both `sdist` and `wheel` with `uv build`, and publishes from the protected `pypi` environment via PyPI Trusted Publishing.
+
+One-time setup for maintainers:
+
+1. In the PyPI project settings, add a Trusted Publisher for this repository.
+2. Authorize the `release.yml` workflow file (`.github/workflows/release.yml`).
+3. Set the GitHub Actions environment to `pypi`, and add any desired environment protection rules in GitHub before enabling publication.
+
+Release procedure:
+
+```powershell
+# 1) bump project.version in pyproject.toml
+uv run ruff check .
+uv run ruff format --check .
+uv run basedpyright
+uv run pytest -q
+uv run python tools\generate_api_docs.py --check
+
+git commit -am "Bump version to 0.0.2"
+git push origin <default-branch>
+git tag v0.0.2
+git push origin v0.0.2
+```
+
+The release workflow rejects tags that do not match `project.version`. Treat release tags as immutable: if a tag or published artifact is wrong, bump to a new version and publish a new tag instead of force-pushing the old one. If the workflow fails before the publish step because of an environment approval or a transient PyPI issue, rerun the workflow for the same tag instead of moving the tag.
+
 ## Script validation
 
 `run.py` is a manual smoke-test helper for the checked-in `225.jar` sample. Running it writes extracted output under `output\225` for inspection or comparison.

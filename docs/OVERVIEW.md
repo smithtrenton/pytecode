@@ -51,5 +51,6 @@ All planned roadmap items have been implemented. See [project/roadmap.md](projec
 | Editing model design rationale: candidate designs, comparison matrix, library survey | [design/editing-model.md](design/editing-model.md) |
 | Bytecode validation framework: 4-tier validation, tools, CP ordering, test infrastructure | [design/validation-framework.md](design/validation-framework.md) |
 | CFG validation research: ASM/BCEL/Soot comparison and recommended differential oracle design | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
+| Release automation, Trusted Publishing setup, maintainer release steps | [../README.md#release-automation](../README.md#release-automation) |
 | Project roadmap and implementation order | [project/roadmap.md](project/roadmap.md) |
 | Quality gates, non-goals, and project summary | [project/quality-gates.md](project/quality-gates.md) |
