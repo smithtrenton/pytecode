@@ -494,7 +494,7 @@ def _resolve_class_name(cp: ConstantPoolBuilder, index: int) -> str:
         ValueError: If the entry at *index* is not a ``ClassInfo``.
     """
 
-    entry = cp.get(index)
+    entry = cp.peek(index)
     if not isinstance(entry, ClassInfo):
         raise ValueError(f"CP index {index} is not a CONSTANT_Class: {type(entry).__name__}")
     return cp.resolve_utf8(entry.name_index)

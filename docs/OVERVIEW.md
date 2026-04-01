@@ -10,7 +10,7 @@ The original implementation roadmap is complete, so the docs are organized aroun
 |------|----------|
 | Installation, quick examples, development commands | [../README.md](../README.md) |
 | Hosted API reference | [smithtrenton.github.io/pytecode](https://smithtrenton.github.io/pytecode/) |
-| Local API reference generation | `uv run python tools\generate_api_docs.py` |
+| Local API reference generation | `uv run python tools/generate_api_docs.py` |
 
 ## Reference docs
 

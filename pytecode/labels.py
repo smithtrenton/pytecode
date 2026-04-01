@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from ._attribute_clone import clone_attribute
 from .attributes import (
     AttributeInfo,
     CodeAttr,
@@ -78,6 +79,87 @@ if TYPE_CHECKING:
     from .hierarchy import ClassResolver
     from .model import CodeModel, MethodModel
 
+
+def _clone_raw_instruction(insn: InsnInfo, *, bytecode_offset: int | None = None) -> InsnInfo:
+    offset = insn.bytecode_offset if bytecode_offset is None else bytecode_offset
+
+    insn_type = type(insn)
+    if insn_type is LookupSwitch:
+        lookup_switch = cast(LookupSwitch, insn)
+        return LookupSwitch(
+            lookup_switch.type,
+            offset,
+            lookup_switch.default,
+            lookup_switch.npairs,
+            [MatchOffsetPair(pair.match, pair.offset) for pair in lookup_switch.pairs],
+        )
+    if insn_type is TableSwitch:
+        table_switch = cast(TableSwitch, insn)
+        return TableSwitch(
+            table_switch.type,
+            offset,
+            table_switch.default,
+            table_switch.low,
+            table_switch.high,
+            list(table_switch.offsets),
+        )
+    if insn_type is InsnInfo:
+        return InsnInfo(insn.type, offset)
+    if insn_type is LocalIndex:
+        local_index = cast(LocalIndex, insn)
+        return LocalIndex(local_index.type, offset, local_index.index)
+    if insn_type is LocalIndexW:
+        local_index_w = cast(LocalIndexW, insn)
+        return LocalIndexW(local_index_w.type, offset, local_index_w.index)
+    if insn_type is ConstPoolIndex:
+        const_pool_index = cast(ConstPoolIndex, insn)
+        return ConstPoolIndex(const_pool_index.type, offset, const_pool_index.index)
+    if insn_type is ByteValue:
+        byte_value = cast(ByteValue, insn)
+        return ByteValue(byte_value.type, offset, byte_value.value)
+    if insn_type is ShortValue:
+        short_value = cast(ShortValue, insn)
+        return ShortValue(short_value.type, offset, short_value.value)
+    if insn_type is Branch:
+        branch = cast(Branch, insn)
+        return Branch(branch.type, offset, branch.offset)
+    if insn_type is BranchW:
+        branch_w = cast(BranchW, insn)
+        return BranchW(branch_w.type, offset, branch_w.offset)
+    if insn_type is IInc:
+        iinc = cast(IInc, insn)
+        return IInc(iinc.type, offset, iinc.index, iinc.value)
+    if insn_type is IIncW:
+        iinc_w = cast(IIncW, insn)
+        return IIncW(iinc_w.type, offset, iinc_w.index, iinc_w.value)
+    if insn_type is InvokeDynamic:
+        invoke_dynamic = cast(InvokeDynamic, insn)
+        return InvokeDynamic(invoke_dynamic.type, offset, invoke_dynamic.index, invoke_dynamic.unused)
+    if insn_type is InvokeInterface:
+        invoke_interface = cast(InvokeInterface, insn)
+        return InvokeInterface(
+            invoke_interface.type,
+            offset,
+            invoke_interface.index,
+            invoke_interface.count,
+            invoke_interface.unused,
+        )
+    if insn_type is NewArray:
+        new_array = cast(NewArray, insn)
+        return NewArray(new_array.type, offset, new_array.atype)
+    if insn_type is MultiANewArray:
+        multi_anew_array = cast(MultiANewArray, insn)
+        return MultiANewArray(
+            multi_anew_array.type,
+            offset,
+            multi_anew_array.index,
+            multi_anew_array.dimensions,
+        )
+    lowered = copy.copy(insn)
+    lowered.bytecode_offset = offset
+    return lowered
+
+
 __all__ = [
     "BranchInsn",
     "CodeItem",
@@ -93,6 +175,12 @@ __all__ = [
     "resolve_catch_type",
     "resolve_labels",
 ]
+
+
+def clone_raw_instruction(insn: InsnInfo, *, bytecode_offset: int | None = None) -> InsnInfo:
+    """Clone a raw JVM instruction without using ``copy.deepcopy``."""
+    return _clone_raw_instruction(insn, bytecode_offset=bytecode_offset)
+
 
 _I2_MIN = -(1 << 15)
 _I2_MAX = (1 << 15) - 1
@@ -358,10 +446,6 @@ def _refresh_code_attr_metadata(code_attr: CodeAttr) -> None:
     )
 
 
-def _clone_code_item(item: CodeItem) -> CodeItem:
-    return item if isinstance(item, Label) else copy.copy(item)
-
-
 def _lifted_debug_attrs(attributes: list[AttributeInfo]) -> list[AttributeInfo]:
     return [
         attribute
@@ -379,7 +463,7 @@ def _ordered_nested_code_attributes(
     local_variable_attr: LocalVariableTableAttr | None,
     local_variable_type_attr: LocalVariableTypeTableAttr | None,
 ) -> list[AttributeInfo]:
-    other_attrs = copy.deepcopy(_lifted_debug_attrs(code.attributes))
+    other_attrs = [clone_attribute(attribute) for attribute in _lifted_debug_attrs(code.attributes)]
     if not code._nested_attribute_layout:
         attrs = other_attrs
         for debug_attr in (line_number_attr, local_variable_attr, local_variable_type_attr):
@@ -416,17 +500,57 @@ def _ordered_nested_code_attributes(
     return attrs
 
 
-def _clone_constant_pool_builder(cp: ConstantPoolBuilder) -> ConstantPoolBuilder:
-    return ConstantPoolBuilder.from_pool(cp.build())
-
-
 def _needs_ldc_index_cache(items: list[CodeItem]) -> bool:
     return any(isinstance(item, LdcInsn) and not isinstance(item.value, (LdcLong, LdcDouble)) for item in items)
 
 
 def _build_ldc_index_cache(items: list[CodeItem], cp: ConstantPoolBuilder) -> dict[int, int]:
-    probe_cp = _clone_constant_pool_builder(cp)
-    return {id(item): _lower_ldc_value(item.value, probe_cp) for item in items if isinstance(item, LdcInsn)}
+    cache: dict[int, int] = {}
+    checkpoint = None
+
+    for item in items:
+        if not isinstance(item, LdcInsn):
+            continue
+
+        cached = _find_existing_ldc_index(item.value, cp)
+        if cached is not None:
+            cache[id(item)] = cached
+            continue
+
+        if checkpoint is None:
+            checkpoint = cp.checkpoint()
+        cache[id(item)] = _lower_ldc_value(item.value, cp)
+
+    if checkpoint is not None:
+        cp.rollback(checkpoint)
+
+    return cache
+
+
+def _resolve_labels_with_cache(
+    items: list[CodeItem],
+    ldc_index_cache: dict[int, int] | None = None,
+) -> LabelResolution:
+    label_offsets: dict[Label, int] = {}
+    instruction_offsets: list[int] = []
+    instruction_offsets_append = instruction_offsets.append
+    offset = 0
+
+    for item in items:
+        instruction_offsets_append(offset)
+        if type(item) is Label:
+            label = item
+            if label in label_offsets:
+                raise ValueError(f"label {label!r} appears multiple times in CodeModel.instructions")
+            label_offsets[label] = offset
+            continue
+        offset += _instruction_byte_size(item, offset, ldc_index_cache)
+
+    return LabelResolution(
+        label_offsets=label_offsets,
+        instruction_offsets=instruction_offsets,
+        total_code_length=offset,
+    )
 
 
 def _instruction_byte_size(
@@ -434,76 +558,85 @@ def _instruction_byte_size(
     offset: int,
     ldc_index_cache: dict[int, int] | None = None,
 ) -> int:
-    if isinstance(insn, Label):
+    insn_type = type(insn)
+    if insn_type is Label:
         return 0
-    if isinstance(insn, BranchInsn):
-        return 5 if insn.type.instinfo is BranchW else 3
-    if isinstance(insn, LookupSwitchInsn):
-        return 1 + _switch_padding(offset) + 8 + (8 * len(insn.pairs))
-    if isinstance(insn, TableSwitchInsn):
-        return 1 + _switch_padding(offset) + 12 + (4 * len(insn.targets))
+    if insn_type is BranchInsn:
+        branch_insn = cast(BranchInsn, insn)
+        return 5 if branch_insn.type.instinfo is BranchW else 3
+    if insn_type is LookupSwitchInsn:
+        lookup_switch_insn = cast(LookupSwitchInsn, insn)
+        return 1 + _switch_padding(offset) + 8 + (8 * len(lookup_switch_insn.pairs))
+    if insn_type is TableSwitchInsn:
+        table_switch_insn = cast(TableSwitchInsn, insn)
+        return 1 + _switch_padding(offset) + 12 + (4 * len(table_switch_insn.targets))
     # Symbolic operand wrappers (operands.py)
-    if isinstance(insn, (FieldInsn, MethodInsn, TypeInsn)):
+    if insn_type in (FieldInsn, MethodInsn, TypeInsn):
         return 3  # opcode(1) + u2 CP index
-    if isinstance(insn, InterfaceMethodInsn):
+    if insn_type is InterfaceMethodInsn:
         return 5  # opcode(1) + u2 CP index + u1 count + u1 zero
-    if isinstance(insn, InvokeDynamicInsn):
+    if insn_type is InvokeDynamicInsn:
         return 5  # opcode(1) + u2 CP index + u2 zero
-    if isinstance(insn, MultiANewArrayInsn):
+    if insn_type is MultiANewArrayInsn:
         return 4  # opcode(1) + u2 CP index + u1 dimensions
-    if isinstance(insn, LdcInsn):
-        if isinstance(insn.value, (LdcLong, LdcDouble)):
+    if insn_type is LdcInsn:
+        ldc_insn = cast(LdcInsn, insn)
+        if isinstance(ldc_insn.value, (LdcLong, LdcDouble)):
             return 3  # LDC2_W: opcode(1) + u2 CP index
         if ldc_index_cache is None:
             raise ValueError("LdcInsn size requires constant-pool context")
-        idx = ldc_index_cache.get(id(insn))
+        idx = ldc_index_cache.get(id(ldc_insn))
         if idx is None:
             raise ValueError("LdcInsn is missing from the LDC index cache")
         return 2 if idx <= 255 else 3  # LDC: 2, LDC_W: 3
-    if isinstance(insn, VarInsn):
-        slot = _require_u2(insn.slot, context="local variable slot")
-        if _VAR_SHORTCUTS.get((insn.type, slot)) is not None:
+    if insn_type is VarInsn:
+        var_insn = cast(VarInsn, insn)
+        slot = _require_u2(var_insn.slot, context="local variable slot")
+        if _VAR_SHORTCUTS.get((var_insn.type, slot)) is not None:
             return 1  # implicit form (e.g. ILOAD_0)
         if slot <= 255:
             return 2  # opcode(1) + u1 slot
         return 4  # WIDE(1) + opcode(1) + u2 slot
-    if isinstance(insn, IIncInsn):
-        slot = _require_u2(insn.slot, context="local variable slot")
-        increment = _require_i2(insn.increment, context="iinc increment")
+    if insn_type is IIncInsn:
+        iinc_insn = cast(IIncInsn, insn)
+        slot = _require_u2(iinc_insn.slot, context="local variable slot")
+        increment = _require_i2(iinc_insn.increment, context="iinc increment")
         if slot <= 255 and -128 <= increment <= 127:
             return 3  # IINC(1) + u1 slot + i1 increment
         return 6  # WIDE(1) + IINC(1) + u2 slot + i2 increment
     # Raw spec-model types
-    if isinstance(insn, LocalIndex):
+    if insn_type is LocalIndex:
         return 2
-    if isinstance(insn, LocalIndexW):
+    if insn_type is LocalIndexW:
         return 4
-    if isinstance(insn, ConstPoolIndex):
+    if insn_type is ConstPoolIndex:
         return 3
-    if isinstance(insn, ByteValue):
+    if insn_type is ByteValue:
         return 2
-    if isinstance(insn, ShortValue):
+    if insn_type is ShortValue:
         return 3
-    if isinstance(insn, Branch):
+    if insn_type is Branch:
         return 3
-    if isinstance(insn, BranchW):
+    if insn_type is BranchW:
         return 5
-    if isinstance(insn, IInc):
+    if insn_type is IInc:
         return 3
-    if isinstance(insn, IIncW):
+    if insn_type is IIncW:
         return 6
-    if isinstance(insn, InvokeDynamic):
+    if insn_type is InvokeDynamic:
         return 5
-    if isinstance(insn, InvokeInterface):
+    if insn_type is InvokeInterface:
         return 5
-    if isinstance(insn, NewArray):
+    if insn_type is NewArray:
         return 2
-    if isinstance(insn, MultiANewArray):
+    if insn_type is MultiANewArray:
         return 4
-    if isinstance(insn, LookupSwitch):
-        return 1 + _switch_padding(offset) + 8 + (8 * len(insn.pairs))
-    if isinstance(insn, TableSwitch):
-        return 1 + _switch_padding(offset) + 12 + (4 * len(insn.offsets))
+    if insn_type is LookupSwitch:
+        lookup_switch = cast(LookupSwitch, insn)
+        return 1 + _switch_padding(offset) + 8 + (8 * len(lookup_switch.pairs))
+    if insn_type is TableSwitch:
+        table_switch = cast(TableSwitch, insn)
+        return 1 + _switch_padding(offset) + 12 + (4 * len(table_switch.offsets))
     return 1
 
 
@@ -535,24 +668,7 @@ def resolve_labels(
             )
         ldc_index_cache = _build_ldc_index_cache(items, cp)
 
-    label_offsets: dict[Label, int] = {}
-    instruction_offsets: list[int] = []
-    offset = 0
-
-    for item in items:
-        instruction_offsets.append(offset)
-        if isinstance(item, Label):
-            if item in label_offsets:
-                raise ValueError(f"label {item!r} appears multiple times in CodeModel.instructions")
-            label_offsets[item] = offset
-            continue
-        offset += _instruction_byte_size(item, offset, ldc_index_cache)
-
-    return LabelResolution(
-        label_offsets=label_offsets,
-        instruction_offsets=instruction_offsets,
-        total_code_length=offset,
-    )
+    return _resolve_labels_with_cache(items, ldc_index_cache)
 
 
 def _promote_overflow_branches(items: list[CodeItem], resolution: LabelResolution) -> bool:
@@ -612,23 +728,28 @@ def _lower_instruction(
     label_offsets: dict[Label, int],
     cp: ConstantPoolBuilder,
 ) -> InsnInfo | None:
-    if isinstance(item, Label):
+    item_type = type(item)
+    if item_type is Label:
         return None
 
-    if isinstance(item, BranchInsn):
-        relative = _relative_offset(offset, item.target, label_offsets, context=f"{item.type.name} target")
-        if item.type.instinfo is BranchW:
+    if item_type is BranchInsn:
+        branch_item = cast(BranchInsn, item)
+        relative = _relative_offset(
+            offset, branch_item.target, label_offsets, context=f"{branch_item.type.name} target"
+        )
+        if branch_item.type.instinfo is BranchW:
             if not _fits_i4(relative):
-                raise ValueError(f"{item.type.name} branch offset {relative} exceeds JVM i4 range")
-            return BranchW(item.type, offset, relative)
+                raise ValueError(f"{branch_item.type.name} branch offset {relative} exceeds JVM i4 range")
+            return BranchW(branch_item.type, offset, relative)
         if not _fits_i2(relative):
-            raise ValueError(f"{item.type.name} branch offset {relative} exceeds JVM i2 range")
-        return Branch(item.type, offset, relative)
+            raise ValueError(f"{branch_item.type.name} branch offset {relative} exceeds JVM i2 range")
+        return Branch(branch_item.type, offset, relative)
 
-    if isinstance(item, LookupSwitchInsn):
+    if item_type is LookupSwitchInsn:
+        lookup_switch_item = cast(LookupSwitchInsn, item)
         default = _relative_offset(
             offset,
-            item.default_target,
+            lookup_switch_item.default_target,
             label_offsets,
             context="lookupswitch default target",
         )
@@ -637,89 +758,113 @@ def _lower_instruction(
                 match,
                 _relative_offset(offset, target, label_offsets, context="lookupswitch case target"),
             )
-            for match, target in item.pairs
+            for match, target in lookup_switch_item.pairs
         ]
-        return LookupSwitch(item.type, offset, default, len(pairs), pairs)
+        return LookupSwitch(lookup_switch_item.type, offset, default, len(pairs), pairs)
 
-    if isinstance(item, TableSwitchInsn):
+    if item_type is TableSwitchInsn:
+        table_switch_item = cast(TableSwitchInsn, item)
         default = _relative_offset(
             offset,
-            item.default_target,
+            table_switch_item.default_target,
             label_offsets,
             context="tableswitch default target",
         )
         offsets = [
             _relative_offset(offset, target, label_offsets, context="tableswitch case target")
-            for target in item.targets
+            for target in table_switch_item.targets
         ]
-        return TableSwitch(item.type, offset, default, item.low, item.high, offsets)
+        return TableSwitch(
+            table_switch_item.type,
+            offset,
+            default,
+            table_switch_item.low,
+            table_switch_item.high,
+            offsets,
+        )
 
     # Symbolic operand wrappers from operands.py
-    if isinstance(item, FieldInsn):
-        cp_index = cp.add_fieldref(item.owner, item.name, item.descriptor)
-        return ConstPoolIndex(item.type, offset, cp_index)
+    if item_type is FieldInsn:
+        field_item = cast(FieldInsn, item)
+        cp_index = cp.add_fieldref(field_item.owner, field_item.name, field_item.descriptor)
+        return ConstPoolIndex(field_item.type, offset, cp_index)
 
-    if isinstance(item, MethodInsn):
-        if item.is_interface:
-            cp_index = cp.add_interface_methodref(item.owner, item.name, item.descriptor)
+    if item_type is MethodInsn:
+        method_item = cast(MethodInsn, item)
+        if method_item.is_interface:
+            cp_index = cp.add_interface_methodref(method_item.owner, method_item.name, method_item.descriptor)
         else:
-            cp_index = cp.add_methodref(item.owner, item.name, item.descriptor)
-        return ConstPoolIndex(item.type, offset, cp_index)
+            cp_index = cp.add_methodref(method_item.owner, method_item.name, method_item.descriptor)
+        return ConstPoolIndex(method_item.type, offset, cp_index)
 
-    if isinstance(item, InterfaceMethodInsn):
-        cp_index = cp.add_interface_methodref(item.owner, item.name, item.descriptor)
-        desc = parse_method_descriptor(item.descriptor)
+    if item_type is InterfaceMethodInsn:
+        interface_method_item = cast(InterfaceMethodInsn, item)
+        cp_index = cp.add_interface_methodref(
+            interface_method_item.owner,
+            interface_method_item.name,
+            interface_method_item.descriptor,
+        )
+        desc = parse_method_descriptor(interface_method_item.descriptor)
         count = parameter_slot_count(desc) + 1  # +1 for the object reference
         return InvokeInterface(InsnInfoType.INVOKEINTERFACE, offset, cp_index, count, b"\x00")
 
-    if isinstance(item, TypeInsn):
-        cp_index = cp.add_class(item.class_name)
-        return ConstPoolIndex(item.type, offset, cp_index)
+    if item_type is TypeInsn:
+        type_item = cast(TypeInsn, item)
+        cp_index = cp.add_class(type_item.class_name)
+        return ConstPoolIndex(type_item.type, offset, cp_index)
 
-    if isinstance(item, LdcInsn):
-        cp_index = _lower_ldc_value(item.value, cp)
-        if isinstance(item.value, (LdcLong, LdcDouble)):
+    if item_type is LdcInsn:
+        ldc_item = cast(LdcInsn, item)
+        cp_index = _lower_ldc_value(ldc_item.value, cp)
+        if isinstance(ldc_item.value, (LdcLong, LdcDouble)):
             return ConstPoolIndex(InsnInfoType.LDC2_W, offset, cp_index)
         if cp_index <= 255:
             return LocalIndex(InsnInfoType.LDC, offset, cp_index)
         return ConstPoolIndex(InsnInfoType.LDC_W, offset, cp_index)
 
-    if isinstance(item, VarInsn):
-        slot = _require_u2(item.slot, context="local variable slot")
-        shortcut = _VAR_SHORTCUTS.get((item.type, slot))
+    if item_type is VarInsn:
+        var_item = cast(VarInsn, item)
+        slot = _require_u2(var_item.slot, context="local variable slot")
+        shortcut = _VAR_SHORTCUTS.get((var_item.type, slot))
         if shortcut is not None:
             return InsnInfo(shortcut, offset)
         if slot > 255:
-            wide_type = _BASE_TO_WIDE[item.type]
+            wide_type = _BASE_TO_WIDE[var_item.type]
             return LocalIndexW(wide_type, offset, slot)
-        return LocalIndex(item.type, offset, slot)
+        return LocalIndex(var_item.type, offset, slot)
 
-    if isinstance(item, IIncInsn):
-        slot = _require_u2(item.slot, context="local variable slot")
-        increment = _require_i2(item.increment, context="iinc increment")
+    if item_type is IIncInsn:
+        iinc_item = cast(IIncInsn, item)
+        slot = _require_u2(iinc_item.slot, context="local variable slot")
+        increment = _require_i2(iinc_item.increment, context="iinc increment")
         if slot <= 255 and -128 <= increment <= 127:
             return IInc(InsnInfoType.IINC, offset, slot, increment)
         return IIncW(InsnInfoType.IINCW, offset, slot, increment)
 
-    if isinstance(item, InvokeDynamicInsn):
+    if item_type is InvokeDynamicInsn:
+        invoke_dynamic_item = cast(InvokeDynamicInsn, item)
         bootstrap_method_attr_index = _require_u2(
-            item.bootstrap_method_attr_index,
+            invoke_dynamic_item.bootstrap_method_attr_index,
             context="bootstrap_method_attr_index",
         )
-        cp_index = cp.add_invoke_dynamic(bootstrap_method_attr_index, item.name, item.descriptor)
+        cp_index = cp.add_invoke_dynamic(
+            bootstrap_method_attr_index,
+            invoke_dynamic_item.name,
+            invoke_dynamic_item.descriptor,
+        )
         return InvokeDynamic(InsnInfoType.INVOKEDYNAMIC, offset, cp_index, b"\x00\x00")
 
-    if isinstance(item, MultiANewArrayInsn):
+    if item_type is MultiANewArrayInsn:
+        multi_anew_array_item = cast(MultiANewArrayInsn, item)
         dimensions = _require_u1(
-            item.dimensions,
+            multi_anew_array_item.dimensions,
             context="multianewarray dimensions",
             minimum=1,
         )
-        cp_index = cp.add_class(item.class_name)
+        cp_index = cp.add_class(multi_anew_array_item.class_name)
         return MultiANewArray(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
 
-    lowered = copy.deepcopy(item)
-    lowered.bytecode_offset = offset
+    lowered = _clone_raw_instruction(cast(InsnInfo, item), bytecode_offset=offset)
     if isinstance(lowered, LookupSwitch):
         lowered.npairs = len(lowered.pairs)
     return lowered
@@ -835,22 +980,26 @@ def _lower_resolved_code(
     cp: ConstantPoolBuilder,
     keep_debug_info: bool,
 ) -> CodeAttr:
-    lowered_code = [
-        lowered
-        for item, offset in zip(items, resolution.instruction_offsets, strict=True)
-        if (lowered := _lower_instruction(item, offset, resolution.label_offsets, cp)) is not None
-    ]
-    exception_table = _lower_exception_handlers(code.exception_handlers, resolution.label_offsets, cp)
+    lowered_code: list[InsnInfo] = []
+    lowered_code_append = lowered_code.append
+    lower_instruction = _lower_instruction
+    label_offsets = resolution.label_offsets
+
+    for item, offset in zip(items, resolution.instruction_offsets, strict=True):
+        lowered = lower_instruction(item, offset, label_offsets, cp)
+        if lowered is not None:
+            lowered_code_append(lowered)
+    exception_table = _lower_exception_handlers(code.exception_handlers, label_offsets, cp)
 
     line_number_attr = None
     local_variable_attr = None
     local_variable_type_attr = None
     if keep_debug_info:
-        line_number_attr = _build_line_number_attribute(code.line_numbers, resolution.label_offsets, cp)
-        local_variable_attr = _build_local_variable_attribute(code.local_variables, resolution.label_offsets, cp)
+        line_number_attr = _build_line_number_attribute(code.line_numbers, label_offsets, cp)
+        local_variable_attr = _build_local_variable_attribute(code.local_variables, label_offsets, cp)
         local_variable_type_attr = _build_local_variable_type_attribute(
             code.local_variable_types,
-            resolution.label_offsets,
+            label_offsets,
             cp,
         )
 
@@ -923,21 +1072,24 @@ def lower_code(
 
     debug_policy = normalize_debug_info_policy(debug_info)
     keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE and not is_code_debug_info_stale(code)
-    items = [_clone_code_item(item) for item in code.instructions]
+    items = list(code.instructions)
+    ldc_index_cache: dict[int, int] | None = None
+    if _needs_ldc_index_cache(items):
+        ldc_index_cache = _build_ldc_index_cache(items, cp)
 
     while True:
-        resolution = resolve_labels(items, cp)
+        resolution = _resolve_labels_with_cache(items, ldc_index_cache)
         if resolution.total_code_length > 65535:
             raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
         if not _promote_overflow_branches(items, resolution):
             break
 
-    resolution = resolve_labels(items, cp)
-    if resolution.total_code_length > 65535:
-        raise ValueError(f"code length {resolution.total_code_length} exceeds JVM maximum of 65535 bytes")
-
-    _lower_resolved_code(code, items, resolution, _clone_constant_pool_builder(cp), keep_debug_info)
-    result = _lower_resolved_code(code, items, resolution, cp, keep_debug_info)
+    checkpoint = cp.checkpoint()
+    try:
+        result = _lower_resolved_code(code, items, resolution, cp, keep_debug_info)
+    except Exception:
+        cp.rollback(checkpoint)
+        raise
 
     if recompute_frames:
         assert method is not None and class_name is not None
@@ -987,7 +1139,7 @@ def resolve_catch_type(cp: ConstantPoolBuilder, catch_type_index: int) -> str | 
     if catch_type_index == 0:
         return None
 
-    entry = cp.get(catch_type_index)
+    entry = cp.peek(catch_type_index)
     if not isinstance(entry, ClassInfo):
         raise ValueError(f"catch_type CP index {catch_type_index} is not a CONSTANT_Class")
     return cp.resolve_utf8(entry.name_index)
@@ -1022,6 +1174,29 @@ def _lower_ldc_value(value: LdcValue, cp: ConstantPoolBuilder) -> int:
     return cp.add_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
 
 
+def _find_existing_ldc_index(value: LdcValue, cp: ConstantPoolBuilder) -> int | None:
+    if isinstance(value, LdcInt):
+        return cp.find_integer(value.value)
+    if isinstance(value, LdcFloat):
+        return cp.find_float(value.raw_bits)
+    if isinstance(value, LdcLong):
+        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
+        high = (unsigned >> 32) & 0xFFFFFFFF
+        low = unsigned & 0xFFFFFFFF
+        return cp.find_long(high, low)
+    if isinstance(value, LdcDouble):
+        return cp.find_double(value.high_bytes, value.low_bytes)
+    if isinstance(value, LdcString):
+        return cp.find_string(value.value)
+    if isinstance(value, LdcClass):
+        return cp.find_class(value.name)
+    if isinstance(value, LdcMethodType):
+        return cp.find_method_type(value.descriptor)
+    if isinstance(value, LdcMethodHandle):
+        return _find_existing_ldc_method_handle(value, cp)
+    return cp.find_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
+
+
 def _lower_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) -> int:
     """Lower an ``LdcMethodHandle`` to a CONSTANT_MethodHandle CP index."""
     kind = value.reference_kind
@@ -1039,3 +1214,24 @@ def _lower_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) ->
     else:
         raise ValueError(f"invalid MethodHandle reference_kind: {kind}")
     return cp.add_method_handle(kind, ref_index)
+
+
+def _find_existing_ldc_method_handle(value: LdcMethodHandle, cp: ConstantPoolBuilder) -> int | None:
+    kind = value.reference_kind
+    if kind in (1, 2, 3, 4):
+        ref_index = cp.find_fieldref(value.owner, value.name, value.descriptor)
+    elif kind in (5, 8):
+        ref_index = cp.find_methodref(value.owner, value.name, value.descriptor)
+    elif kind == 9:
+        ref_index = cp.find_interface_methodref(value.owner, value.name, value.descriptor)
+    elif kind in (6, 7):
+        if value.is_interface:
+            ref_index = cp.find_interface_methodref(value.owner, value.name, value.descriptor)
+        else:
+            ref_index = cp.find_methodref(value.owner, value.name, value.descriptor)
+    else:
+        raise ValueError(f"invalid MethodHandle reference_kind: {kind}")
+
+    if ref_index is None:
+        return None
+    return cp.find_method_handle(kind, ref_index)

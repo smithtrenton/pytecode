@@ -602,6 +602,24 @@ def test_find_name_and_type_miss_no_entries():
     assert b.find_name_and_type("x", "I") is None
 
 
+def test_find_fieldref_hit():
+    b = fresh()
+    idx = b.add_fieldref("Foo", "x", "I")
+    assert b.find_fieldref("Foo", "x", "I") == idx
+
+
+def test_find_methodref_hit():
+    b = fresh()
+    idx = b.add_methodref("Foo", "bar", "()V")
+    assert b.find_methodref("Foo", "bar", "()V") == idx
+
+
+def test_find_interface_methodref_hit():
+    b = fresh()
+    idx = b.add_interface_methodref("Iface", "run", "()V")
+    assert b.find_interface_methodref("Iface", "run", "()V") == idx
+
+
 def test_resolve_utf8():
     b = fresh()
     idx = b.add_utf8("hello")
@@ -851,6 +869,158 @@ def test_from_pool_build_round_trip():
             assert isinstance(copy_, cp_module.ConstantPoolInfo)
             assert type(orig) is type(copy_)
             assert orig.index == copy_.index
+
+
+def test_clone_preserves_indexes_and_dedup_lookups():
+    b = ConstantPoolBuilder.from_pool(_make_small_pool())
+
+    cloned = b.clone()
+
+    assert cloned.build() == b.build()
+    assert cloned.count == b.count
+    assert cloned.find_utf8("Foo") == 1
+    assert cloned.find_class("Foo") == 3
+    assert cloned.add_utf8("Foo") == 1
+    assert cloned.add_utf8("new") == 5
+    assert b.find_utf8("new") is None
+    assert b.count == 5
+
+
+def test_find_compound_entries_from_imported_pool():
+    b = ConstantPoolBuilder()
+    string_idx = b.add_string("hello")
+    method_type_idx = b.add_method_type("()V")
+    fieldref_idx = b.add_fieldref("Owner", "value", "I")
+    methodref_idx = b.add_methodref("Owner", "call", "()V")
+    interface_methodref_idx = b.add_interface_methodref("Owner", "iface", "()V")
+    method_handle_idx = b.add_method_handle(5, methodref_idx)
+    dynamic_idx = b.add_dynamic(7, "dyn", "I")
+
+    imported = ConstantPoolBuilder.from_pool(b.build())
+
+    assert imported.find_string("hello") == string_idx
+    assert imported.find_method_type("()V") == method_type_idx
+    assert imported.find_fieldref("Owner", "value", "I") == fieldref_idx
+    assert imported.find_methodref("Owner", "call", "()V") == methodref_idx
+    assert imported.find_interface_methodref("Owner", "iface", "()V") == interface_methodref_idx
+    assert imported.find_method_handle(5, methodref_idx) == method_handle_idx
+    assert imported.find_dynamic(7, "dyn", "I") == dynamic_idx
+
+
+def test_checkpoint_and_rollback_restore_allocation_state():
+    b = ConstantPoolBuilder()
+    original_idx = b.add_utf8("original")
+    checkpoint = b.checkpoint()
+
+    new_utf8 = b.add_utf8("later")
+    new_class = b.add_class("Owner")
+
+    assert new_utf8 != original_idx
+    assert new_class is not None
+
+    b.rollback(checkpoint)
+
+    assert b.find_utf8("original") == original_idx
+    assert b.find_utf8("later") is None
+    assert b.find_class("Owner") is None
+    assert b.count == 2
+
+
+def test_checkpoint_and_rollback_restore_utf8_caches():
+    b = ConstantPoolBuilder()
+    idx = b.add_utf8("original")
+    assert b.resolve_utf8(idx) == "original"
+    checkpoint = b.checkpoint()
+
+    later_idx = b.add_utf8("later")
+    assert b.resolve_utf8(later_idx) == "later"
+    assert b.find_utf8("later") == later_idx
+
+    b.rollback(checkpoint)
+
+    assert b.find_utf8("original") == idx
+    assert b.find_utf8("later") is None
+    assert b.resolve_utf8(idx) == "original"
+
+
+def test_checkpoint_and_rollback_restore_semantic_caches():
+    b = ConstantPoolBuilder()
+    fieldref_idx = b.add_fieldref("Owner", "value", "I")
+    methodref_idx = b.add_methodref("Owner", "call", "()V")
+    checkpoint = b.checkpoint()
+
+    later_fieldref_idx = b.add_fieldref("Later", "value", "I")
+    later_methodref_idx = b.add_methodref("Later", "call", "()V")
+
+    assert later_fieldref_idx != fieldref_idx
+    assert later_methodref_idx != methodref_idx
+
+    b.rollback(checkpoint)
+
+    assert b.find_fieldref("Owner", "value", "I") == fieldref_idx
+    assert b.find_methodref("Owner", "call", "()V") == methodref_idx
+    assert b.find_fieldref("Later", "value", "I") is None
+    assert b.find_methodref("Later", "call", "()V") is None
+
+
+def test_add_compound_entries_reuse_imported_indexes_without_growth():
+    b = fresh()
+    class_idx = b.add_class("Owner")
+    string_idx = b.add_string("hello")
+    nat_idx = b.add_name_and_type("value", "I")
+    fieldref_idx = b.add_fieldref("Owner", "value", "I")
+    methodref_idx = b.add_methodref("Owner", "call", "()V")
+    interface_methodref_idx = b.add_interface_methodref("Iface", "run", "()V")
+
+    imported = ConstantPoolBuilder.from_pool(b.build())
+    imported_count = imported.count
+
+    assert imported.add_class("Owner") == class_idx
+    assert imported.add_string("hello") == string_idx
+    assert imported.add_name_and_type("value", "I") == nat_idx
+    assert imported.add_fieldref("Owner", "value", "I") == fieldref_idx
+    assert imported.add_methodref("Owner", "call", "()V") == methodref_idx
+    assert imported.add_interface_methodref("Iface", "run", "()V") == interface_methodref_idx
+    assert imported.count == imported_count
+
+
+def test_peek_returns_live_entry_without_copying():
+    b = fresh()
+    idx = b.add_utf8("x")
+
+    entry = b.peek(idx)
+
+    assert isinstance(entry, cp_module.Utf8Info)
+    entry.str_bytes = b"changed"
+    again = b.peek(idx)
+    assert isinstance(again, cp_module.Utf8Info)
+    assert again.str_bytes == b"changed"
+
+
+def test_get_still_returns_entry_copy_when_peek_exists():
+    b = fresh()
+    idx = b.add_utf8("x")
+
+    entry = b.get(idx)
+    assert isinstance(entry, cp_module.Utf8Info)
+    entry.str_bytes = b"changed"
+
+    original = b.peek(idx)
+    assert isinstance(original, cp_module.Utf8Info)
+    assert original.str_bytes == b"x"
+
+
+def test_resolve_utf8_redecodes_after_peek_mutation():
+    b = fresh()
+    idx = b.add_utf8("x")
+    assert b.resolve_utf8(idx) == "x"
+
+    entry = b.peek(idx)
+    assert isinstance(entry, cp_module.Utf8Info)
+    entry.str_bytes = b"y"
+    entry.length = 1
+
+    assert b.resolve_utf8(idx) == "y"
 
 
 def test_from_pool_rejects_missing_index_zero_placeholder():

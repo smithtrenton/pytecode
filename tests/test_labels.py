@@ -31,12 +31,15 @@ from pytecode.instructions import (
     InvokeInterface,
     LocalIndex,
     LocalIndexW,
+    LookupSwitch,
+    MatchOffsetPair,
     MultiANewArray,
     NewArray,
     ShortValue,
 )
 from pytecode.labels import (
     BranchInsn,
+    CodeItem,
     ExceptionHandler,
     Label,
     LineNumberEntry,
@@ -44,11 +47,14 @@ from pytecode.labels import (
     LocalVariableTypeEntry,
     LookupSwitchInsn,
     TableSwitchInsn,
+    _build_ldc_index_cache,
+    _resolve_labels_with_cache,
+    clone_raw_instruction,
     lower_code,
     resolve_labels,
 )
 from pytecode.model import ClassModel, CodeModel, MethodModel
-from pytecode.operands import LdcInsn, LdcInt, LdcString
+from pytecode.operands import FieldInsn, LdcInsn, LdcInt, LdcString, MethodInsn, TypeInsn
 from tests.helpers import compile_java_resource
 
 
@@ -257,6 +263,66 @@ def test_lower_code_does_not_mutate_cp_on_failed_validation() -> None:
     assert cp.build() == before
 
 
+def test_lower_code_commits_constant_pool_on_success() -> None:
+    cp = ConstantPoolBuilder()
+    code = CodeModel(
+        max_stack=1,
+        max_locals=0,
+        instructions=[
+            LdcInsn(LdcString("shared")),
+            LdcInsn(LdcString("shared")),
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, cp)
+
+    shared_utf8 = cp.find_utf8("shared")
+    assert shared_utf8 is not None
+    string_index = cp.add_string("shared")
+    assert cp.count > 1
+    assert isinstance(lowered.code[0], (LocalIndex, ConstPoolIndex))
+    assert isinstance(lowered.code[1], (LocalIndex, ConstPoolIndex))
+    assert lowered.code[0].index == lowered.code[1].index == string_index
+
+
+def test_lower_code_reuses_symbolic_cp_indexes_within_pass() -> None:
+    cp = ConstantPoolBuilder()
+    code = CodeModel(
+        max_stack=2,
+        max_locals=0,
+        instructions=[
+            FieldInsn(InsnInfoType.GETSTATIC, "java/lang/System", "out", "Ljava/io/PrintStream;"),
+            FieldInsn(InsnInfoType.GETSTATIC, "java/lang/System", "out", "Ljava/io/PrintStream;"),
+            MethodInsn(InsnInfoType.INVOKEVIRTUAL, "java/io/PrintStream", "println", "(I)V"),
+            MethodInsn(InsnInfoType.INVOKEVIRTUAL, "java/io/PrintStream", "println", "(I)V"),
+            TypeInsn(InsnInfoType.NEW, "java/lang/StringBuilder"),
+            TypeInsn(InsnInfoType.NEW, "java/lang/StringBuilder"),
+            LdcInsn(LdcString("shared")),
+            LdcInsn(LdcString("shared")),
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+    )
+
+    lowered = lower_code(code, cp)
+
+    assert isinstance(lowered.code[0], ConstPoolIndex)
+    assert isinstance(lowered.code[1], ConstPoolIndex)
+    assert lowered.code[0].index == lowered.code[1].index
+
+    assert isinstance(lowered.code[2], ConstPoolIndex)
+    assert isinstance(lowered.code[3], ConstPoolIndex)
+    assert lowered.code[2].index == lowered.code[3].index
+
+    assert isinstance(lowered.code[4], ConstPoolIndex)
+    assert isinstance(lowered.code[5], ConstPoolIndex)
+    assert lowered.code[4].index == lowered.code[5].index
+
+    assert isinstance(lowered.code[6], (LocalIndex, ConstPoolIndex))
+    assert isinstance(lowered.code[7], (LocalIndex, ConstPoolIndex))
+    assert lowered.code[6].index == lowered.code[7].index
+
+
 def test_lower_code_promotes_goto_to_goto_w() -> None:
     far_target = Label("far")
     code = CodeModel(
@@ -275,6 +341,30 @@ def test_lower_code_promotes_goto_to_goto_w() -> None:
     assert isinstance(lowered.code[0], BranchW)
     assert lowered.code[0].type == InsnInfoType.GOTO_W
     assert lowered.code[0].offset > 32767
+
+
+def test_lower_code_branch_promotion_does_not_mutate_original_instructions() -> None:
+    far_target = Label("far")
+    original_branch = BranchInsn(InsnInfoType.IFEQ, far_target)
+    original_instructions: list[CodeItem] = [
+        original_branch,
+        *[InsnInfo(InsnInfoType.NOP, -1) for _ in range(33000)],
+        far_target,
+        InsnInfo(InsnInfoType.RETURN, -1),
+    ]
+    code = CodeModel(
+        max_stack=0,
+        max_locals=0,
+        instructions=list(original_instructions),
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert len(lowered.code) >= 2
+    assert code.instructions == original_instructions
+    assert code.instructions[0] is original_branch
+    assert isinstance(code.instructions[0], BranchInsn)
+    assert code.instructions[0].type == InsnInfoType.IFEQ
 
 
 def test_lower_code_inverts_conditional_branch_overflow() -> None:
@@ -785,6 +875,76 @@ def test_resolve_labels_multiple_branches_same_label() -> None:
     assert resolution.instruction_offsets[0] == 0
     assert resolution.instruction_offsets[1] == 3
     assert resolution.total_code_length == 7
+
+
+def test_resolve_labels_with_cache_matches_public_resolver() -> None:
+    end = Label("end")
+    items: list[CodeItem] = [LdcInsn(LdcInt(42)), end]
+    cp = ConstantPoolBuilder()
+
+    expected = resolve_labels(items, cp)
+    cached = _resolve_labels_with_cache(items, _build_ldc_index_cache(items, cp))
+
+    assert cached == expected
+
+
+def test_build_ldc_index_cache_reuses_imported_entries_without_cloning() -> None:
+    cp = ConstantPoolBuilder()
+    existing_index = cp.add_string("shared")
+    items: list[CodeItem] = [LdcInsn(LdcString("shared"))]
+
+    original_clone = ConstantPoolBuilder.clone
+
+    def fail_clone(self: ConstantPoolBuilder) -> ConstantPoolBuilder:
+        raise AssertionError("clone() should not be needed for pre-existing LDC entries")
+
+    ConstantPoolBuilder.clone = fail_clone
+    try:
+        cache = _build_ldc_index_cache(items, cp)
+    finally:
+        ConstantPoolBuilder.clone = original_clone
+
+    assert cache[id(items[0])] == existing_index
+
+
+def test_build_ldc_index_cache_rolls_back_probe_allocations() -> None:
+    cp = ConstantPoolBuilder()
+    before = cp.build()
+    items: list[CodeItem] = [LdcInsn(LdcString("new-value"))]
+
+    cache = _build_ldc_index_cache(items, cp)
+
+    assert cache[id(items[0])] is not None
+    assert cp.build() == before
+
+
+def test_clone_raw_instruction_copies_lookup_switch_pairs_and_offset() -> None:
+    original = LookupSwitch(
+        InsnInfoType.LOOKUPSWITCH,
+        3,
+        10,
+        2,
+        [MatchOffsetPair(1, 20), MatchOffsetPair(2, 30)],
+    )
+
+    cloned = clone_raw_instruction(original, bytecode_offset=7)
+
+    assert isinstance(cloned, LookupSwitch)
+    assert cloned.bytecode_offset == 7
+    assert cloned.pairs == original.pairs
+    assert cloned.pairs is not original.pairs
+
+
+def test_clone_raw_instruction_copies_simple_raw_instruction_with_new_offset() -> None:
+    original = LocalIndex(InsnInfoType.ILOAD, 4, 2)
+
+    cloned = clone_raw_instruction(original, bytecode_offset=9)
+
+    assert isinstance(cloned, LocalIndex)
+    assert cloned is not original
+    assert cloned.type == original.type
+    assert cloned.index == original.index
+    assert cloned.bytecode_offset == 9
 
 
 def test_resolve_labels_empty_list() -> None:

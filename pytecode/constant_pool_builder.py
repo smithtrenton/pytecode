@@ -7,8 +7,7 @@ lookups, and deterministic ordering.
 
 from __future__ import annotations
 
-import copy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 __all__ = ["ConstantPoolBuilder"]
 
@@ -75,54 +74,189 @@ _UTF8_MAX_BYTES: int = 65535
 # ignoring its index and file offset.  Utf8 entries include a bytes element;
 # all other entries contain only int elements.
 type _CPKey = tuple[int | bytes, ...]
+type _ResolvedUtf8CacheEntry = tuple[bytes, str]
+type _NameAndTypeKey = tuple[str, str]
+type _MemberRefKey = tuple[str, str, str]
+type _Checkpoint = tuple[
+    int,
+    int,
+    dict[_CPKey, int],
+    dict[bytes, int],
+    dict[str, int],
+    dict[int, _ResolvedUtf8CacheEntry],
+    dict[str, int],
+    dict[str, int],
+    dict[_NameAndTypeKey, int],
+    dict[_MemberRefKey, int],
+    dict[_MemberRefKey, int],
+    dict[_MemberRefKey, int],
+]
 
 
 def _entry_key(entry: ConstantPoolInfo) -> _CPKey:
     """Return the deduplication key for *entry* based solely on its content."""
-    if isinstance(entry, Utf8Info):
-        return (_TAG_UTF8, entry.str_bytes)
-    if isinstance(entry, IntegerInfo):
-        return (_TAG_INTEGER, entry.value_bytes)
-    if isinstance(entry, FloatInfo):
-        return (_TAG_FLOAT, entry.value_bytes)
-    if isinstance(entry, LongInfo):
-        return (_TAG_LONG, entry.high_bytes, entry.low_bytes)
-    if isinstance(entry, DoubleInfo):
-        return (_TAG_DOUBLE, entry.high_bytes, entry.low_bytes)
-    if isinstance(entry, ClassInfo):
-        return (_TAG_CLASS, entry.name_index)
-    if isinstance(entry, StringInfo):
-        return (_TAG_STRING, entry.string_index)
-    if isinstance(entry, FieldrefInfo):
-        return (_TAG_FIELDREF, entry.class_index, entry.name_and_type_index)
-    if isinstance(entry, MethodrefInfo):
-        return (_TAG_METHODREF, entry.class_index, entry.name_and_type_index)
-    if isinstance(entry, InterfaceMethodrefInfo):
-        return (_TAG_INTERFACE_METHODREF, entry.class_index, entry.name_and_type_index)
-    if isinstance(entry, NameAndTypeInfo):
-        return (_TAG_NAME_AND_TYPE, entry.name_index, entry.descriptor_index)
-    if isinstance(entry, MethodHandleInfo):
-        return (_TAG_METHOD_HANDLE, entry.reference_kind, entry.reference_index)
-    if isinstance(entry, MethodTypeInfo):
-        return (_TAG_METHOD_TYPE, entry.descriptor_index)
-    if isinstance(entry, DynamicInfo):
-        return (_TAG_DYNAMIC, entry.bootstrap_method_attr_index, entry.name_and_type_index)
-    if isinstance(entry, InvokeDynamicInfo):
-        return (_TAG_INVOKE_DYNAMIC, entry.bootstrap_method_attr_index, entry.name_and_type_index)
-    if isinstance(entry, ModuleInfo):
-        return (_TAG_MODULE, entry.name_index)
-    if isinstance(entry, PackageInfo):
-        return (_TAG_PACKAGE, entry.name_index)
-    raise ValueError(f"Unknown constant pool entry type: {type(entry).__name__}")
+    entry_type = type(entry)
+    if entry_type is Utf8Info:
+        utf8 = cast(Utf8Info, entry)
+        return (_TAG_UTF8, utf8.str_bytes)
+    if entry_type is IntegerInfo:
+        integer = cast(IntegerInfo, entry)
+        return (_TAG_INTEGER, integer.value_bytes)
+    if entry_type is FloatInfo:
+        float_info = cast(FloatInfo, entry)
+        return (_TAG_FLOAT, float_info.value_bytes)
+    if entry_type is LongInfo:
+        long_info = cast(LongInfo, entry)
+        return (_TAG_LONG, long_info.high_bytes, long_info.low_bytes)
+    if entry_type is DoubleInfo:
+        double_info = cast(DoubleInfo, entry)
+        return (_TAG_DOUBLE, double_info.high_bytes, double_info.low_bytes)
+    if entry_type is ClassInfo:
+        class_info = cast(ClassInfo, entry)
+        return (_TAG_CLASS, class_info.name_index)
+    if entry_type is StringInfo:
+        string_info = cast(StringInfo, entry)
+        return (_TAG_STRING, string_info.string_index)
+    if entry_type is FieldrefInfo:
+        fieldref = cast(FieldrefInfo, entry)
+        return (_TAG_FIELDREF, fieldref.class_index, fieldref.name_and_type_index)
+    if entry_type is MethodrefInfo:
+        methodref = cast(MethodrefInfo, entry)
+        return (_TAG_METHODREF, methodref.class_index, methodref.name_and_type_index)
+    if entry_type is InterfaceMethodrefInfo:
+        interface_methodref = cast(InterfaceMethodrefInfo, entry)
+        return (_TAG_INTERFACE_METHODREF, interface_methodref.class_index, interface_methodref.name_and_type_index)
+    if entry_type is NameAndTypeInfo:
+        name_and_type = cast(NameAndTypeInfo, entry)
+        return (_TAG_NAME_AND_TYPE, name_and_type.name_index, name_and_type.descriptor_index)
+    if entry_type is MethodHandleInfo:
+        method_handle = cast(MethodHandleInfo, entry)
+        return (_TAG_METHOD_HANDLE, method_handle.reference_kind, method_handle.reference_index)
+    if entry_type is MethodTypeInfo:
+        method_type = cast(MethodTypeInfo, entry)
+        return (_TAG_METHOD_TYPE, method_type.descriptor_index)
+    if entry_type is DynamicInfo:
+        dynamic = cast(DynamicInfo, entry)
+        return (_TAG_DYNAMIC, dynamic.bootstrap_method_attr_index, dynamic.name_and_type_index)
+    if entry_type is InvokeDynamicInfo:
+        invoke_dynamic = cast(InvokeDynamicInfo, entry)
+        return (_TAG_INVOKE_DYNAMIC, invoke_dynamic.bootstrap_method_attr_index, invoke_dynamic.name_and_type_index)
+    if entry_type is ModuleInfo:
+        module = cast(ModuleInfo, entry)
+        return (_TAG_MODULE, module.name_index)
+    if entry_type is PackageInfo:
+        package = cast(PackageInfo, entry)
+        return (_TAG_PACKAGE, package.name_index)
+    raise ValueError(f"Unknown constant pool entry type: {entry_type.__name__}")
 
 
 def _is_double_slot(entry: ConstantPoolInfo) -> bool:
     """Return *True* if *entry* is a Long or Double (occupies two CP slots)."""
-    return isinstance(entry, (LongInfo, DoubleInfo))
+    return type(entry) in (LongInfo, DoubleInfo)
+
+
+def _copy_pool_entry(entry: ConstantPoolInfo) -> ConstantPoolInfo:
+    entry_type = type(entry)
+    if entry_type is Utf8Info:
+        utf8 = cast(Utf8Info, entry)
+        return Utf8Info(utf8.index, utf8.offset, utf8.tag, utf8.length, utf8.str_bytes)
+    if entry_type is IntegerInfo:
+        integer = cast(IntegerInfo, entry)
+        return IntegerInfo(integer.index, integer.offset, integer.tag, integer.value_bytes)
+    if entry_type is FloatInfo:
+        float_info = cast(FloatInfo, entry)
+        return FloatInfo(float_info.index, float_info.offset, float_info.tag, float_info.value_bytes)
+    if entry_type is LongInfo:
+        long_info = cast(LongInfo, entry)
+        return LongInfo(long_info.index, long_info.offset, long_info.tag, long_info.high_bytes, long_info.low_bytes)
+    if entry_type is DoubleInfo:
+        double_info = cast(DoubleInfo, entry)
+        return DoubleInfo(
+            double_info.index,
+            double_info.offset,
+            double_info.tag,
+            double_info.high_bytes,
+            double_info.low_bytes,
+        )
+    if entry_type is ClassInfo:
+        class_info = cast(ClassInfo, entry)
+        return ClassInfo(class_info.index, class_info.offset, class_info.tag, class_info.name_index)
+    if entry_type is StringInfo:
+        string_info = cast(StringInfo, entry)
+        return StringInfo(string_info.index, string_info.offset, string_info.tag, string_info.string_index)
+    if entry_type is FieldrefInfo:
+        fieldref = cast(FieldrefInfo, entry)
+        return FieldrefInfo(
+            fieldref.index, fieldref.offset, fieldref.tag, fieldref.class_index, fieldref.name_and_type_index
+        )
+    if entry_type is MethodrefInfo:
+        methodref = cast(MethodrefInfo, entry)
+        return MethodrefInfo(
+            methodref.index,
+            methodref.offset,
+            methodref.tag,
+            methodref.class_index,
+            methodref.name_and_type_index,
+        )
+    if entry_type is InterfaceMethodrefInfo:
+        interface_methodref = cast(InterfaceMethodrefInfo, entry)
+        return InterfaceMethodrefInfo(
+            interface_methodref.index,
+            interface_methodref.offset,
+            interface_methodref.tag,
+            interface_methodref.class_index,
+            interface_methodref.name_and_type_index,
+        )
+    if entry_type is NameAndTypeInfo:
+        name_and_type = cast(NameAndTypeInfo, entry)
+        return NameAndTypeInfo(
+            name_and_type.index,
+            name_and_type.offset,
+            name_and_type.tag,
+            name_and_type.name_index,
+            name_and_type.descriptor_index,
+        )
+    if entry_type is MethodHandleInfo:
+        method_handle = cast(MethodHandleInfo, entry)
+        return MethodHandleInfo(
+            method_handle.index,
+            method_handle.offset,
+            method_handle.tag,
+            method_handle.reference_kind,
+            method_handle.reference_index,
+        )
+    if entry_type is MethodTypeInfo:
+        method_type = cast(MethodTypeInfo, entry)
+        return MethodTypeInfo(method_type.index, method_type.offset, method_type.tag, method_type.descriptor_index)
+    if entry_type is DynamicInfo:
+        dynamic = cast(DynamicInfo, entry)
+        return DynamicInfo(
+            dynamic.index,
+            dynamic.offset,
+            dynamic.tag,
+            dynamic.bootstrap_method_attr_index,
+            dynamic.name_and_type_index,
+        )
+    if entry_type is InvokeDynamicInfo:
+        invoke_dynamic = cast(InvokeDynamicInfo, entry)
+        return InvokeDynamicInfo(
+            invoke_dynamic.index,
+            invoke_dynamic.offset,
+            invoke_dynamic.tag,
+            invoke_dynamic.bootstrap_method_attr_index,
+            invoke_dynamic.name_and_type_index,
+        )
+    if entry_type is ModuleInfo:
+        module = cast(ModuleInfo, entry)
+        return ModuleInfo(module.index, module.offset, module.tag, module.name_index)
+    if entry_type is PackageInfo:
+        package = cast(PackageInfo, entry)
+        return PackageInfo(package.index, package.offset, package.tag, package.name_index)
+    raise ValueError(f"Unknown constant pool entry type: {entry_type.__name__}")
 
 
 def _copy_entry(entry: ConstantPoolInfo | None) -> ConstantPoolInfo | None:
-    return copy.copy(entry) if entry is not None else None
+    return _copy_pool_entry(entry) if entry is not None else None
 
 
 def _require_pool_entry(
@@ -186,28 +320,27 @@ def _validate_method_handle(
         raise ValueError(f"reference_kind must be in range [1, 9], got {reference_kind}")
 
     target = _require_pool_entry(pool, reference_index, context="MethodHandle reference")
+    target_type = type(target)
 
     if reference_kind in (1, 2, 3, 4):
         if not isinstance(target, FieldrefInfo):
-            raise ValueError(f"reference_kind {reference_kind} requires CONSTANT_Fieldref, got {type(target).__name__}")
+            raise ValueError(f"reference_kind {reference_kind} requires CONSTANT_Fieldref, got {target_type.__name__}")
         return
 
     if reference_kind in (5, 8):
         if not isinstance(target, MethodrefInfo):
-            raise ValueError(
-                f"reference_kind {reference_kind} requires CONSTANT_Methodref, got {type(target).__name__}"
-            )
+            raise ValueError(f"reference_kind {reference_kind} requires CONSTANT_Methodref, got {target_type.__name__}")
     elif reference_kind in (6, 7):
         if not isinstance(target, (MethodrefInfo, InterfaceMethodrefInfo)):
             raise ValueError(
                 "reference_kind "
                 f"{reference_kind} requires CONSTANT_Methodref or CONSTANT_InterfaceMethodref, "
-                f"got {type(target).__name__}"
+                f"got {target_type.__name__}"
             )
     else:
         if not isinstance(target, InterfaceMethodrefInfo):
             raise ValueError(
-                f"reference_kind {reference_kind} requires CONSTANT_InterfaceMethodref, got {type(target).__name__}"
+                f"reference_kind {reference_kind} requires CONSTANT_InterfaceMethodref, got {target_type.__name__}"
             )
 
     member_name = _method_handle_member_name(pool, target)
@@ -281,13 +414,29 @@ class ConstantPoolBuilder:
         self._key_to_index: dict[_CPKey, int] = {}
         # Fast reverse lookup for Utf8 entries: str_bytes → CP index.
         self._utf8_to_index: dict[bytes, int] = {}
+        # Fast reverse lookup for Utf8 entries by decoded Python string.
+        self._string_to_utf8_index: dict[str, int] = {}
+        # Lazy decode cache keyed by CP index; bytes identity guards against live-entry mutation via peek().
+        self._resolved_utf8_cache: dict[int, _ResolvedUtf8CacheEntry] = {}
+        # Lazy semantic reverse lookups used heavily by lowering.
+        self._class_name_to_index: dict[str, int] = {}
+        self._string_value_to_index: dict[str, int] = {}
+        self._name_and_type_to_index: dict[_NameAndTypeKey, int] = {}
+        self._fieldref_to_index: dict[_MemberRefKey, int] = {}
+        self._methodref_to_index: dict[_MemberRefKey, int] = {}
+        self._interface_methodref_to_index: dict[_MemberRefKey, int] = {}
 
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_pool(cls, pool: list[ConstantPoolInfo | None]) -> ConstantPoolBuilder:
+    def from_pool(
+        cls,
+        pool: list[ConstantPoolInfo | None],
+        *,
+        skip_validation: bool = False,
+    ) -> ConstantPoolBuilder:
         """Seed a new builder from an existing parsed constant pool.
 
         The original indexes are preserved so that all existing CP references
@@ -309,21 +458,88 @@ class ConstantPoolBuilder:
                 entries).
         """
         builder = cls()
-        _validate_import_pool(pool)
-        # Shallow-copy each entry.  All ConstantPoolInfo fields are int or
-        # bytes (both immutable), so a shallow copy is sufficient to ensure
-        # the builder owns independent objects.
+        if not skip_validation:
+            _validate_import_pool(pool)
         builder._pool = [_copy_entry(entry) for entry in pool]
         builder._next_index = len(pool)
-        # Rebuild dedup maps from the copied entries.
         for entry in builder._pool:
             if entry is None:
                 continue
             key = _entry_key(entry)
             builder._key_to_index.setdefault(key, entry.index)
-            if isinstance(entry, Utf8Info):
+            if type(entry) is Utf8Info:
                 builder._utf8_to_index.setdefault(entry.str_bytes, entry.index)
         return builder
+
+    def clone(self) -> ConstantPoolBuilder:
+        """Return a fast defensive copy of this builder.
+
+        The clone preserves the current pool contents, indexes, and dedup maps
+        without re-validating a pool that was already validated on import or
+        incremental insertion.
+        """
+        clone = type(self)()
+        clone._pool = [_copy_entry(entry) for entry in self._pool]
+        clone._next_index = self._next_index
+        clone._key_to_index = dict(self._key_to_index)
+        clone._utf8_to_index = dict(self._utf8_to_index)
+        clone._string_to_utf8_index = dict(self._string_to_utf8_index)
+        clone._resolved_utf8_cache = dict(self._resolved_utf8_cache)
+        clone._class_name_to_index = dict(self._class_name_to_index)
+        clone._string_value_to_index = dict(self._string_value_to_index)
+        clone._name_and_type_to_index = dict(self._name_and_type_to_index)
+        clone._fieldref_to_index = dict(self._fieldref_to_index)
+        clone._methodref_to_index = dict(self._methodref_to_index)
+        clone._interface_methodref_to_index = dict(self._interface_methodref_to_index)
+        return clone
+
+    def checkpoint(self) -> _Checkpoint:
+        """Capture the current allocation state for later rollback."""
+
+        return (
+            len(self._pool),
+            self._next_index,
+            dict(self._key_to_index),
+            dict(self._utf8_to_index),
+            dict(self._string_to_utf8_index),
+            dict(self._resolved_utf8_cache),
+            dict(self._class_name_to_index),
+            dict(self._string_value_to_index),
+            dict(self._name_and_type_to_index),
+            dict(self._fieldref_to_index),
+            dict(self._methodref_to_index),
+            dict(self._interface_methodref_to_index),
+        )
+
+    def rollback(self, checkpoint: _Checkpoint) -> None:
+        """Restore the builder to a previously captured checkpoint."""
+
+        (
+            pool_len,
+            next_index,
+            key_to_index,
+            utf8_to_index,
+            string_to_utf8_index,
+            resolved_utf8_cache,
+            class_name_to_index,
+            string_value_to_index,
+            name_and_type_to_index,
+            fieldref_to_index,
+            methodref_to_index,
+            interface_methodref_to_index,
+        ) = checkpoint
+        del self._pool[pool_len:]
+        self._next_index = next_index
+        self._key_to_index = key_to_index
+        self._utf8_to_index = utf8_to_index
+        self._string_to_utf8_index = string_to_utf8_index
+        self._resolved_utf8_cache = resolved_utf8_cache
+        self._class_name_to_index = class_name_to_index
+        self._string_value_to_index = string_value_to_index
+        self._name_and_type_to_index = name_and_type_to_index
+        self._fieldref_to_index = fieldref_to_index
+        self._methodref_to_index = methodref_to_index
+        self._interface_methodref_to_index = interface_methodref_to_index
 
     # ------------------------------------------------------------------
     # Internal allocation
@@ -391,7 +607,7 @@ class ConstantPoolBuilder:
             ValueError: If the entry fails validation (e.g. invalid modified
                 UTF-8 or illegal ``MethodHandle`` reference kind).
         """
-        entry_copy = copy.copy(entry)
+        entry_copy = _copy_pool_entry(entry)
         self._validate_entry(entry_copy)
         return self._allocate(entry_copy)
 
@@ -413,6 +629,10 @@ class ConstantPoolBuilder:
         Raises:
             ValueError: If the encoded form exceeds the 65 535-byte JVM limit.
         """
+        existing = self._string_to_utf8_index.get(value)
+        if existing is not None:
+            return existing
+
         encoded = encode_modified_utf8(value)
         if len(encoded) > _UTF8_MAX_BYTES:
             raise ValueError(f"Modified UTF-8 payload exceeds JVM u2 length limit of {_UTF8_MAX_BYTES} bytes")
@@ -420,9 +640,13 @@ class ConstantPoolBuilder:
         # Fast path: Utf8 lookup bypasses the general key dict.
         existing = self._utf8_to_index.get(encoded)
         if existing is not None:
+            self._string_to_utf8_index[value] = existing
             return existing
         entry = Utf8Info(index=0, offset=0, tag=_TAG_UTF8, length=len(encoded), str_bytes=encoded)
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._string_to_utf8_index[value] = index
+        self._resolved_utf8_cache[index] = (encoded, value)
+        return index
 
     def add_integer(self, value: int) -> int:
         """Add a ``CONSTANT_Integer`` entry (§4.4.4).
@@ -490,9 +714,14 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        existing = self._class_name_to_index.get(name)
+        if existing is not None:
+            return existing
         name_index = self.add_utf8(name)
         entry = ClassInfo(index=0, offset=0, tag=_TAG_CLASS, name_index=name_index)
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._class_name_to_index[name] = index
+        return index
 
     def add_string(self, value: str) -> int:
         """Add a ``CONSTANT_String`` entry (§4.4.3).
@@ -505,9 +734,14 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        existing = self._string_value_to_index.get(value)
+        if existing is not None:
+            return existing
         string_index = self.add_utf8(value)
         entry = StringInfo(index=0, offset=0, tag=_TAG_STRING, string_index=string_index)
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._string_value_to_index[value] = index
+        return index
 
     def add_name_and_type(self, name: str, descriptor: str) -> int:
         """Add a ``CONSTANT_NameAndType`` entry (§4.4.6).
@@ -521,6 +755,10 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        key = (name, descriptor)
+        existing = self._name_and_type_to_index.get(key)
+        if existing is not None:
+            return existing
         name_index = self.add_utf8(name)
         descriptor_index = self.add_utf8(descriptor)
         entry = NameAndTypeInfo(
@@ -530,7 +768,9 @@ class ConstantPoolBuilder:
             name_index=name_index,
             descriptor_index=descriptor_index,
         )
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._name_and_type_to_index[key] = index
+        return index
 
     def add_fieldref(self, class_name: str, field_name: str, descriptor: str) -> int:
         """Add a ``CONSTANT_Fieldref`` entry (§4.4.2).
@@ -546,6 +786,10 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        key = (class_name, field_name, descriptor)
+        existing = self._fieldref_to_index.get(key)
+        if existing is not None:
+            return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(field_name, descriptor)
         entry = FieldrefInfo(
@@ -555,7 +799,9 @@ class ConstantPoolBuilder:
             class_index=class_index,
             name_and_type_index=nat_index,
         )
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._fieldref_to_index[key] = index
+        return index
 
     def add_methodref(self, class_name: str, method_name: str, descriptor: str) -> int:
         """Add a ``CONSTANT_Methodref`` entry (§4.4.2).
@@ -570,6 +816,10 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        key = (class_name, method_name, descriptor)
+        existing = self._methodref_to_index.get(key)
+        if existing is not None:
+            return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
         entry = MethodrefInfo(
@@ -579,7 +829,9 @@ class ConstantPoolBuilder:
             class_index=class_index,
             name_and_type_index=nat_index,
         )
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._methodref_to_index[key] = index
+        return index
 
     def add_interface_methodref(self, class_name: str, method_name: str, descriptor: str) -> int:
         """Add a ``CONSTANT_InterfaceMethodref`` entry (§4.4.2).
@@ -594,6 +846,10 @@ class ConstantPoolBuilder:
         Returns:
             The CP index of the (possibly pre-existing) entry.
         """
+        key = (class_name, method_name, descriptor)
+        existing = self._interface_methodref_to_index.get(key)
+        if existing is not None:
+            return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
         entry = InterfaceMethodrefInfo(
@@ -603,7 +859,9 @@ class ConstantPoolBuilder:
             class_index=class_index,
             name_and_type_index=nat_index,
         )
-        return self._allocate(entry)
+        index = self._allocate(entry)
+        self._interface_methodref_to_index[key] = index
+        return index
 
     # ------------------------------------------------------------------
     # Remaining entry types
@@ -754,6 +1012,12 @@ class ConstantPoolBuilder:
             raise IndexError(f"CP index {index} out of range [0, {len(self._pool) - 1}]")
         return _copy_entry(self._pool[index])
 
+    def peek(self, index: int) -> ConstantPoolInfo | None:
+        """Return the entry at a CP index without allocating a defensive copy."""
+        if index < 0 or index >= len(self._pool):
+            raise IndexError(f"CP index {index} out of range [0, {len(self._pool) - 1}]")
+        return self._pool[index]
+
     def find_utf8(self, value: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_Utf8`` entry by string value.
 
@@ -763,7 +1027,38 @@ class ConstantPoolBuilder:
         Returns:
             The CP index if found, otherwise ``None``.
         """
-        return self._utf8_to_index.get(encode_modified_utf8(value))
+        existing = self._string_to_utf8_index.get(value)
+        if existing is not None:
+            return existing
+
+        encoded = encode_modified_utf8(value)
+        existing = self._utf8_to_index.get(encoded)
+        if existing is not None:
+            self._string_to_utf8_index[value] = existing
+        return existing
+
+    def _find_key(self, key: _CPKey) -> int | None:
+        return self._key_to_index.get(key)
+
+    def find_integer(self, value: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Integer`` entry."""
+
+        return self._find_key((_TAG_INTEGER, value))
+
+    def find_float(self, raw_bits: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Float`` entry."""
+
+        return self._find_key((_TAG_FLOAT, raw_bits))
+
+    def find_long(self, high: int, low: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Long`` entry."""
+
+        return self._find_key((_TAG_LONG, high, low))
+
+    def find_double(self, high: int, low: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Double`` entry."""
+
+        return self._find_key((_TAG_DOUBLE, high, low))
 
     def find_class(self, name: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_Class`` entry by class name.
@@ -774,11 +1069,38 @@ class ConstantPoolBuilder:
         Returns:
             The CP index if found, otherwise ``None``.
         """
+        existing = self._class_name_to_index.get(name)
+        if existing is not None:
+            return existing
         utf8_idx = self.find_utf8(name)
         if utf8_idx is None:
             return None
-        key: _CPKey = (_TAG_CLASS, utf8_idx)
-        return self._key_to_index.get(key)
+        existing = self._find_key((_TAG_CLASS, utf8_idx))
+        if existing is not None:
+            self._class_name_to_index[name] = existing
+        return existing
+
+    def find_string(self, value: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_String`` entry by value."""
+
+        existing = self._string_value_to_index.get(value)
+        if existing is not None:
+            return existing
+        string_index = self.find_utf8(value)
+        if string_index is None:
+            return None
+        existing = self._find_key((_TAG_STRING, string_index))
+        if existing is not None:
+            self._string_value_to_index[value] = existing
+        return existing
+
+    def find_method_type(self, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_MethodType`` entry."""
+
+        descriptor_index = self.find_utf8(descriptor)
+        if descriptor_index is None:
+            return None
+        return self._find_key((_TAG_METHOD_TYPE, descriptor_index))
 
     def find_name_and_type(self, name: str, descriptor: str) -> int | None:
         """Look up the CP index of a ``CONSTANT_NameAndType`` entry.
@@ -790,14 +1112,87 @@ class ConstantPoolBuilder:
         Returns:
             The CP index if found, otherwise ``None``.
         """
+        key = (name, descriptor)
+        existing = self._name_and_type_to_index.get(key)
+        if existing is not None:
+            return existing
         name_idx = self.find_utf8(name)
         if name_idx is None:
             return None
         desc_idx = self.find_utf8(descriptor)
         if desc_idx is None:
             return None
-        key: _CPKey = (_TAG_NAME_AND_TYPE, name_idx, desc_idx)
-        return self._key_to_index.get(key)
+        existing = self._find_key((_TAG_NAME_AND_TYPE, name_idx, desc_idx))
+        if existing is not None:
+            self._name_and_type_to_index[key] = existing
+        return existing
+
+    def find_fieldref(self, class_name: str, field_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Fieldref`` entry."""
+
+        key = (class_name, field_name, descriptor)
+        existing = self._fieldref_to_index.get(key)
+        if existing is not None:
+            return existing
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(field_name, descriptor)
+        if nat_index is None:
+            return None
+        existing = self._find_key((_TAG_FIELDREF, class_index, nat_index))
+        if existing is not None:
+            self._fieldref_to_index[key] = existing
+        return existing
+
+    def find_methodref(self, class_name: str, method_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Methodref`` entry."""
+
+        key = (class_name, method_name, descriptor)
+        existing = self._methodref_to_index.get(key)
+        if existing is not None:
+            return existing
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(method_name, descriptor)
+        if nat_index is None:
+            return None
+        existing = self._find_key((_TAG_METHODREF, class_index, nat_index))
+        if existing is not None:
+            self._methodref_to_index[key] = existing
+        return existing
+
+    def find_interface_methodref(self, class_name: str, method_name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_InterfaceMethodref`` entry."""
+
+        key = (class_name, method_name, descriptor)
+        existing = self._interface_methodref_to_index.get(key)
+        if existing is not None:
+            return existing
+        class_index = self.find_class(class_name)
+        if class_index is None:
+            return None
+        nat_index = self.find_name_and_type(method_name, descriptor)
+        if nat_index is None:
+            return None
+        existing = self._find_key((_TAG_INTERFACE_METHODREF, class_index, nat_index))
+        if existing is not None:
+            self._interface_methodref_to_index[key] = existing
+        return existing
+
+    def find_method_handle(self, reference_kind: int, reference_index: int) -> int | None:
+        """Look up the CP index of a ``CONSTANT_MethodHandle`` entry."""
+
+        return self._find_key((_TAG_METHOD_HANDLE, reference_kind, reference_index))
+
+    def find_dynamic(self, bootstrap_method_attr_index: int, name: str, descriptor: str) -> int | None:
+        """Look up the CP index of a ``CONSTANT_Dynamic`` entry."""
+
+        nat_index = self.find_name_and_type(name, descriptor)
+        if nat_index is None:
+            return None
+        return self._find_key((_TAG_DYNAMIC, bootstrap_method_attr_index, nat_index))
 
     def resolve_utf8(self, index: int) -> str:
         """Decode the ``CONSTANT_Utf8`` entry at a CP index to a Python string.
@@ -811,10 +1206,17 @@ class ConstantPoolBuilder:
         Raises:
             ValueError: If the entry at *index* is not a ``CONSTANT_Utf8``.
         """
-        entry = self.get(index)
+        entry = self.peek(index)
         if not isinstance(entry, Utf8Info):
             raise ValueError(f"CP index {index} is not a CONSTANT_Utf8 entry: {type(entry).__name__}")
-        return decode_modified_utf8(entry.str_bytes)
+        cached = self._resolved_utf8_cache.get(index)
+        if cached is not None and cached[0] is entry.str_bytes:
+            return cached[1]
+
+        value = decode_modified_utf8(entry.str_bytes)
+        self._resolved_utf8_cache[index] = (entry.str_bytes, value)
+        self._string_to_utf8_index.setdefault(value, self._utf8_to_index.get(entry.str_bytes, index))
+        return value
 
     # ------------------------------------------------------------------
     # Output

@@ -1000,110 +1000,123 @@ def _verify_code_cp_refs(
         )
 
         if isinstance(insn, ConstPoolIndex):
-            entry = _cp_entry(cp, insn.index)
-            if entry is None:
+            cp_entry = _cp_entry(cp, insn.index)
+            if cp_entry is None:
                 dc.add(Severity.ERROR, Category.CODE, f"{insn.type.name} references invalid CP index {insn.index}", loc)
                 continue
+            cp_entry_type = type(cp_entry)
 
             if insn.type in _FIELD_OPS:
-                if not isinstance(entry, FieldrefInfo):
+                if not isinstance(cp_entry, FieldrefInfo):
                     dc.add(
                         Severity.ERROR,
                         Category.CODE,
-                        f"{insn.type.name} CP#{insn.index} expected FieldrefInfo, got {type(entry).__name__}",
+                        f"{insn.type.name} CP#{insn.index} expected FieldrefInfo, got {cp_entry_type.__name__}",
                         loc,
                     )
             elif insn.type in _METHOD_OPS:
                 if major >= 52:
-                    if not isinstance(entry, (MethodrefInfo, InterfaceMethodrefInfo)):
+                    if not isinstance(cp_entry, (MethodrefInfo, InterfaceMethodrefInfo)):
                         msg = (
                             f"{insn.type.name} CP#{insn.index} expected "
-                            f"Methodref/InterfaceMethodref, got {type(entry).__name__}"
+                            f"Methodref/InterfaceMethodref, got {cp_entry_type.__name__}"
                         )
                         dc.add(Severity.ERROR, Category.CODE, msg, loc)
-                elif not isinstance(entry, MethodrefInfo):
+                elif not isinstance(cp_entry, MethodrefInfo):
                     dc.add(
                         Severity.ERROR,
                         Category.CODE,
-                        f"{insn.type.name} CP#{insn.index} expected MethodrefInfo, got {type(entry).__name__}",
+                        f"{insn.type.name} CP#{insn.index} expected MethodrefInfo, got {cp_entry_type.__name__}",
                         loc,
                     )
             elif insn.type in _CLASS_OPS:
-                if not isinstance(entry, ClassInfo):
+                if not isinstance(cp_entry, ClassInfo):
                     dc.add(
                         Severity.ERROR,
                         Category.CODE,
-                        f"{insn.type.name} CP#{insn.index} expected ClassInfo, got {type(entry).__name__}",
+                        f"{insn.type.name} CP#{insn.index} expected ClassInfo, got {cp_entry_type.__name__}",
                         loc,
                     )
             elif insn.type == InsnInfoType.LDC_W:
-                _verify_ldc_entry(entry, insn.index, major, loc, dc)
+                _verify_ldc_entry(cp_entry, insn.index, major, loc, dc)
             elif insn.type == InsnInfoType.LDC2_W:
-                if not isinstance(entry, (LongInfo, DoubleInfo)):
+                if not isinstance(cp_entry, (LongInfo, DoubleInfo)):
                     dc.add(
                         Severity.ERROR,
                         Category.CODE,
-                        f"LDC2_W CP#{insn.index} expected Long/Double, got {type(entry).__name__}",
+                        f"LDC2_W CP#{insn.index} expected Long/Double, got {cp_entry_type.__name__}",
                         loc,
                     )
 
         elif isinstance(insn, LocalIndex) and insn.type == InsnInfoType.LDC:
-            entry = _cp_entry(cp, insn.index)
-            if entry is None:
+            ldc_entry = _cp_entry(cp, insn.index)
+            if ldc_entry is None:
                 dc.add(Severity.ERROR, Category.CODE, f"LDC references invalid CP index {insn.index}", loc)
             else:
-                _verify_ldc_entry(entry, insn.index, major, loc, dc)
+                _verify_ldc_entry(ldc_entry, insn.index, major, loc, dc)
 
         elif isinstance(insn, InvokeInterface):
-            entry = _cp_entry(cp, insn.index)
-            if entry is None:
+            invoke_interface_entry = _cp_entry(cp, insn.index)
+            if invoke_interface_entry is None:
                 dc.add(
                     Severity.ERROR,
                     Category.CODE,
                     f"INVOKEINTERFACE references invalid CP index {insn.index}",
                     loc,
                 )
-            elif not isinstance(entry, InterfaceMethodrefInfo):
+            else:
+                invoke_interface_entry_type = type(invoke_interface_entry)
+                if isinstance(invoke_interface_entry, InterfaceMethodrefInfo):
+                    continue
                 dc.add(
                     Severity.ERROR,
                     Category.CODE,
-                    f"INVOKEINTERFACE CP#{insn.index} expected InterfaceMethodrefInfo, got {type(entry).__name__}",
+                    "INVOKEINTERFACE "
+                    f"CP#{insn.index} expected InterfaceMethodrefInfo, got "
+                    f"{invoke_interface_entry_type.__name__}",
                     loc,
                 )
 
         elif isinstance(insn, InvokeDynamic):
-            entry = _cp_entry(cp, insn.index)
-            if entry is None:
+            invoke_dynamic_entry = _cp_entry(cp, insn.index)
+            if invoke_dynamic_entry is None:
                 dc.add(
                     Severity.ERROR,
                     Category.CODE,
                     f"INVOKEDYNAMIC references invalid CP index {insn.index}",
                     loc,
                 )
-            elif not isinstance(entry, InvokeDynamicInfo):
+            else:
+                invoke_dynamic_entry_type = type(invoke_dynamic_entry)
+                if isinstance(invoke_dynamic_entry, InvokeDynamicInfo):
+                    continue
                 dc.add(
                     Severity.ERROR,
                     Category.CODE,
-                    f"INVOKEDYNAMIC CP#{insn.index} expected InvokeDynamicInfo, got {type(entry).__name__}",
+                    f"INVOKEDYNAMIC CP#{insn.index} expected InvokeDynamicInfo, "
+                    f"got {invoke_dynamic_entry_type.__name__}",
                     loc,
                 )
 
         elif isinstance(insn, MultiANewArray):
-            entry = _cp_entry(cp, insn.index)
-            if entry is None:
+            multi_anew_array_entry = _cp_entry(cp, insn.index)
+            if multi_anew_array_entry is None:
                 dc.add(
                     Severity.ERROR,
                     Category.CODE,
                     f"MULTIANEWARRAY references invalid CP index {insn.index}",
                     loc,
                 )
-            elif not isinstance(entry, ClassInfo):
-                dc.add(
-                    Severity.ERROR,
-                    Category.CODE,
-                    f"MULTIANEWARRAY CP#{insn.index} expected ClassInfo, got {type(entry).__name__}",
-                    loc,
-                )
+            else:
+                multi_anew_array_entry_type = type(multi_anew_array_entry)
+                if not isinstance(multi_anew_array_entry, ClassInfo):
+                    dc.add(
+                        Severity.ERROR,
+                        Category.CODE,
+                        f"MULTIANEWARRAY CP#{insn.index} expected ClassInfo, "
+                        f"got {multi_anew_array_entry_type.__name__}",
+                        loc,
+                    )
             if insn.dimensions < 1:
                 dc.add(
                     Severity.ERROR,
@@ -1115,6 +1128,7 @@ def _verify_code_cp_refs(
 
 def _verify_ldc_entry(entry: ConstantPoolInfo, idx: int, major: int, loc: Location, dc: _Collector) -> None:
     """Validate that an LDC/LDC_W entry is a valid loadable type."""
+    entry_type = type(entry)
     if isinstance(entry, (IntegerInfo, FloatInfo, StringInfo)):
         return
     if isinstance(entry, ClassInfo):
@@ -1131,7 +1145,7 @@ def _verify_ldc_entry(entry: ConstantPoolInfo, idx: int, major: int, loc: Locati
             dc.add(
                 Severity.ERROR,
                 Category.CODE,
-                f"LDC CP#{idx} {type(entry).__name__} requires version >= 51, got {major}",
+                f"LDC CP#{idx} {entry_type.__name__} requires version >= 51, got {major}",
                 loc,
             )
         return
@@ -1147,7 +1161,7 @@ def _verify_ldc_entry(entry: ConstantPoolInfo, idx: int, major: int, loc: Locati
     dc.add(
         Severity.ERROR,
         Category.CODE,
-        f"LDC CP#{idx} has non-loadable type {type(entry).__name__}",
+        f"LDC CP#{idx} has non-loadable type {entry_type.__name__}",
         loc,
     )
 

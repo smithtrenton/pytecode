@@ -39,7 +39,7 @@ Advanced transform-composition helpers intentionally live in `pytecode.transform
 
 ## Module responsibilities
 
-### `pytecode\bytes_utils.py`
+### `pytecode/bytes_utils.py`
 
 Low-level big-endian binary I/O primitives for both reading and writing. This is the I/O foundation for class parsing and classfile emission.
 
@@ -47,7 +47,7 @@ Low-level big-endian binary I/O primitives for both reading and writing. This is
 
 **Write side**: Standalone `_write_u1/i1/u2/i2/u4/i4/_write_bytes` helper functions and a stateful `BytesWriter` that appends to an internal buffer. `BytesWriter` provides `write_u1/i1/u2/i2/u4/i4/bytes` methods, `align(n)` for opcode-alignment padding, and a full set of `reserve_u1/i1/u2/i2/u4/i4` and `patch_u1/i1/u2/i2/u4/i4` methods for deferred length-prefixed structures.
 
-### `pytecode\class_reader.py`
+### `pytecode/class_reader.py`
 
 The central parser. `ClassReader` walks the classfile format in spec order:
 
@@ -73,7 +73,7 @@ When constant-pool-backed names are interpreted (for example, attribute names),
 they are decoded using the shared JVM Modified UTF-8 helpers rather than plain
 UTF-8.
 
-### `pytecode\class_writer.py`
+### `pytecode/class_writer.py`
 
 Deterministic classfile emission introduced for issue [#12](https://github.com/smithtrenton/pytecode/issues/12). This module provides:
 
@@ -83,11 +83,11 @@ Deterministic classfile emission introduced for issue [#12](https://github.com/s
 - **Derived metadata recomputation** — emits attribute lengths, code lengths, and count fields from the current in-memory structure rather than trusting stale counters
 - **Roundtrip fidelity focus** — preserves imported constant-pool ordering and, together with `ClassModel.to_bytes()`, now underpins the landed Tier 1 byte-for-byte roundtrip tests
 
-### `pytecode\constant_pool.py`
+### `pytecode/constant_pool.py`
 
 Typed dataclasses for all 17 constant-pool entry types plus the `ConstantPoolInfoType` enum mapping tags to dataclasses. The enum embeds both the numeric tag and the corresponding dataclass, so new constant types only require adding an enum member.
 
-### `pytecode\modified_utf8.py`
+### `pytecode/modified_utf8.py`
 
 Shared JVM Modified UTF-8 codec helpers for `CONSTANT_Utf8` values. This module
 centralizes spec-correct encoding and decoding of:
@@ -100,15 +100,15 @@ It is used by `ConstantPoolBuilder`, `ClassReader`, and test helpers so
 constant-pool string handling stays consistent across parsing, editing, and
 fixtures.
 
-### `pytecode\attributes.py`
+### `pytecode/attributes.py`
 
 Typed dataclasses for classfile attributes and nested structures (verification types, stack map frames, annotations, type annotations, module info, record components, etc.). It also defines `AttributeInfoType`, which maps attribute names to concrete dataclasses via an enum with a `_missing_` fallback. Unknown attribute names are routed to `UnimplementedAttr`, allowing parse-time preservation of vendor or future attributes.
 
-### `pytecode\instructions.py`
+### `pytecode/instructions.py`
 
 Typed dataclasses for decoded bytecode instructions and operand shapes covering local indexes, constant-pool indexes, branches, switches, and other operand families, plus the `InsnInfoType` opcode enum that maps supported JVM instruction encodings to instruction record types, and an `ArrayType` enum for `newarray`.
 
-### `pytecode\info.py`
+### `pytecode/info.py`
 
 Top-level dataclasses representing the parsed classfile structure:
 
@@ -118,11 +118,11 @@ Top-level dataclasses representing the parsed classfile structure:
 
 These dataclasses hold references to attribute and constant-pool structures defined elsewhere.
 
-### `pytecode\constants.py`
+### `pytecode/constants.py`
 
 Enums and flags representing JVM constants, access flags, verification types, and target-type metadata. (The former `FieldType` enum was removed here and superseded by `BaseType` in `descriptors.py`.)
 
-### `pytecode\descriptors.py`
+### `pytecode/descriptors.py`
 
 Descriptor and generic signature utilities. Provides:
 
@@ -134,7 +134,7 @@ Descriptor and generic signature utilities. Provides:
 
 All types are imported directly from `pytecode.descriptors`.
 
-### `pytecode\constant_pool_builder.py`
+### `pytecode/constant_pool_builder.py`
 
 Constant-pool management utilities for building and editing JVM constant pools. Provides `ConstantPoolBuilder`, a mutable accumulator with:
 
@@ -148,9 +148,9 @@ Constant-pool management utilities for building and editing JVM constant pools. 
 - **Export to spec format** — `build()` returns a defensive-copy `list[ConstantPoolInfo | None]` identical in structure to `ClassFile.constant_pool`, and `get()` also returns defensive copies so caller mutation cannot corrupt builder state
 - **Pool size guard** — raises `ValueError` if an allocation would exceed the JVM's u2 maximum (65 534 single-slot or 65 533 double-slot)
 
-### `pytecode\model.py`
+### `pytecode/model.py`
 
-Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four core types form the user-facing editing layer, with label-specific helpers delegated to `pytecode\labels.py`:
+Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four core types form the user-facing editing layer, with label-specific helpers delegated to `pytecode/labels.py`:
 
 - **`ClassModel`** — top-level mutable representation of a class file. Fields use symbolic (resolved) references: `name: str`, `super_name: str | None`, `interfaces: list[str]`, along with `access_flags`, `version: tuple[int, int]`, lists of `FieldModel` and `MethodModel`, class-level attributes, and a `ConstantPoolBuilder`. Provides `from_classfile()` and `from_bytes()` factory methods for construction, `to_classfile()` for lowering back to a spec-faithful `ClassFile`, and `to_bytes()` for direct emission via `ClassWriter`.
 - **`MethodModel`** — mutable representation of a method with resolved `name: str` and `descriptor: str`, `access_flags`, an optional `CodeModel` (`None` for abstract/native methods), and non-Code attributes. The raw `Code` attribute is lifted out of the attribute list into the dedicated `code` field.
@@ -161,7 +161,7 @@ Mutable editing model for safe classfile manipulation. This module provides the 
 
 For the design rationale behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
-### `pytecode\transforms.py`
+### `pytecode/transforms.py`
 
 Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
 
@@ -173,7 +173,7 @@ Composable transform helpers layered on top of the mutable editing model introdu
 
 Traversal of fields and methods uses collection snapshots so transforms can mutate `ClassModel.fields` / `ClassModel.methods` without changing which original elements are visited during the current pass.
 
-### `pytecode\hierarchy.py`
+### `pytecode/hierarchy.py`
 
 Hierarchy-resolution helpers introduced for issue [#8](https://github.com/smithtrenton/pytecode/issues/8). This module provides:
 
@@ -185,7 +185,7 @@ Hierarchy-resolution helpers introduced for issue [#8](https://github.com/smitht
 
 To keep ordinary project graphs ergonomic, the module treats `java/lang/Object` as an implicit root if a resolver does not provide it explicitly; otherwise missing hierarchy data is surfaced as an error rather than guessed.
 
-### `pytecode\operands.py`
+### `pytecode/operands.py`
 
 Symbolic editing-model wrappers for non-control-flow instructions, introduced for issue [#16](https://github.com/smithtrenton/pytecode/issues/16). All wrappers inherit from `InsnInfo` so that the existing `type CodeItem = InsnInfo | Label` alias requires no changes.
 
@@ -206,7 +206,7 @@ Symbolic editing-model wrappers for non-control-flow instructions, introduced fo
 
 **Mapping tables:** `_IMPLICIT_VAR_SLOTS` / `_VAR_SHORTCUTS` (40 implicit-slot ↔ base-opcode/slot pairs), `_WIDE_TO_BASE` / `_BASE_TO_WIDE` (11 WIDE variant ↔ base opcode pairs).
 
-### `pytecode\labels.py`
+### `pytecode/labels.py`
 
 Label-based bytecode editing helpers and lowering utilities introduced for issue [#7](https://github.com/smithtrenton/pytecode/issues/7). This module owns the symbolic control-flow layer:
 
@@ -218,7 +218,7 @@ Label-based bytecode editing helpers and lowering utilities introduced for issue
 
 For the broader design rationale, trade-offs, and future phases behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
-### `pytecode\analysis.py`
+### `pytecode/analysis.py`
 
 Control-flow graph construction and stack/local simulation introduced for issue [#9](https://github.com/smithtrenton/pytecode/issues/9). This module provides the analysis layer that sits between the editing model, frame computation, and validation:
 
@@ -231,7 +231,7 @@ Control-flow graph construction and stack/local simulation introduced for issue 
 
 The module operates on `CodeModel` (the symbolic editing model) and accepts an optional `ClassResolver` from `pytecode.hierarchy` for reference-type merging at join points, defaulting to conservative `java/lang/Object` collapse when unavailable. It now provides max_stack/max_locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)) and is consumed by the validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11)).
 
-### `pytecode\verify.py`
+### `pytecode/verify.py`
 
 Structural classfile validation with structured diagnostics, introduced for issue [#11](https://github.com/smithtrenton/pytecode/issues/11). This module validates both the parsed `ClassFile` model and the mutable `ClassModel`:
 
@@ -245,11 +245,11 @@ Not exported from `pytecode.__init__`; import directly: `from pytecode.verify im
 
 Issue [#17](https://github.com/smithtrenton/pytecode/issues/17) added a JVM-backed differential validation layer for `build_cfg()` in the test suite:
 
-- **`tests\resources\oracle\RecordingAnalyzer.java`** compiles against ASM 9.7.1 (`asm`, `asm-tree`, `asm-analysis`, `asm-util`) and records instruction-level normal edges, exceptional edges, and try/catch table entries as JSON.
-- **`tests\cfg_oracle.py`** parses that JSON and normalizes both ASM output and `pytecode.analysis.ControlFlowGraph` instances into the same block-level comparison model: block spans, normal successor sets, exception handler sets, and entry block identity.
-- **`tests\test_cfg_oracle.py`** differentially validates both `tests\resources\CfgFixture.java` and `tests\resources\CfgEdgeCaseFixture.java`. The suite uses the `oracle` pytest marker, skips cleanly when the JVM or ASM jars are unavailable, and caches downloaded ASM jars under `.pytest_cache\pytecode-oracle` while also honoring `tests\resources\oracle\lib`.
+- **`tests/resources/oracle/RecordingAnalyzer.java`** compiles against ASM 9.7.1 (`asm`, `asm-tree`, `asm-analysis`, `asm-util`) and records instruction-level normal edges, exceptional edges, and try/catch table entries as JSON.
+- **`tests/cfg_oracle.py`** parses that JSON and normalizes both ASM output and `pytecode.analysis.ControlFlowGraph` instances into the same block-level comparison model: block spans, normal successor sets, exception handler sets, and entry block identity.
+- **`tests/test_cfg_oracle.py`** differentially validates both `tests/resources/CfgFixture.java` and `tests/resources/CfgEdgeCaseFixture.java`. The suite uses the `oracle` pytest marker, skips cleanly when the JVM or ASM jars are unavailable, and caches downloaded ASM jars under `.pytest_cache/pytecode-oracle` while also honoring `tests/resources/oracle/lib`.
 
-### `pytecode\jar.py`
+### `pytecode/jar.py`
 
 JAR container support. This module now covers archive reading, class/non-class separation, in-memory entry mutation, and safe rewrite-to-disk behavior. `JarFile.add_file()` and `remove_file()` update the in-memory archive state, while `JarFile.rewrite()` can either copy entries verbatim or lift `.class` entries through `ClassModel` for in-place transforms before writing a temporary archive and replacing the destination. The `transform=` parameter accepts any supported class transform, including callable `Pipeline` objects from `pytecode.transforms`. Signature-related files are preserved as ordinary resources and are not re-signed automatically.
 
