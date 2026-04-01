@@ -43,9 +43,9 @@ from pytecode.analysis.hierarchy import (
 )
 from pytecode.classfile.constant_pool import ClassInfo
 from pytecode.classfile.constants import MethodAccessFlag
+from pytecode.classfile.descriptors import ArrayType as DescArrayType
+from pytecode.classfile.descriptors import BaseType, ObjectType
 from pytecode.classfile.instructions import InsnInfo, InsnInfoType
-from pytecode.descriptors import ArrayType as DescArrayType
-from pytecode.descriptors import BaseType, ObjectType
 from pytecode.edit.labels import (
     BranchInsn,
     ExceptionHandler,

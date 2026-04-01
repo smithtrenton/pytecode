@@ -49,23 +49,23 @@ from ..classfile.attributes import (
     VerificationTypeInfo,
 )
 from ..classfile.constants import VerificationType
-from ..classfile.instructions import (
-    ArrayType as InsnArrayType,
-)
-from ..classfile.instructions import (
-    InsnInfo,
-    InsnInfoType,
-)
-from ..descriptors import (
+from ..classfile.descriptors import (
     ArrayType as DescArrayType,
 )
-from ..descriptors import (
+from ..classfile.descriptors import (
     BaseType,
     FieldDescriptor,
     ObjectType,
     VoidType,
     parse_field_descriptor,
     parse_method_descriptor,
+)
+from ..classfile.instructions import (
+    ArrayType as InsnArrayType,
+)
+from ..classfile.instructions import (
+    InsnInfo,
+    InsnInfoType,
 )
 from ..edit.labels import (
     BranchInsn,

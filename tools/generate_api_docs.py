@@ -27,7 +27,7 @@ PUBLIC_MODULES: list[str] = [
     "pytecode.edit.constant_pool_builder",
     "pytecode.classfile.constants",
     "pytecode.edit.debug_info",
-    "pytecode.descriptors",
+    "pytecode.classfile.descriptors",
     "pytecode.analysis.hierarchy",
     "pytecode.classfile.info",
     "pytecode.classfile.instructions",

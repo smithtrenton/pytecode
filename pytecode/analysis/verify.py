@@ -62,6 +62,7 @@ from ..classfile.constant_pool import (
     Utf8Info,
 )
 from ..classfile.constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from ..classfile.descriptors import is_valid_field_descriptor, is_valid_method_descriptor
 from ..classfile.info import ClassFile, FieldInfo, MethodInfo
 from ..classfile.instructions import (
     Branch,
@@ -76,7 +77,6 @@ from ..classfile.instructions import (
     TableSwitch,
 )
 from ..classfile.modified_utf8 import decode_modified_utf8
-from ..descriptors import is_valid_field_descriptor, is_valid_method_descriptor
 from ..edit.debug_info import is_class_debug_info_stale, is_code_debug_info_stale
 from ..edit.labels import (
     BranchInsn,

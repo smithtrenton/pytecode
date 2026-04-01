@@ -25,6 +25,7 @@ from ..classfile.attributes import (
     LocalVariableTypeTableAttr,
 )
 from ..classfile.constant_pool import ClassInfo
+from ..classfile.descriptors import parameter_slot_count, parse_method_descriptor
 from ..classfile.instructions import (
     Branch,
     BranchW,
@@ -45,7 +46,6 @@ from ..classfile.instructions import (
     ShortValue,
     TableSwitch,
 )
-from ..descriptors import parameter_slot_count, parse_method_descriptor
 from ._attribute_clone import clone_attribute
 from .constant_pool_builder import ConstantPoolBuilder
 from .debug_info import DebugInfoPolicy, is_code_debug_info_stale, normalize_debug_info_policy

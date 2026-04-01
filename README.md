@@ -115,7 +115,7 @@ Supported submodules:
 - `pytecode.analysis` for CFG construction, frame simulation, and recomputation helpers.
 - `pytecode.analysis.verify` for structural validation and diagnostics.
 - `pytecode.analysis.hierarchy` for type and override resolution helpers.
-- `pytecode.descriptors` for JVM descriptors and generic signatures.
+- `pytecode.classfile.descriptors` for JVM descriptors and generic signatures.
 - `pytecode.edit.constant_pool_builder` for deterministic constant-pool construction.
 - `pytecode.classfile.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
 - `pytecode.edit.debug_info` for explicit debug-info preservation and stripping policies.

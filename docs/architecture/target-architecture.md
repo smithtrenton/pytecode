@@ -52,7 +52,7 @@ After evaluating five candidate designs — **(A)** direct mutable dataclasses, 
 
 ### 3a. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 
-Descriptor and signature utilities are now implemented in `pytecode.descriptors`.
+Descriptor and signature utilities are now implemented in `pytecode.classfile.descriptors`.
 
 Responsibilities:
 

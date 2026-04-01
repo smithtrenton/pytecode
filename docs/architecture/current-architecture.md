@@ -122,7 +122,7 @@ These dataclasses hold references to attribute and constant-pool structures defi
 
 Enums and flags representing JVM constants, access flags, verification types, and target-type metadata. (The former `FieldType` enum was removed here and superseded by `BaseType` in `descriptors.py`.)
 
-### `pytecode/descriptors.py`
+### `pytecode/classfile/descriptors.py`
 
 Descriptor and generic signature utilities. Provides:
 
@@ -132,7 +132,7 @@ Descriptor and generic signature utilities. Provides:
 - **Slot helpers**: `slot_size()` and `parameter_slot_count()` — category-aware (long/double occupy 2 slots)
 - **Validation**: `is_valid_field_descriptor()` and `is_valid_method_descriptor()` with spec-aware internal-name checks
 
-All types are imported directly from `pytecode.descriptors`.
+All types are imported directly from `pytecode.classfile.descriptors`.
 
 ### `pytecode/edit/constant_pool_builder.py`
 
@@ -161,7 +161,7 @@ Mutable editing model for safe classfile manipulation. This module provides the 
 
 For the design rationale behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
-### `pytecode/transforms.py`
+### `pytecode/transforms/__init__.py`
 
 Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
 
@@ -218,7 +218,7 @@ Label-based bytecode editing helpers and lowering utilities introduced for issue
 
 For the broader design rationale, trade-offs, and future phases behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
-### `pytecode/analysis.py`
+### `pytecode/analysis/__init__.py`
 
 Control-flow graph construction and stack/local simulation introduced for issue [#9](https://github.com/smithtrenton/pytecode/issues/9). This module provides the analysis layer that sits between the editing model, frame computation, and validation:
 

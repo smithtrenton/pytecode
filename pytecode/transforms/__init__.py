@@ -17,7 +17,7 @@ from enum import IntFlag
 from typing import Protocol, cast
 
 from ..classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from ..descriptors import VoidType, parse_method_descriptor, to_descriptor
+from ..classfile.descriptors import VoidType, parse_method_descriptor, to_descriptor
 from ..edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 
 type Predicate[T] = Callable[[T], bool]

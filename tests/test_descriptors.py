@@ -1,10 +1,10 @@
-"""Tests for pytecode.descriptors — descriptor and signature parsing utilities."""
+"""Tests for pytecode.classfile.descriptors — descriptor and signature parsing utilities."""
 
 from __future__ import annotations
 
 import pytest
 
-from pytecode.descriptors import (
+from pytecode.classfile.descriptors import (
     VOID,
     ArrayType,
     ArrayTypeSignature,
