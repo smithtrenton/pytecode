@@ -2,15 +2,15 @@
 
 This module implements a single-pass reader that deserialises the binary
 class-file format defined in *The Java Virtual Machine Specification* (JVMS §4)
-into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.info`.
+into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.info`.
 """
 
 from __future__ import annotations
 
 import os
 
+from .._internal.bytes_utils import BytesReader
 from . import attributes, constant_pool, constants, info, instructions
-from .bytes_utils import BytesReader
 from .modified_utf8 import decode_modified_utf8
 
 __all__ = ["ClassReader", "MalformedClassException"]
@@ -21,7 +21,7 @@ class MalformedClassException(Exception):
 
 
 class ClassReader(BytesReader):
-    """Single-pass parser that converts ``.class`` file bytes into a :class:`~pytecode.info.ClassFile` tree.
+    """Single-pass parser that converts ``.class`` file bytes into a :class:`~pytecode.classfile.info.ClassFile` tree.
 
     The reader walks the binary layout defined in JVMS §4.1, populating the
     constant pool first (§4.4) and then deserialising fields, methods, and
@@ -379,7 +379,7 @@ class ClassReader(BytesReader):
         """Read a single ``attribute_info`` structure (JVMS §4.7).
 
         Recognised attribute names are decoded into their specific subtypes;
-        unknown attributes are returned as :class:`~pytecode.attributes.UnimplementedAttr`.
+        unknown attributes are returned as :class:`~pytecode.classfile.attributes.UnimplementedAttr`.
 
         Returns:
             The decoded attribute info.

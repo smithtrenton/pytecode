@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from pytecode import ClassModel, ClassReader, ClassWriter
-from pytecode.info import ClassFile
-from pytecode.verify import Severity, verify_classfile
+from pytecode.analysis.verify import Severity, verify_classfile
+from pytecode.classfile.info import ClassFile
 from tests.helpers import (
     cached_java_resource_classes,
     cached_java_resource_classes_dir,

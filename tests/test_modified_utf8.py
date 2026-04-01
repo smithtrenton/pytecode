@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytecode.modified_utf8 import decode_modified_utf8, encode_modified_utf8
+from pytecode.classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
 
 
 @pytest.mark.parametrize(

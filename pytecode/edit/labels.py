@@ -13,8 +13,7 @@ import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from ._attribute_clone import clone_attribute
-from .attributes import (
+from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
     ExceptionInfo,
@@ -25,11 +24,8 @@ from .attributes import (
     LocalVariableTypeInfo,
     LocalVariableTypeTableAttr,
 )
-from .constant_pool import ClassInfo
-from .constant_pool_builder import ConstantPoolBuilder
-from .debug_info import DebugInfoPolicy, is_code_debug_info_stale, normalize_debug_info_policy
-from .descriptors import parameter_slot_count, parse_method_descriptor
-from .instructions import (
+from ..classfile.constant_pool import ClassInfo
+from ..classfile.instructions import (
     Branch,
     BranchW,
     ByteValue,
@@ -49,6 +45,10 @@ from .instructions import (
     ShortValue,
     TableSwitch,
 )
+from ..descriptors import parameter_slot_count, parse_method_descriptor
+from ._attribute_clone import clone_attribute
+from .constant_pool_builder import ConstantPoolBuilder
+from .debug_info import DebugInfoPolicy, is_code_debug_info_stale, normalize_debug_info_policy
 from .operands import (
     _BASE_TO_WIDE,
     _VAR_SHORTCUTS,
@@ -76,7 +76,7 @@ from .operands import (
 )
 
 if TYPE_CHECKING:
-    from .hierarchy import ClassResolver
+    from ..analysis.hierarchy import ClassResolver
     from .model import CodeModel, MethodModel
 
 
@@ -1093,8 +1093,8 @@ def lower_code(
 
     if recompute_frames:
         assert method is not None and class_name is not None
-        from .analysis import compute_frames
-        from .attributes import StackMapTableAttr
+        from ..analysis import compute_frames
+        from ..classfile.attributes import StackMapTableAttr
 
         frame_result = compute_frames(
             code,

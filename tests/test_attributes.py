@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from pytecode import attributes, constant_pool, constants, instructions
+import pytecode.classfile.attributes as attributes
+import pytecode.classfile.constant_pool as constant_pool
+import pytecode.classfile.constants as constants
+import pytecode.classfile.instructions as instructions
 from tests.helpers import attr_reader, class_reader_with_cp, i1, make_attribute_blob, make_utf8_info, u1, u2, u4
 
 # ---------------------------------------------------------------------------

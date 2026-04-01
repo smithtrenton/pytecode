@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from .._internal.bytes_utils import BytesWriter
 from . import attributes, constant_pool, instructions
-from .bytes_utils import BytesWriter
 from .info import ClassFile, FieldInfo, MethodInfo
 
 __all__ = ["ClassWriter"]

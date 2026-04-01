@@ -1,4 +1,4 @@
-"""Tests for pytecode.verify — structural validation with structured diagnostics."""
+"""Tests for pytecode.analysis.verify — structural validation with structured diagnostics."""
 
 from __future__ import annotations
 
@@ -6,7 +6,16 @@ from collections.abc import Sequence
 
 import pytest
 
-from pytecode.attributes import (
+from pytecode.analysis.verify import (
+    Category,
+    Diagnostic,
+    FailFastError,
+    Location,
+    Severity,
+    verify_classfile,
+    verify_classmodel,
+)
+from pytecode.classfile.attributes import (
     AttributeInfo,
     BootstrapMethodsAttr,
     CodeAttr,
@@ -21,7 +30,7 @@ from pytecode.attributes import (
     RuntimeVisibleTypeAnnotationsAttr,
     StackMapTableAttr,
 )
-from pytecode.constant_pool import (
+from pytecode.classfile.constant_pool import (
     ClassInfo,
     ConstantPoolInfo,
     FieldrefInfo,
@@ -33,15 +42,14 @@ from pytecode.constant_pool import (
     NameAndTypeInfo,
     Utf8Info,
 )
-from pytecode.constants import (
+from pytecode.classfile.constants import (
     MAGIC,
     ClassAccessFlag,
     FieldAccessFlag,
     MethodAccessFlag,
 )
-from pytecode.debug_info import mark_class_debug_info_stale, mark_code_debug_info_stale
-from pytecode.info import ClassFile, FieldInfo, MethodInfo
-from pytecode.instructions import (
+from pytecode.classfile.info import ClassFile, FieldInfo, MethodInfo
+from pytecode.classfile.instructions import (
     Branch,
     ConstPoolIndex,
     InsnInfo,
@@ -51,7 +59,9 @@ from pytecode.instructions import (
     LocalIndex,
     MultiANewArray,
 )
-from pytecode.labels import (
+from pytecode.classfile.modified_utf8 import encode_modified_utf8
+from pytecode.edit.debug_info import mark_class_debug_info_stale, mark_code_debug_info_stale
+from pytecode.edit.labels import (
     BranchInsn,
     ExceptionHandler,
     Label,
@@ -61,17 +71,7 @@ from pytecode.labels import (
     LookupSwitchInsn,
     TableSwitchInsn,
 )
-from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
-from pytecode.modified_utf8 import encode_modified_utf8
-from pytecode.verify import (
-    Category,
-    Diagnostic,
-    FailFastError,
-    Location,
-    Severity,
-    verify_classfile,
-    verify_classmodel,
-)
+from pytecode.edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 from tests.helpers import cached_java_resource_classes, list_java_resources
 
 # ── Test helpers ──────────────────────────────────────────────────────
@@ -1261,7 +1261,7 @@ class TestAttributeVersioning:
                 annotations=[],
             )
         elif attr_cls is ModuleAttr:
-            from pytecode.constants import ModuleAccessFlag
+            from pytecode.classfile.constants import ModuleAccessFlag
 
             attr = ModuleAttr(
                 attribute_name_index=0,
@@ -1328,7 +1328,7 @@ class TestFailFast:
 
 class TestClassModel:
     def _minimal_model(self, **overrides: object) -> ClassModel:
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         defaults: dict[str, object] = {
             "version": (52, 0),
@@ -1574,7 +1574,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1613,7 +1613,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1647,7 +1647,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1683,7 +1683,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1719,7 +1719,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1751,7 +1751,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1784,7 +1784,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1817,7 +1817,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1843,7 +1843,7 @@ class TestCodeModelLabels:
             code=code,
             attributes=[],
         )
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),
@@ -1889,7 +1889,7 @@ def test_compiled_fixture_zero_errors(resource: str) -> None:
 
 class TestClassModelFailFast:
     def test_fail_fast_raises(self) -> None:
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         cm = ClassModel(
             version=(52, 0),

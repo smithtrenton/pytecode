@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pytecode import ClassModel, ClassReader, ClassWriter, JarFile
-from pytecode.info import ClassFile
-from pytecode.jar import JarInfo
+from pytecode.archive import JarInfo
+from pytecode.classfile.info import ClassFile
 
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]

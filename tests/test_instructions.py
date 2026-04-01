@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pytecode.instructions import (
+from pytecode.classfile.instructions import (
     ArrayType,
     Branch,
     BranchW,

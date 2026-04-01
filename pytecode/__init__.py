@@ -11,12 +11,12 @@ Provides four top-level entry points:
 Additional submodules expose transforms, descriptors, analysis, hierarchy
 resolution, validation, operands, labels, debug-info helpers, and the
 underlying data types.  See ``pytecode.transforms``, ``pytecode.analysis``,
-``pytecode.verify``, and the other documented submodules for details.
+``pytecode.analysis.verify``, and the other documented submodules for details.
 """
 
-from .class_reader import ClassReader
-from .class_writer import ClassWriter
-from .jar import JarFile
-from .model import ClassModel
+from .archive import JarFile
+from .classfile.reader import ClassReader
+from .classfile.writer import ClassWriter
+from .edit.model import ClassModel
 
 __all__ = ["ClassModel", "ClassReader", "ClassWriter", "JarFile"]

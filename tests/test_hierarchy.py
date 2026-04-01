@@ -1,4 +1,4 @@
-"""Tests for ``pytecode.hierarchy``."""
+"""Tests for ``pytecode.analysis.hierarchy``."""
 
 from __future__ import annotations
 
@@ -6,9 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pytecode.class_reader import ClassReader
-from pytecode.constants import ClassAccessFlag, MethodAccessFlag
-from pytecode.hierarchy import (
+from pytecode.analysis.hierarchy import (
     JAVA_LANG_OBJECT,
     HierarchyCycleError,
     InheritedMethod,
@@ -22,7 +20,9 @@ from pytecode.hierarchy import (
     iter_superclasses,
     iter_supertypes,
 )
-from pytecode.model import ClassModel, MethodModel
+from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag
+from pytecode.classfile.reader import ClassReader
+from pytecode.edit.model import ClassModel, MethodModel
 from tests.helpers import TEST_RESOURCES, compile_java_sources
 
 _PACKAGE_PRIVATE = MethodAccessFlag(0)

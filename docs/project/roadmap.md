@@ -17,7 +17,7 @@ The original roadmap is complete. This file now serves as a compact record of th
 - Parser hardening for classfile structure, attributes, and instructions.
 - Full constant-pool coverage, including Modified UTF-8 handling.
 - Descriptor and signature parsing utilities.
-- Binary read and write primitives in `pytecode.bytes_utils`.
+- Binary read and write primitives in `pytecode._internal.bytes_utils`.
 - Deterministic constant-pool management via `ConstantPoolBuilder`.
 
 ### Mutable editing surface
@@ -30,17 +30,17 @@ The original roadmap is complete. This file now serves as a compact record of th
 
 ### Analysis and validation
 
-- Class hierarchy resolution in `pytecode.hierarchy`.
+- Class hierarchy resolution in `pytecode.analysis.hierarchy`.
 - Control-flow graph construction and stack/local simulation in `pytecode.analysis`.
 - `max_stack`, `max_locals`, and `StackMapTable` recomputation.
-- Structured verification diagnostics in `pytecode.verify`.
+- Structured verification diagnostics in `pytecode.analysis.verify`.
 - Four validation tiers covering byte-for-byte roundtrip, structural verification, semantic diffing, and JVM verification.
 - ASM-backed CFG differential validation for `build_cfg()`.
 
 ### Packaging and documentation
 
 - Deterministic classfile emission via `ClassWriter.write()` and `ClassModel.to_bytes()`.
-- Archive mutation and safe rewrite-to-disk in `pytecode.jar`.
+- Archive mutation and safe rewrite-to-disk in `pytecode.archive`.
 - Generated API reference coverage enforced by tests and `tools/generate_api_docs.py --check`.
 - Release automation aligned with immutable `v<version>` tags and PyPI Trusted Publishing.
 

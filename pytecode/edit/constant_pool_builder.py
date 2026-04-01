@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 __all__ = ["ConstantPoolBuilder"]
 
-from .constant_pool import (
+from ..classfile.constant_pool import (
     ClassInfo,
     ConstantPoolInfo,
     DoubleInfo,
@@ -31,7 +31,7 @@ from .constant_pool import (
     StringInfo,
     Utf8Info,
 )
-from .modified_utf8 import decode_modified_utf8, encode_modified_utf8
+from ..classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
 
 if TYPE_CHECKING:
     pass

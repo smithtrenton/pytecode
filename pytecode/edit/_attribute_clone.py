@@ -6,7 +6,7 @@ from dataclasses import fields, is_dataclass
 from functools import cache
 from typing import Any, cast
 
-from .attributes import (
+from ..classfile.attributes import (
     AnnotationInfo,
     AppendFrameInfo,
     ArrayValueInfo,

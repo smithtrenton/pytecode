@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from pytecode.bytes_utils import (
+from pytecode._internal.bytes_utils import (
     BytesReader,
     BytesWriter,
     _read_bytes,

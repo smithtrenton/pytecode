@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .attributes import (
+from ..classfile.attributes import (
     AppendFrameInfo,
     ChopFrameInfo,
     DoubleVariableInfo,
@@ -48,11 +48,18 @@ from .attributes import (
     UninitializedVariableInfo,
     VerificationTypeInfo,
 )
-from .constants import VerificationType
-from .descriptors import (
+from ..classfile.constants import VerificationType
+from ..classfile.instructions import (
+    ArrayType as InsnArrayType,
+)
+from ..classfile.instructions import (
+    InsnInfo,
+    InsnInfoType,
+)
+from ..descriptors import (
     ArrayType as DescArrayType,
 )
-from .descriptors import (
+from ..descriptors import (
     BaseType,
     FieldDescriptor,
     ObjectType,
@@ -60,15 +67,7 @@ from .descriptors import (
     parse_field_descriptor,
     parse_method_descriptor,
 )
-from .hierarchy import JAVA_LANG_OBJECT, common_superclass
-from .instructions import (
-    ArrayType as InsnArrayType,
-)
-from .instructions import (
-    InsnInfo,
-    InsnInfoType,
-)
-from .labels import (
+from ..edit.labels import (
     BranchInsn,
     CodeItem,
     ExceptionHandler,
@@ -76,7 +75,7 @@ from .labels import (
     LookupSwitchInsn,
     TableSwitchInsn,
 )
-from .operands import (
+from ..edit.operands import (
     FieldInsn,
     IIncInsn,
     InterfaceMethodInsn,
@@ -95,11 +94,12 @@ from .operands import (
     TypeInsn,
     VarInsn,
 )
+from .hierarchy import JAVA_LANG_OBJECT, common_superclass
 
 if TYPE_CHECKING:
-    from .constant_pool_builder import ConstantPoolBuilder
+    from ..edit.constant_pool_builder import ConstantPoolBuilder
+    from ..edit.model import CodeModel, MethodModel
     from .hierarchy import ClassResolver
-    from .model import CodeModel, MethodModel
 
 # ===================================================================
 # Analysis errors
@@ -435,7 +435,7 @@ def initial_frame(method: MethodModel, class_name: str) -> FrameState:
     Returns:
         A ``FrameState`` representing the method entry point.
     """
-    from .constants import MethodAccessFlag
+    from ..classfile.constants import MethodAccessFlag
 
     md = parse_method_descriptor(method.descriptor)
     locals_list: list[VType] = []
@@ -1936,7 +1936,7 @@ def _simulate_raw_insn(insn: InsnInfo, state: FrameState) -> FrameState:
     # --- NEWARRAY ---
     if opcode == _T.NEWARRAY:
         state, _ = state.pop(1)  # pop count
-        from .instructions import NewArray as NewArrayInsn
+        from ..classfile.instructions import NewArray as NewArrayInsn
 
         if isinstance(insn, NewArrayInsn):
             array_desc = _NEWARRAY_TYPE_MAP.get(insn.atype, "[I")
@@ -2279,7 +2279,7 @@ def compute_frames(
     analysis_code = _prepare_analysis_code(code)
     analysis_label_offsets = label_offsets
     if analysis_code is not code:
-        from .labels import resolve_labels
+        from ..edit.labels import resolve_labels
 
         analysis_label_offsets = resolve_labels(list(analysis_code.instructions), cp).label_offsets
 

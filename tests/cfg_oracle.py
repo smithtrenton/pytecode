@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from pytecode.analysis import ControlFlowGraph
-from pytecode.instructions import Branch, BranchW, InsnInfoType, LookupSwitch, TableSwitch
+from pytecode.classfile.instructions import Branch, BranchW, InsnInfoType, LookupSwitch, TableSwitch
 
 type OracleNormalEdge = tuple[int, int]
 type OracleExceptionEdge = tuple[int, int, str | None]

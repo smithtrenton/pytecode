@@ -1,4 +1,4 @@
-"""Tests for pytecode.operands — symbolic instruction wrapper types."""
+"""Tests for pytecode.edit.operands — symbolic instruction wrapper types."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ from typing import Any
 
 import pytest
 
-from pytecode.constant_pool_builder import ConstantPoolBuilder
-from pytecode.instructions import (
+from pytecode.classfile.instructions import (
     ConstPoolIndex,
     IInc,
     IIncW,
@@ -19,12 +18,13 @@ from pytecode.instructions import (
     LocalIndexW,
     MultiANewArray,
 )
-from pytecode.labels import (
+from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+from pytecode.edit.labels import (
     CodeItem,
     lower_code,
 )
-from pytecode.model import ClassModel, CodeModel, MethodModel
-from pytecode.operands import (
+from pytecode.edit.model import ClassModel, CodeModel
+from pytecode.edit.operands import (
     _BASE_TO_WIDE,
     _IMPLICIT_VAR_SLOTS,
     _VAR_SHORTCUTS,
@@ -48,7 +48,7 @@ from pytecode.operands import (
     TypeInsn,
     VarInsn,
 )
-from tests.helpers import compile_java_resource
+from tests.helpers import compile_java_resource, find_method_in_model
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -68,18 +68,9 @@ def showcase_model(showcase_class: Path) -> ClassModel:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _find_method(model: ClassModel, name: str) -> MethodModel:
-    for m in model.methods:
-        if m.name == name:
-            return m
-    raise AssertionError(f"Method {name!r} not found in ClassModel")
-
-
 def _code_items(model: ClassModel, method_name: str) -> list[CodeItem]:
     """Return the code item list for the named method."""
-    method = _find_method(model, method_name)
+    method = find_method_in_model(model, method_name)
     assert method.code is not None
     return method.code.instructions
 
@@ -603,7 +594,7 @@ class TestLdcInsnLowering:
         for i in range(pre_fill):
             cp.add_integer(i)
         items: list[CodeItem] = [LdcInsn(value)]
-        from pytecode.model import CodeModel as _CodeModel
+        from pytecode.edit.model import CodeModel as _CodeModel
 
         code = _CodeModel(max_stack=2, max_locals=1, instructions=items)
         attr = lower_code(code, cp)
@@ -683,14 +674,14 @@ class TestMemberInsnLowering:
                 is_interface=True,
             )
         ]
-        from pytecode.model import CodeModel as _CodeModel
+        from pytecode.edit.model import CodeModel as _CodeModel
 
         code = _CodeModel(max_stack=2, max_locals=1, instructions=items)
         attr = lower_code(code, cp)
         raw = attr.code[0]
         assert isinstance(raw, ConstPoolIndex)
         # The CP entry should be an InterfaceMethodref
-        from pytecode import constant_pool as _cp
+        import pytecode.classfile.constant_pool as _cp
 
         entry = cp.get(raw.index)
         assert isinstance(entry, _cp.InterfaceMethodrefInfo)
@@ -745,7 +736,7 @@ class TestEditFromScratch:
             FieldInsn(InsnInfoType.GETSTATIC, "java/lang/System", "out", "Ljava/io/PrintStream;"),
             InsnInfo(InsnInfoType.RETURN, -1),
         ]
-        from pytecode.model import CodeModel as _CodeModel
+        from pytecode.edit.model import CodeModel as _CodeModel
 
         code = _CodeModel(max_stack=1, max_locals=1, instructions=items)
         attr = lower_code(code, cp)
@@ -754,7 +745,7 @@ class TestEditFromScratch:
         assert isinstance(getstatic_raw, ConstPoolIndex)
         assert getstatic_raw.type == InsnInfoType.GETSTATIC
 
-        from pytecode import constant_pool as _cp
+        import pytecode.classfile.constant_pool as _cp
 
         cp_entry = cp.get(getstatic_raw.index)
         assert isinstance(cp_entry, _cp.FieldrefInfo)
@@ -777,7 +768,7 @@ class TestEditFromScratch:
             LdcInsn(LdcString("shared")),
             LdcInsn(LdcString("shared")),
         ]
-        from pytecode.model import CodeModel as _CodeModel
+        from pytecode.edit.model import CodeModel as _CodeModel
 
         code = _CodeModel(max_stack=2, max_locals=1, instructions=items)
         attr = lower_code(code, cp)
@@ -819,8 +810,8 @@ class TestEditFromScratch:
 
 class TestInstructionShowcaseRoundTrip:
     def _assert_roundtrip(self, path: Path) -> None:
-        from pytecode.attributes import CodeAttr
-        from pytecode.class_reader import ClassReader
+        from pytecode.classfile.attributes import CodeAttr
+        from pytecode.classfile.reader import ClassReader
 
         original = ClassReader(path.read_bytes()).class_info
         model = ClassModel.from_classfile(original)

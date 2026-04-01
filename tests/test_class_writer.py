@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 
 from pytecode import ClassModel, ClassReader, ClassWriter
-from pytecode.attributes import RuntimeInvisibleParameterAnnotationsAttr, RuntimeVisibleParameterAnnotationsAttr
-from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from pytecode.model import FieldModel, MethodModel
-from pytecode.verify import Severity, verify_classfile
+from pytecode.analysis.verify import Severity, verify_classfile
+from pytecode.classfile.attributes import (
+    RuntimeInvisibleParameterAnnotationsAttr,
+    RuntimeVisibleParameterAnnotationsAttr,
+)
+from pytecode.classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from pytecode.edit.model import FieldModel, MethodModel
 from tests.helpers import (
     cached_java_resource_classes,
     list_java_resources,

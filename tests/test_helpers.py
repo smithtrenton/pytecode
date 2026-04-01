@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -194,3 +196,123 @@ def test_run_verifier_harness_many_memoizes_by_class_content(
     assert calls["count"] == 1
     assert first_payload == [{"path": str(first.resolve(strict=True)), "status": "VERIFY_OK"}]
     assert second_payload == [{"path": str(second.resolve(strict=True)), "status": "VERIFY_OK"}]
+
+
+def test_ensure_asm_jars_prefers_local_jars_and_caches_downloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_root = tmp_path / "local"
+    download_root = tmp_path / "downloads"
+    local_root.mkdir(parents=True, exist_ok=True)
+
+    local_jar = local_root / helpers._asm_jar_name("asm")
+    local_jar.write_bytes(b"local")
+    downloads: list[tuple[str, Path]] = []
+
+    def fake_download(url: str, destination: Path) -> None:
+        downloads.append((url, destination))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"downloaded")
+
+    helpers.ensure_asm_jars.cache_clear()
+    try:
+        monkeypatch.setattr(helpers, "ORACLE_LIB_ROOT", local_root)
+        monkeypatch.setattr(helpers, "ASM_DOWNLOAD_ROOT", download_root)
+        monkeypatch.setattr(helpers, "ASM_ARTIFACTS", ("asm", "asm-tree"))
+        monkeypatch.setattr(helpers, "_download_file", fake_download)
+
+        first = helpers.ensure_asm_jars()
+        second = helpers.ensure_asm_jars()
+    finally:
+        helpers.ensure_asm_jars.cache_clear()
+
+    cached_jar = download_root / helpers._asm_jar_name("asm-tree")
+    assert first == second
+    assert first == (
+        local_jar.resolve(strict=True),
+        cached_jar.resolve(strict=True),
+    )
+    assert downloads == [(helpers._asm_jar_url("asm-tree"), cached_jar)]
+
+
+def test_run_oracle_passes_method_name_and_returns_dict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class_file = tmp_path / "Demo.class"
+    class_file.write_bytes(b"class-bytes")
+    oracle_classes = tmp_path / "oracle-classes"
+    oracle_classes.mkdir(parents=True, exist_ok=True)
+    commands: list[list[str]] = []
+
+    def fake_ensure_asm_jars() -> tuple[Path, ...]:
+        return ()
+
+    def fake_compile_oracle(_tmp_path: Path) -> Path:
+        return oracle_classes
+
+    def fake_jdk_tool(name: str) -> str:
+        return f"fake-{name}"
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"status":"ok"}', "")
+
+    monkeypatch.setattr(helpers, "ensure_asm_jars", fake_ensure_asm_jars)
+    monkeypatch.setattr(helpers, "compile_oracle", fake_compile_oracle)
+    monkeypatch.setattr(helpers, "_jdk_tool", fake_jdk_tool)
+    monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+
+    payload = helpers.run_oracle(class_file, "targetMethod")
+
+    assert payload == {"status": "ok"}
+    assert commands == [
+        [
+            "fake-java",
+            "-cp",
+            str(oracle_classes),
+            "RecordingAnalyzer",
+            str(class_file.resolve(strict=True)),
+            "targetMethod",
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "message"),
+    [
+        ("[]", "Oracle output must be a JSON object"),
+        ("{not-json", "Oracle returned invalid JSON"),
+    ],
+)
+def test_run_oracle_validates_json_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    message: str,
+) -> None:
+    class_file = tmp_path / "Demo.class"
+    class_file.write_bytes(b"class-bytes")
+    oracle_classes = tmp_path / "oracle-classes"
+    oracle_classes.mkdir(parents=True, exist_ok=True)
+
+    def fake_ensure_asm_jars() -> tuple[Path, ...]:
+        return ()
+
+    def fake_compile_oracle(_tmp_path: Path) -> Path:
+        return oracle_classes
+
+    def fake_jdk_tool(name: str) -> str:
+        return f"fake-{name}"
+
+    def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(helpers, "ensure_asm_jars", fake_ensure_asm_jars)
+    monkeypatch.setattr(helpers, "compile_oracle", fake_compile_oracle)
+    monkeypatch.setattr(helpers, "_jdk_tool", fake_jdk_tool)
+    monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+
+    with pytest.raises(AssertionError, match=message):
+        helpers.run_oracle(class_file)

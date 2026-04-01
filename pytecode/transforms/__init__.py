@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from enum import IntFlag
 from typing import Protocol, cast
 
-from .constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from .descriptors import VoidType, parse_method_descriptor, to_descriptor
-from .model import ClassModel, CodeModel, FieldModel, MethodModel
+from ..classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from ..descriptors import VoidType, parse_method_descriptor, to_descriptor
+from ..edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 
 type Predicate[T] = Callable[[T], bool]
 type ClassPredicate = Predicate[ClassModel]

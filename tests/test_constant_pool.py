@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from pytecode import constant_pool as cp_module
-from pytecode.class_reader import ClassReader
-from pytecode.modified_utf8 import encode_modified_utf8
+import pytecode.classfile.constant_pool as cp_module
+from pytecode.classfile.modified_utf8 import encode_modified_utf8
+from pytecode.classfile.reader import ClassReader
 from tests.helpers import (
     class_entry_bytes,
     class_reader_for_cp,

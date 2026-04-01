@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from pytecode.jar import JarFile
-from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
+from pytecode.archive import JarFile
+from pytecode.classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from pytecode.edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.transforms import (
     ClassPredicate,
     FieldPredicate,

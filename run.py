@@ -7,7 +7,7 @@ from pathlib import Path
 from pprint import pprint
 
 from pytecode import ClassModel, ClassReader, JarFile
-from pytecode.jar import JarInfo
+from pytecode.archive import JarInfo
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

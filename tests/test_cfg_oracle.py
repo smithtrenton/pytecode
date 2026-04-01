@@ -7,7 +7,7 @@ import pytest
 
 from pytecode import ClassModel
 from pytecode.analysis import build_cfg
-from pytecode.instructions import InsnInfoType
+from pytecode.classfile.instructions import InsnInfoType
 from tests.cfg_oracle import (
     NormalizedBlock,
     NormalizedCfg,
@@ -18,7 +18,7 @@ from tests.cfg_oracle import (
     normalize_to_blocks,
     parse_oracle_output,
 )
-from tests.helpers import compile_java_resource, run_oracle
+from tests.helpers import compile_java_resource, find_method_in_model, run_oracle
 
 _CFG_FIXTURE_METHODS = (
     "straightLine",
@@ -83,10 +83,6 @@ def _oracle_method_map(class_file: Path) -> dict[str, OracleMethodCfg]:
     except AssertionError as exc:
         pytest.skip(f"ASM oracle unavailable: {exc}")
     return {method.method_name: method for method in methods}
-
-
-def _find_method(model: ClassModel, name: str):
-    return next(method for method in model.methods if method.name == name)
 
 
 def test_normalize_to_blocks_handles_conditional_branch_shape() -> None:
@@ -217,7 +213,7 @@ class TestCfgOracleIntegration:
         cfg_fixture_oracle: dict[str, OracleMethodCfg],
         method_name: str,
     ) -> None:
-        method = _find_method(cfg_fixture_model, method_name)
+        method = find_method_in_model(cfg_fixture_model, method_name)
         assert method.code is not None
 
         differences = compare_cfgs(
@@ -234,7 +230,7 @@ class TestCfgOracleIntegration:
         edge_case_oracle: dict[str, OracleMethodCfg],
         method_name: str,
     ) -> None:
-        method = _find_method(edge_case_model, method_name)
+        method = find_method_in_model(edge_case_model, method_name)
         assert method.code is not None
 
         differences = compare_cfgs(

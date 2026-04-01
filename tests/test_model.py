@@ -1,4 +1,4 @@
-"""Tests for pytecode.model — the mutable editing model."""
+"""Tests for pytecode.edit.model — the mutable editing model."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from pytecode import constant_pool as cp_module
-from pytecode.attributes import (
+import pytecode.classfile.constant_pool as cp_module
+from pytecode.classfile.attributes import (
     CodeAttr,
     InnerClassesAttr,
     RuntimeVisibleAnnotationsAttr,
@@ -15,18 +15,20 @@ from pytecode.attributes import (
     StackMapTableAttr,
     SyntheticAttr,
 )
-from pytecode.constant_pool_builder import ConstantPoolBuilder
-from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from pytecode.info import ClassFile, FieldInfo, MethodInfo
-from pytecode.instructions import InsnInfo, InsnInfoType
-from pytecode.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
-from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
-from pytecode.modified_utf8 import decode_modified_utf8
-from pytecode.operands import MethodInsn, TypeInsn
+from pytecode.classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from pytecode.classfile.info import ClassFile, FieldInfo
+from pytecode.classfile.instructions import InsnInfo, InsnInfoType
+from pytecode.classfile.modified_utf8 import decode_modified_utf8
+from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+from pytecode.edit.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
+from pytecode.edit.model import ClassModel, CodeModel, FieldModel, MethodModel
+from pytecode.edit.operands import MethodInsn, TypeInsn
 from tests.helpers import (
     cached_java_resource_classes,
     class_entry_bytes,
     compile_java_resource,
+    find_method_in_classfile,
+    find_method_in_model,
     integer_entry_bytes,
     list_java_resources,
     minimal_classfile,
@@ -111,7 +113,7 @@ def instruction_showcase_class(tmp_path: Path) -> Path:
 
 
 def _read_class(path: Path) -> ClassFile:
-    from pytecode.class_reader import ClassReader
+    from pytecode.classfile.reader import ClassReader
 
     return ClassReader(path.read_bytes()).class_info
 
@@ -130,25 +132,11 @@ def _resolve_utf8(cf: ClassFile, cp_index: int) -> str:
     return decode_modified_utf8(entry.str_bytes)
 
 
-def _find_method(model: ClassModel, name: str) -> MethodModel:
-    for m in model.methods:
-        if m.name == name:
-            return m
-    raise AssertionError(f"Method {name!r} not found in ClassModel")
-
-
 def _find_field(model: ClassModel, name: str) -> FieldModel:
     for f in model.fields:
         if f.name == name:
             return f
     raise AssertionError(f"Field {name!r} not found in ClassModel")
-
-
-def _find_method_info(cf: ClassFile, name: str) -> MethodInfo:
-    for method in cf.methods:
-        if _resolve_utf8(cf, method.name_index) == name:
-            return method
-    raise AssertionError(f"Method {name!r} not found in ClassFile")
 
 
 def _find_field_info(cf: ClassFile, name: str) -> FieldInfo:
@@ -364,20 +352,20 @@ class TestFromClassFile:
     def test_hello_world_main_descriptor(self, hello_world_class: Path) -> None:
         cf = _read_class(hello_world_class)
         model = ClassModel.from_classfile(cf)
-        main = _find_method(model, "main")
+        main = find_method_in_model(model, "main")
         assert main.descriptor == "([Ljava/lang/String;)V"
 
     def test_hello_world_main_has_code(self, hello_world_class: Path) -> None:
         cf = _read_class(hello_world_class)
         model = ClassModel.from_classfile(cf)
-        main = _find_method(model, "main")
+        main = find_method_in_model(model, "main")
         assert main.code is not None
         assert len(main.code.instructions) > 0
 
     def test_hello_world_main_max_values(self, hello_world_class: Path) -> None:
         cf = _read_class(hello_world_class)
         model = ClassModel.from_classfile(cf)
-        main = _find_method(model, "main")
+        main = find_method_in_model(model, "main")
         assert main.code is not None
         assert main.code.max_stack >= 1
         assert main.code.max_locals >= 1
@@ -424,12 +412,12 @@ class TestInterfaceModel:
 
     def test_abstract_methods_have_no_code(self, interface_class: Path) -> None:
         model = ClassModel.from_bytes(interface_class.read_bytes())
-        abstract_m = _find_method(model, "abstractMethod")
+        abstract_m = find_method_in_model(model, "abstractMethod")
         assert abstract_m.code is None
 
     def test_default_method_has_code(self, interface_class: Path) -> None:
         model = ClassModel.from_bytes(interface_class.read_bytes())
-        default_m = _find_method(model, "defaultMethod")
+        default_m = find_method_in_model(model, "defaultMethod")
         assert default_m.code is not None
 
     def test_interface_constant_field(self, interface_class: Path) -> None:
@@ -448,13 +436,13 @@ class TestAbstractClassModel:
 
     def test_abstract_methods_no_code(self, abstract_class: Path) -> None:
         model = ClassModel.from_bytes(abstract_class.read_bytes())
-        compute_area = _find_method(model, "computeArea")
+        compute_area = find_method_in_model(model, "computeArea")
         assert compute_area.code is None
         assert MethodAccessFlag.ABSTRACT in compute_area.access_flags
 
     def test_concrete_methods_have_code(self, abstract_class: Path) -> None:
         model = ClassModel.from_bytes(abstract_class.read_bytes())
-        get_name = _find_method(model, "getName")
+        get_name = find_method_in_model(model, "getName")
         assert get_name.code is not None
 
     def test_fields_resolved(self, abstract_class: Path) -> None:
@@ -484,7 +472,7 @@ class TestEnumModel:
 
     def test_enum_user_method(self, enum_class: Path) -> None:
         model = ClassModel.from_bytes(enum_class.read_bytes())
-        lower = _find_method(model, "lower")
+        lower = find_method_in_model(model, "lower")
         assert lower.code is not None
         assert lower.descriptor == "()Ljava/lang/String;"
 
@@ -498,7 +486,7 @@ class TestEnumModel:
 
     def test_enum_has_clinit(self, enum_class: Path) -> None:
         model = ClassModel.from_bytes(enum_class.read_bytes())
-        clinit = _find_method(model, "<clinit>")
+        clinit = find_method_in_model(model, "<clinit>")
         assert clinit.code is not None
 
 
@@ -562,19 +550,19 @@ class TestFieldShowcaseModel:
 class TestTryCatchModel:
     def test_exception_handlers_present(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
-        safe_div = _find_method(model, "safeDivide")
+        safe_div = find_method_in_model(model, "safeDivide")
         assert safe_div.code is not None
         assert len(safe_div.code.exception_handlers) > 0
 
     def test_multi_catch_handlers(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
-        multi = _find_method(model, "multiCatch")
+        multi = find_method_in_model(model, "multiCatch")
         assert multi.code is not None
         assert len(multi.code.exception_handlers) >= 2
 
     def test_exception_handlers_are_symbolic(self, try_catch_class: Path) -> None:
         model = ClassModel.from_bytes(try_catch_class.read_bytes())
-        safe_div = _find_method(model, "safeDivide")
+        safe_div = find_method_in_model(model, "safeDivide")
         assert safe_div.code is not None
         for ex in safe_div.code.exception_handlers:
             assert isinstance(ex, ExceptionHandler)
@@ -587,15 +575,15 @@ class TestTryCatchModel:
 class TestControlFlowModel:
     def test_branch_instructions_are_symbolic(self, control_flow_class: Path) -> None:
         model = ClassModel.from_bytes(control_flow_class.read_bytes())
-        loop_sum = _find_method(model, "loopSum")
+        loop_sum = find_method_in_model(model, "loopSum")
         assert loop_sum.code is not None
         assert any(isinstance(item, BranchInsn) for item in loop_sum.code.instructions)
         assert any(isinstance(item, Label) for item in loop_sum.code.instructions)
 
     def test_switch_instructions_are_symbolic(self, control_flow_class: Path) -> None:
         model = ClassModel.from_bytes(control_flow_class.read_bytes())
-        dense_switch = _find_method(model, "denseSwitch")
-        sparse_switch = _find_method(model, "sparseSwitch")
+        dense_switch = find_method_in_model(model, "denseSwitch")
+        sparse_switch = find_method_in_model(model, "sparseSwitch")
         assert dense_switch.code is not None
         assert sparse_switch.code is not None
         assert any(isinstance(item, TableSwitchInsn) for item in dense_switch.code.instructions)
@@ -603,14 +591,14 @@ class TestControlFlowModel:
 
     def test_line_numbers_are_lifted(self, control_flow_class: Path) -> None:
         model = ClassModel.from_bytes(control_flow_class.read_bytes())
-        branch = _find_method(model, "branch")
+        branch = find_method_in_model(model, "branch")
         assert branch.code is not None
         assert len(branch.code.line_numbers) > 0
         assert all(isinstance(entry.label, Label) for entry in branch.code.line_numbers)
 
     def test_raw_instruction_items_are_independent_from_source(self, control_flow_class: Path) -> None:
         cf = _read_class(control_flow_class)
-        source_method = _find_method_info(cf, "branch")
+        source_method = find_method_in_classfile(cf, "branch")
         source_code = next(attr for attr in source_method.attributes if isinstance(attr, CodeAttr))
         source_raw_type_names = {"InsnInfo", "ByteValue", "ShortValue"}
         source_raw: InsnInfo | None = None
@@ -625,7 +613,7 @@ class TestControlFlowModel:
         assert source_raw_type_name is not None
 
         model = ClassModel.from_classfile(cf)
-        method = _find_method(model, "branch")
+        method = find_method_in_model(model, "branch")
         assert method.code is not None
         model_raw: InsnInfo | None = None
         for model_item in method.code.instructions:
@@ -656,20 +644,20 @@ class TestAnnotatedClassModel:
 
     def test_deprecated_method_has_attributes(self, annotated_class: Path) -> None:
         model = ClassModel.from_bytes(annotated_class.read_bytes())
-        m = _find_method(model, "oldMethod")
+        m = find_method_in_model(model, "oldMethod")
         assert len(m.attributes) > 0
 
 
 class TestStaticInitModel:
     def test_has_clinit(self, static_init_class: Path) -> None:
         model = ClassModel.from_bytes(static_init_class.read_bytes())
-        clinit = _find_method(model, "<clinit>")
+        clinit = find_method_in_model(model, "<clinit>")
         assert clinit.code is not None
         assert MethodAccessFlag.STATIC in clinit.access_flags
 
     def test_has_init(self, static_init_class: Path) -> None:
         model = ClassModel.from_bytes(static_init_class.read_bytes())
-        init = _find_method(model, "<init>")
+        init = find_method_in_model(model, "<init>")
         assert init.code is not None
 
 
@@ -964,7 +952,7 @@ class TestOwnership:
         orig_code_attr = next(a for a in main_mi.attributes if isinstance(a, CodeAttr))
         original_insn_count = len(orig_code_attr.code)
         model = ClassModel.from_classfile(cf)
-        main_mm = _find_method(model, "main")
+        main_mm = find_method_in_model(model, "main")
         assert main_mm.code is not None
         main_mm.code.instructions.clear()
         assert len(orig_code_attr.code) == original_insn_count
@@ -972,7 +960,7 @@ class TestOwnership:
     def test_lowered_code_instructions_independent_from_model(self, hello_world_class: Path) -> None:
         """Clearing instructions in a lowered CodeAttr must not affect the CodeModel."""
         model = ClassModel.from_bytes(hello_world_class.read_bytes())
-        main_mm = _find_method(model, "main")
+        main_mm = find_method_in_model(model, "main")
         assert main_mm.code is not None
         original_insn_count = len(main_mm.code.instructions)
         cf = model.to_classfile()
@@ -1028,11 +1016,11 @@ class TestOwnership:
     def test_model_nested_method_attrs_independent_from_source(self, annotated_class: Path) -> None:
         """Mutating nested method annotation entries on the model must not affect the source MethodInfo."""
         cf = _read_class(annotated_class)
-        source_method = _find_method_info(cf, "oldMethod")
+        source_method = find_method_in_classfile(cf, "oldMethod")
         source_attr = next(a for a in source_method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
         original_type_index = source_attr.annotations[0].type_index
         model = ClassModel.from_classfile(cf)
-        method = _find_method(model, "oldMethod")
+        method = find_method_in_model(model, "oldMethod")
         model_attr = next(a for a in method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
         model_attr.annotations[0].type_index += 1
         assert source_attr.annotations[0].type_index == original_type_index
@@ -1040,11 +1028,11 @@ class TestOwnership:
     def test_classfile_nested_method_attrs_independent_from_model(self, annotated_class: Path) -> None:
         """Mutating nested method annotation entries on lowered output must not affect the model."""
         model = ClassModel.from_bytes(annotated_class.read_bytes())
-        method = _find_method(model, "oldMethod")
+        method = find_method_in_model(model, "oldMethod")
         model_attr = next(a for a in method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
         original_type_index = model_attr.annotations[0].type_index
         cf = model.to_classfile()
-        lowered_method = _find_method_info(cf, "oldMethod")
+        lowered_method = find_method_in_classfile(cf, "oldMethod")
         lowered_attr = next(a for a in lowered_method.attributes if isinstance(a, RuntimeVisibleAnnotationsAttr))
         lowered_attr.annotations[0].type_index += 1
         assert model_attr.annotations[0].type_index == original_type_index
@@ -1055,7 +1043,7 @@ class TestOwnership:
         method_name, source_stack_map = _find_method_with_stack_map(cf)
         original_frame_type = source_stack_map.entries[0].frame_type
         model = ClassModel.from_classfile(cf)
-        method = _find_method(model, method_name)
+        method = find_method_in_model(model, method_name)
         assert method.code is not None
         model_stack_map = next(a for a in method.code.attributes if isinstance(a, StackMapTableAttr))
         model_stack_map.entries[0].frame_type += 1
@@ -1066,7 +1054,7 @@ class TestOwnership:
         model = ClassModel.from_bytes(control_flow_class.read_bytes())
         cf = model.to_classfile()
         method_name, lowered_stack_map = _find_method_with_stack_map(cf)
-        method = _find_method(model, method_name)
+        method = find_method_in_model(model, method_name)
         assert method.code is not None
         model_stack_map = next(a for a in method.code.attributes if isinstance(a, StackMapTableAttr))
         original_frame_type = model_stack_map.entries[0].frame_type
@@ -1133,7 +1121,7 @@ class TestGenericClassModel:
 
     def test_generic_method_has_signature_attribute(self, generic_class: Path) -> None:
         model = ClassModel.from_bytes(generic_class.read_bytes())
-        m = _find_method(model, "getValue")
+        m = find_method_in_model(model, "getValue")
         assert any(isinstance(a, SignatureAttr) for a in m.attributes)
 
 
@@ -1247,7 +1235,7 @@ class TestEmptyCollectionsRoundtrip:
 
     def test_zero_everything_byte_roundtrip(self) -> None:
         """Bare class should survive to_bytes → ClassReader → to_classfile."""
-        from pytecode.class_reader import ClassReader
+        from pytecode.classfile.reader import ClassReader
 
         cls = ClassModel(
             version=(52, 0),

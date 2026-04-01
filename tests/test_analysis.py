@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from pytecode import attributes, constants
+import pytecode.classfile.attributes as attributes
+import pytecode.classfile.constants as constants
 from pytecode.analysis import (
     AnalysisError,
     ControlFlowGraph,
@@ -36,24 +37,24 @@ from pytecode.analysis import (
     vtype_from_descriptor,
     vtype_from_field_descriptor_str,
 )
-from pytecode.constant_pool import ClassInfo
-from pytecode.constants import MethodAccessFlag
-from pytecode.descriptors import ArrayType as DescArrayType
-from pytecode.descriptors import BaseType, ObjectType
-from pytecode.hierarchy import (
+from pytecode.analysis.hierarchy import (
     MappingClassResolver,
     ResolvedClass,
 )
-from pytecode.instructions import InsnInfo, InsnInfoType
-from pytecode.labels import (
+from pytecode.classfile.constant_pool import ClassInfo
+from pytecode.classfile.constants import MethodAccessFlag
+from pytecode.classfile.instructions import InsnInfo, InsnInfoType
+from pytecode.descriptors import ArrayType as DescArrayType
+from pytecode.descriptors import BaseType, ObjectType
+from pytecode.edit.labels import (
     BranchInsn,
     ExceptionHandler,
     Label,
     LookupSwitchInsn,
     TableSwitchInsn,
 )
-from pytecode.model import ClassModel, CodeModel, MethodModel
-from pytecode.operands import (
+from pytecode.edit.model import ClassModel, CodeModel, MethodModel
+from pytecode.edit.operands import (
     FieldInsn,
     IIncInsn,
     InterfaceMethodInsn,
@@ -72,7 +73,7 @@ from pytecode.operands import (
     TypeInsn,
     VarInsn,
 )
-from tests.helpers import compile_java_resource
+from tests.helpers import compile_java_resource, find_method_in_model
 
 # ===================================================================
 # Helper factories
@@ -238,7 +239,7 @@ class TestMergeVTypes:
         assert result == VObject("java/lang/Object")
 
     def test_two_objects_with_resolver(self) -> None:
-        from pytecode.constants import ClassAccessFlag as CAF
+        from pytecode.classfile.constants import ClassAccessFlag as CAF
 
         resolver = MappingClassResolver(
             [
@@ -1281,12 +1282,6 @@ def cfg_model(tmp_path: Path) -> ClassModel:
 class TestCfgFixtureIntegration:
     """Test CFG construction and simulation on compiled Java bytecode."""
 
-    def _find_method(self, model: ClassModel, name: str) -> MethodModel:
-        for m in model.methods:
-            if m.name == name:
-                return m
-        raise AssertionError(f"Method {name!r} not found")
-
     def _assert_cfg_shape(self, cfg: ControlFlowGraph, expected_blocks: tuple[ExpectedCfgBlock, ...]) -> None:
         assert len(cfg.blocks) == len(expected_blocks)
         assert cfg.entry is cfg.blocks[0]
@@ -1297,7 +1292,7 @@ class TestCfgFixtureIntegration:
             assert frozenset(block.exception_handler_ids) == expected.exception_handler_ids
 
     def test_straight_line_single_block(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "straightLine")
+        method = find_method_in_model(cfg_model, "straightLine")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1306,7 +1301,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_empty_method_single_block(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "emptyMethod")
+        method = find_method_in_model(cfg_model, "emptyMethod")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1315,7 +1310,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_if_else_has_branch(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "ifElse")
+        method = find_method_in_model(cfg_model, "ifElse")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1328,7 +1323,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_if_no_else_has_fallthrough_merge(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "ifNoElse")
+        method = find_method_in_model(cfg_model, "ifNoElse")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1341,7 +1336,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_for_loop_has_backedge(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "forLoop")
+        method = find_method_in_model(cfg_model, "forLoop")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1355,7 +1350,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_while_loop_has_backedge(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "whileLoop")
+        method = find_method_in_model(cfg_model, "whileLoop")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1369,7 +1364,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_dense_switch_has_cases(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "denseSwitch")
+        method = find_method_in_model(cfg_model, "denseSwitch")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1385,7 +1380,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_sparse_switch_has_cases(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "sparseSwitch")
+        method = find_method_in_model(cfg_model, "sparseSwitch")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1401,7 +1396,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_try_catch_has_handler_edges(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "tryCatchSingle")
+        method = find_method_in_model(cfg_model, "tryCatchSingle")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1418,7 +1413,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_multiple_handlers(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "tryCatchMultiple")
+        method = find_method_in_model(cfg_model, "tryCatchMultiple")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1441,7 +1436,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_try_catch_finally(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "tryCatchFinally")
+        method = find_method_in_model(cfg_model, "tryCatchFinally")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1470,7 +1465,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_nested_try_catch(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "nestedTryCatch")
+        method = find_method_in_model(cfg_model, "nestedTryCatch")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1498,7 +1493,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_multiple_returns(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "multipleReturns")
+        method = find_method_in_model(cfg_model, "multipleReturns")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1515,7 +1510,7 @@ class TestCfgFixtureIntegration:
         )
 
     def test_athrow_method(self, cfg_model: ClassModel) -> None:
-        method = self._find_method(cfg_model, "throwException")
+        method = find_method_in_model(cfg_model, "throwException")
         assert method.code is not None
         cfg = build_cfg(method.code)
         self._assert_cfg_shape(
@@ -1527,14 +1522,8 @@ class TestCfgFixtureIntegration:
 class TestSimulationFixtureIntegration:
     """Test stack simulation on compiled Java bytecode."""
 
-    def _find_method(self, model: ClassModel, name: str) -> MethodModel:
-        for m in model.methods:
-            if m.name == name:
-                return m
-        raise AssertionError(f"Method {name!r} not found")
-
     def _simulate_method(self, model: ClassModel, method_name: str) -> SimulationResult:
-        method = self._find_method(model, method_name)
+        method = find_method_in_model(model, method_name)
         assert method.code is not None
         cfg = build_cfg(method.code)
         return simulate(cfg, method.code, method, model.name)
@@ -1705,7 +1694,7 @@ class TestVTypeToVerificationTypeInfo:
     """Tests for ``_vtype_to_vti`` — converting analysis VTypes to raw attribute types."""
 
     def setup_method(self) -> None:
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         self.cp = ConstantPoolBuilder()
         self.label_offsets: dict[Label, int] = {}
@@ -2049,7 +2038,7 @@ class TestComputeFrames:
     """Tests for ``compute_frames`` — StackMapTable generation."""
 
     def setup_method(self) -> None:
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
         self.cp = ConstantPoolBuilder()
 
@@ -2060,7 +2049,7 @@ class TestComputeFrames:
         class_name: str = "Test",
     ) -> FrameComputationResult:
         from pytecode.analysis import compute_frames
-        from pytecode.labels import resolve_labels
+        from pytecode.edit.labels import resolve_labels
 
         items = list(code.instructions)
         resolution = resolve_labels(items, self.cp)
@@ -2295,8 +2284,8 @@ class TestLowerCodeRecomputeFrames:
 
     def test_backwards_compatible_no_params(self) -> None:
         """lower_code() without new params should work exactly as before."""
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import lower_code
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import lower_code
 
         cp = ConstantPoolBuilder()
         code = _code(InsnInfo(InsnInfoType.RETURN, 0))
@@ -2306,8 +2295,8 @@ class TestLowerCodeRecomputeFrames:
 
     def test_recompute_frames_updates_maxs(self) -> None:
         """recompute_frames=True should update max_stack and max_locals."""
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import lower_code
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import lower_code
 
         cp = ConstantPoolBuilder()
         code = _code(
@@ -2327,8 +2316,8 @@ class TestLowerCodeRecomputeFrames:
 
     def test_recompute_frames_adds_stack_map_table(self) -> None:
         """recompute_frames=True with branches should add StackMapTable."""
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import lower_code
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import lower_code
 
         cp = ConstantPoolBuilder()
         label = Label()
@@ -2357,8 +2346,8 @@ class TestLowerCodeRecomputeFrames:
 
     def test_recompute_frames_removes_stale_stack_map_table(self) -> None:
         """recompute_frames=True should remove stale StackMapTable attrs when none are needed."""
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import lower_code
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import lower_code
 
         cp = ConstantPoolBuilder()
         stale = attributes.StackMapTableAttr(
@@ -2387,8 +2376,8 @@ class TestLowerCodeRecomputeFrames:
 
     def test_recompute_frames_requires_method_and_class_name(self) -> None:
         """recompute_frames=True without method/class_name should raise."""
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import lower_code
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import lower_code
 
         cp = ConstantPoolBuilder()
         code = _code(InsnInfo(InsnInfoType.RETURN, 0))
@@ -2432,8 +2421,8 @@ class TestComputeFramesWithFixtures:
     def test_hello_world_frames(self, tmp_path: Path) -> None:
         """compute_frames on HelloWorld methods should succeed."""
         from pytecode.analysis import compute_frames
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import resolve_labels
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import resolve_labels
 
         class_path = compile_java_resource(tmp_path, "HelloWorld.java")
         model = ClassModel.from_bytes(class_path.read_bytes())
@@ -2456,8 +2445,8 @@ class TestComputeFramesWithFixtures:
     def test_cfg_fixture_frames(self, tmp_path: Path) -> None:
         """compute_frames on CfgFixture methods should succeed."""
         from pytecode.analysis import compute_frames
-        from pytecode.constant_pool_builder import ConstantPoolBuilder
-        from pytecode.labels import resolve_labels
+        from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+        from pytecode.edit.labels import resolve_labels
 
         class_path = compile_java_resource(tmp_path, "CfgFixture.java")
         model = ClassModel.from_bytes(class_path.read_bytes())

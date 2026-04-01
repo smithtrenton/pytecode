@@ -5,21 +5,19 @@ from pathlib import Path
 
 import pytest
 
-import pytecode.jar as jar_module
-from pytecode.attributes import (
-    CodeAttr,
+import pytecode.archive as jar_module
+from pytecode.archive import JarFile, JarInfo
+from pytecode.classfile.attributes import (
     LineNumberTableAttr,
     LocalVariableTableAttr,
     LocalVariableTypeTableAttr,
     SourceDebugExtensionAttr,
     SourceFileAttr,
 )
-from pytecode.class_reader import ClassReader
-from pytecode.constants import ClassAccessFlag
-from pytecode.info import MethodInfo
-from pytecode.jar import JarFile, JarInfo
-from pytecode.model import ClassModel
-from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
+from pytecode.classfile.constants import ClassAccessFlag
+from pytecode.classfile.reader import ClassReader
+from pytecode.edit.model import ClassModel
+from tests.helpers import TEST_RESOURCES, find_raw_code_attr, make_compiled_jar, minimal_classfile
 
 
 def make_jar(files: dict[str, bytes], path: Path) -> JarFile:
@@ -56,10 +54,6 @@ def make_jar_with_infos(entries: list[tuple[zipfile.ZipInfo, bytes]], path: Path
         for info, data in entries:
             zf.writestr(info, data)
     return JarFile(path)
-
-
-def _find_raw_code(method: MethodInfo) -> CodeAttr | None:
-    return next((attribute for attribute in method.attributes if isinstance(attribute, CodeAttr)), None)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +359,7 @@ def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path
     class_info = ClassReader(rewritten.files["HelloWorld.class"].bytes).class_info
     assert not any(isinstance(attr, (SourceFileAttr, SourceDebugExtensionAttr)) for attr in class_info.attributes)
     for method in class_info.methods:
-        code_attr = _find_raw_code(method)
+        code_attr = find_raw_code_attr(method)
         if code_attr is None:
             continue
         assert not any(

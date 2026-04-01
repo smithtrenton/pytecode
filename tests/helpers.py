@@ -1,4 +1,4 @@
-"""Shared byte-building utilities for pytecode unit tests."""
+"""Shared helper utilities for pytecode tests."""
 
 from __future__ import annotations
 
@@ -17,10 +17,29 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from pytecode import constant_pool as cp_module
-from pytecode.bytes_utils import BytesReader
-from pytecode.class_reader import ClassReader
-from pytecode.modified_utf8 import encode_modified_utf8
+import pytecode.classfile.constant_pool as cp_module
+from pytecode._internal.bytes_utils import BytesReader
+from pytecode.classfile.attributes import (
+    AttributeInfo,
+    CodeAttr,
+    LineNumberInfo,
+    LineNumberTableAttr,
+    LocalVariableInfo,
+    LocalVariableTableAttr,
+    LocalVariableTypeInfo,
+    LocalVariableTypeTableAttr,
+    MethodParameterInfo,
+    MethodParametersAttr,
+    SourceDebugExtensionAttr,
+    SourceFileAttr,
+)
+from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag, MethodParameterAccessFlag
+from pytecode.classfile.info import ClassFile, MethodInfo
+from pytecode.classfile.instructions import InsnInfo, InsnInfoType
+from pytecode.classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
+from pytecode.classfile.reader import ClassReader
+from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
+from pytecode.edit.model import ClassModel, MethodModel
 
 TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
 _REPO_ROOT = TEST_RESOURCES.parent.parent
@@ -580,6 +599,209 @@ def run_oracle(class_file: Path, method_name: str | None = None) -> dict[str, An
     if not isinstance(payload, dict):
         raise AssertionError("Oracle output must be a JSON object")
     return cast(dict[str, Any], payload)
+
+
+# ---------------------------------------------------------------------------
+# Shared lookup/build helpers for tests
+# ---------------------------------------------------------------------------
+
+
+def find_method_in_model(model: ClassModel, name: str) -> MethodModel:
+    """Return the named method from a ``ClassModel`` or raise ``AssertionError``."""
+    for method in model.methods:
+        if method.name == name:
+            return method
+    raise AssertionError(f"Method {name!r} not found in ClassModel")
+
+
+def find_method_in_classfile(cf: ClassFile, name: str, descriptor: str | None = None) -> MethodInfo:
+    """Return the named method from a ``ClassFile`` or raise ``AssertionError``."""
+    for method in cf.methods:
+        name_entry = cf.constant_pool[method.name_index]
+        descriptor_entry = cf.constant_pool[method.descriptor_index]
+        assert isinstance(name_entry, cp_module.Utf8Info)
+        assert isinstance(descriptor_entry, cp_module.Utf8Info)
+        if decode_modified_utf8(name_entry.str_bytes) != name:
+            continue
+        if descriptor is not None and decode_modified_utf8(descriptor_entry.str_bytes) != descriptor:
+            continue
+        return method
+    if descriptor is None:
+        raise AssertionError(f"Method {name!r} not found in ClassFile")
+    raise AssertionError(f"Method {name!r}{descriptor!r} not found in ClassFile")
+
+
+def find_raw_code_attr(method: MethodInfo) -> CodeAttr | None:
+    """Return the first ``CodeAttr`` for a method, if present."""
+    return next((attribute for attribute in method.attributes if isinstance(attribute, CodeAttr)), None)
+
+
+def require_raw_code_attr(method: MethodInfo) -> CodeAttr:
+    """Return the first ``CodeAttr`` for a method or raise ``AssertionError``."""
+    code_attr = find_raw_code_attr(method)
+    if code_attr is None:
+        raise AssertionError("CodeAttr not found")
+    return code_attr
+
+
+def _build_debug_fixture_classfile(
+    *,
+    method_descriptor: str,
+    local_variable_descriptor: str,
+    local_variable_signature: str,
+    include_class_debug_attrs: bool,
+    include_method_parameters: bool,
+) -> ClassFile:
+    cp = ConstantPoolBuilder()
+    this_class = cp.add_class("DebugFixture")
+    super_class = cp.add_class("java/lang/Object")
+    code_name = cp.add_utf8("Code")
+    line_number_name = cp.add_utf8("LineNumberTable")
+    local_variable_name = cp.add_utf8("LocalVariableTable")
+    local_variable_type_name = cp.add_utf8("LocalVariableTypeTable")
+    method_name = cp.add_utf8("demo")
+    method_descriptor_index = cp.add_utf8(method_descriptor)
+    variable_name = cp.add_utf8("value")
+    variable_descriptor = cp.add_utf8(local_variable_descriptor)
+    variable_signature = cp.add_utf8(local_variable_signature)
+
+    code_attr = CodeAttr(
+        attribute_name_index=code_name,
+        attribute_length=62,
+        max_stacks=1,
+        max_locals=1,
+        code_length=2,
+        code=[
+            InsnInfo(InsnInfoType.NOP, 0),
+            InsnInfo(InsnInfoType.RETURN, 1),
+        ],
+        exception_table_length=0,
+        exception_table=[],
+        attributes_count=3,
+        attributes=[
+            LineNumberTableAttr(
+                attribute_name_index=line_number_name,
+                attribute_length=6,
+                line_number_table_length=1,
+                line_number_table=[LineNumberInfo(0, 123)],
+            ),
+            LocalVariableTableAttr(
+                attribute_name_index=local_variable_name,
+                attribute_length=12,
+                local_variable_table_length=1,
+                local_variable_table=[
+                    LocalVariableInfo(
+                        start_pc=0,
+                        length=2,
+                        name_index=variable_name,
+                        descriptor_index=variable_descriptor,
+                        index=0,
+                    )
+                ],
+            ),
+            LocalVariableTypeTableAttr(
+                attribute_name_index=local_variable_type_name,
+                attribute_length=12,
+                local_variable_type_table_length=1,
+                local_variable_type_table=[
+                    LocalVariableTypeInfo(
+                        start_pc=0,
+                        length=2,
+                        name_index=variable_name,
+                        signature_index=variable_signature,
+                        index=0,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    method_attributes: list[AttributeInfo] = [code_attr]
+    if include_method_parameters:
+        method_parameters_name = cp.add_utf8("MethodParameters")
+        method_attributes.insert(
+            0,
+            MethodParametersAttr(
+                attribute_name_index=method_parameters_name,
+                attribute_length=5,
+                parameters_count=1,
+                parameters=[
+                    MethodParameterInfo(
+                        name_index=variable_name,
+                        access_flags=MethodParameterAccessFlag(0),
+                    )
+                ],
+            ),
+        )
+
+    class_attributes: list[AttributeInfo] = []
+    if include_class_debug_attrs:
+        source_file_name = cp.add_utf8("SourceFile")
+        source_file_value = cp.add_utf8("DebugFixture.java")
+        source_debug_name = cp.add_utf8("SourceDebugExtension")
+        class_attributes.extend(
+            [
+                SourceFileAttr(
+                    attribute_name_index=source_file_name,
+                    attribute_length=2,
+                    sourcefile_index=source_file_value,
+                ),
+                SourceDebugExtensionAttr(
+                    attribute_name_index=source_debug_name,
+                    attribute_length=4,
+                    debug_extension="SMAP",
+                ),
+            ]
+        )
+
+    return ClassFile(
+        magic=0xCAFEBABE,
+        minor_version=0,
+        major_version=52,
+        constant_pool_count=cp.count,
+        constant_pool=cp.build(),
+        access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        this_class=this_class,
+        super_class=super_class,
+        interfaces_count=0,
+        interfaces=[],
+        fields_count=0,
+        fields=[],
+        methods_count=1,
+        methods=[
+            MethodInfo(
+                access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.STATIC,
+                name_index=method_name,
+                descriptor_index=method_descriptor_index,
+                attributes_count=len(method_attributes),
+                attributes=method_attributes,
+            )
+        ],
+        attributes_count=len(class_attributes),
+        attributes=class_attributes,
+    )
+
+
+def make_debug_fixture_classfile() -> ClassFile:
+    """Build a minimal debug-rich classfile used by label-lifting tests."""
+    return _build_debug_fixture_classfile(
+        method_descriptor="()V",
+        local_variable_descriptor="Ljava/util/List;",
+        local_variable_signature="Ljava/util/List<Ljava/lang/String;>;",
+        include_class_debug_attrs=False,
+        include_method_parameters=False,
+    )
+
+
+def make_skip_debug_fixture_classfile() -> ClassFile:
+    """Build a minimal debug-rich classfile used by skip-debug tests."""
+    return _build_debug_fixture_classfile(
+        method_descriptor="(I)V",
+        local_variable_descriptor="I",
+        local_variable_signature="TI;",
+        include_class_debug_attrs=True,
+        include_method_parameters=True,
+    )
 
 
 # ---------------------------------------------------------------------------

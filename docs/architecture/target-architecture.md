@@ -81,7 +81,7 @@ Max stack/max locals recomputation and StackMapTable generation are now implemen
 
 ### 4a. Class hierarchy resolution ([#8](https://github.com/smithtrenton/pytecode/issues/8) — done)
 
-`pytecode.hierarchy` now provides a pluggable mechanism for resolving class relationships. The implemented layer covers:
+`pytecode.analysis.hierarchy` now provides a pluggable mechanism for resolving class relationships. The implemented layer covers:
 
 - subtype checks (`is_subtype()`)
 - superclass/interface traversal (`iter_superclasses()`, `iter_supertypes()`)
@@ -93,7 +93,7 @@ Max stack/max locals recomputation and StackMapTable generation are now complete
 
 ## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; four tiers implemented in [#14](https://github.com/smithtrenton/pytecode/issues/14))
 
-Explicit validation is now implemented in `pytecode.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`; `tests/test_validation.py` covers the fixture/release matrix for Tiers 1, 2, and 4; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; and `tests/jvm_harness.py` provides the JVM harness used by Tier 4. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
+Explicit validation is now implemented in `pytecode.analysis.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`; `tests/test_validation.py` covers the fixture/release matrix for Tiers 1, 2, and 4; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; and `tests/jvm_harness.py` provides the JVM harness used by Tier 4. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|
@@ -130,7 +130,7 @@ Responsibilities:
 
 ## 7. JAR rewrite layer ([#15](https://github.com/smithtrenton/pytecode/issues/15) — done)
 
-This layer is now implemented in `pytecode.jar`.
+This layer is now implemented in `pytecode.archive`.
 
 Responsibilities:
 
@@ -147,7 +147,7 @@ Mutation can leave debug metadata semantically stale even when label rebinding k
 
 - rebind lifted code-debug metadata to labels so ordinary instruction edits keep offset-based tables aligned automatically
 - provide explicit preserve/strip helpers so callers can omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata deliberately during lowering
-- model known-stale debug metadata explicitly on `CodeModel` and `ClassModel` via `DebugInfoState`, with helper functions in `pytecode.debug_info`; explicitly stale class/code debug metadata is stripped automatically during lowering, and `verify_classmodel()` warns before emission
+- model known-stale debug metadata explicitly on `CodeModel` and `ClassModel` via `DebugInfoState`, with helper functions in `pytecode.edit.debug_info`; explicitly stale class/code debug metadata is stripped automatically during lowering, and `verify_classmodel()` warns before emission
 - provide `skip_debug=True` lift controls on `ClassModel.from_classfile()`, `ClassModel.from_bytes()`, and `JarFile.rewrite()` for an ASM-like path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before the mutable model is materialized
 
 Staleness is defined semantically rather than by raw bytecode-offset movement alone. Offsets can move safely under label rebinding; metadata becomes stale when callers mutate source mapping or local-variable meaning/scope/signature/slot usage without updating the corresponding debug metadata.

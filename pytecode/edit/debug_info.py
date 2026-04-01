@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, overload
 
-from .attributes import AttributeInfo, MethodParametersAttr, SourceDebugExtensionAttr, SourceFileAttr
+from ..classfile.attributes import AttributeInfo, MethodParametersAttr, SourceDebugExtensionAttr, SourceFileAttr
 
 if TYPE_CHECKING:
     from .model import ClassModel, CodeModel, MethodModel

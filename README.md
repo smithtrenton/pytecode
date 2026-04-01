@@ -69,8 +69,8 @@ Use `recompute_frames=True` when an edit changes control flow or stack/local lay
 
 ```python
 from pytecode import JarFile
-from pytecode.constants import MethodAccessFlag
-from pytecode.model import ClassModel, MethodModel
+from pytecode.classfile.constants import MethodAccessFlag
+from pytecode.edit.model import ClassModel, MethodModel
 from pytecode.transforms import (
     class_named,
     method_is_public,
@@ -110,15 +110,15 @@ Top-level exports:
 Supported submodules:
 
 - `pytecode.transforms` for composable class, field, method, and code transforms.
-- `pytecode.labels` for label-aware bytecode editing helpers.
-- `pytecode.operands` for symbolic operand wrappers.
+- `pytecode.edit.labels` for label-aware bytecode editing helpers.
+- `pytecode.edit.operands` for symbolic operand wrappers.
 - `pytecode.analysis` for CFG construction, frame simulation, and recomputation helpers.
-- `pytecode.verify` for structural validation and diagnostics.
-- `pytecode.hierarchy` for type and override resolution helpers.
+- `pytecode.analysis.verify` for structural validation and diagnostics.
+- `pytecode.analysis.hierarchy` for type and override resolution helpers.
 - `pytecode.descriptors` for JVM descriptors and generic signatures.
-- `pytecode.constant_pool_builder` for deterministic constant-pool construction.
-- `pytecode.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
-- `pytecode.debug_info` for explicit debug-info preservation and stripping policies.
+- `pytecode.edit.constant_pool_builder` for deterministic constant-pool construction.
+- `pytecode.classfile.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
+- `pytecode.edit.debug_info` for explicit debug-info preservation and stripping policies.
 
 ## Documentation
 

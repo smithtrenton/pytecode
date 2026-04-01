@@ -31,7 +31,7 @@ class TestPublicSurface:
                 assert hasattr(mod, name), f"{module_name}.__all__ lists '{name}' but it doesn't exist"
 
     def test_bytes_utils_excluded(self) -> None:
-        assert "pytecode.bytes_utils" not in PUBLIC_MODULES
+        assert "pytecode._internal.bytes_utils" not in PUBLIC_MODULES
 
     def test_no_private_modules(self) -> None:
         for module_name in PUBLIC_MODULES:
@@ -65,7 +65,7 @@ class TestEdgeCases:
     def test_enum_docstrings(self) -> None:
         import inspect
 
-        from pytecode.constants import ClassAccessFlag, VerificationType
+        from pytecode.classfile.constants import ClassAccessFlag, VerificationType
 
         assert inspect.getdoc(ClassAccessFlag)
         assert inspect.getdoc(VerificationType)
@@ -73,7 +73,7 @@ class TestEdgeCases:
     def test_dataclass_docstrings(self) -> None:
         import inspect
 
-        from pytecode.info import ClassFile, FieldInfo, MethodInfo
+        from pytecode.classfile.info import ClassFile, FieldInfo, MethodInfo
 
         assert inspect.getdoc(ClassFile)
         assert inspect.getdoc(FieldInfo)
@@ -90,7 +90,7 @@ class TestEdgeCases:
     def test_overloaded_function_docstrings(self) -> None:
         import inspect
 
-        from pytecode.debug_info import (
+        from pytecode.edit.debug_info import (
             apply_debug_info_policy,
             mark_code_debug_info_stale,
             strip_debug_info,
@@ -103,13 +103,13 @@ class TestEdgeCases:
     def test_type_alias_docstrings(self) -> None:
         import inspect
 
-        from pytecode.operands import LdcValue
+        from pytecode.edit.operands import LdcValue
 
         assert inspect.getdoc(LdcValue)
 
     def test_constant_docstring(self) -> None:
         import inspect
 
-        from pytecode.constants import MAGIC
+        from pytecode.classfile.constants import MAGIC
 
         assert inspect.getdoc(MAGIC)

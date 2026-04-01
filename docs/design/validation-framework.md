@@ -80,7 +80,7 @@ Tier 1 is now implemented in `tests/test_class_writer.py`: the suite covers byte
 
 Verify that emitted output satisfies JVM spec format checking (§4.8) and static constraints (§4.9.1).
 
-**Internal verifier** (`pytecode.verify`): `verify_classfile()` and `verify_classmodel()` perform pure-Python spec checks without external tools. Key checks include:
+**Internal verifier** (`pytecode.analysis.verify`): `verify_classfile()` and `verify_classmodel()` perform pure-Python spec checks without external tools. Key checks include:
 
 - Magic number, version bounds, access-flag mutual exclusions
 - Constant-pool well-formedness: all index references point to valid entries of the correct type
@@ -115,7 +115,7 @@ Compare emitted output against javac's output at a semantic level, identifying d
 | Float 0.0, 1.0, 2.0 | `fconst_0/1/2` | `ldc` |
 | Double 0.0, 1.0 | `dconst_0/1` | `ldc2_w` |
 
-The lowering code in `pytecode/labels.py` already handles VarInsn normalization and LDC size selection. This tier verifies completeness.
+The lowering code in `pytecode/edit/labels.py` already handles VarInsn normalization and LDC size selection. This tier verifies completeness.
 
 **Semantic diff severities**: Differences are categorized as `error` (wrong content), `warning` (valid but non-idiomatic), or `info` (CP ordering difference). The goal is zero errors; warnings indicate optimization opportunities.
 

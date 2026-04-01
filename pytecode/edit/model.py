@@ -13,17 +13,14 @@ from typing import TYPE_CHECKING, cast
 
 __all__ = ["ClassModel", "CodeModel", "FieldModel", "MethodModel"]
 
-from ._attribute_clone import clone_attribute, clone_attributes
-from .attributes import (
+from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
     LineNumberTableAttr,
     LocalVariableTableAttr,
     LocalVariableTypeTableAttr,
 )
-from .class_reader import ClassReader
-from .class_writer import ClassWriter
-from .constant_pool import (
+from ..classfile.constant_pool import (
     ClassInfo,
     DoubleInfo,
     DynamicInfo,
@@ -39,18 +36,9 @@ from .constant_pool import (
     NameAndTypeInfo,
     StringInfo,
 )
-from .constant_pool_builder import ConstantPoolBuilder
-from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from .debug_info import (
-    DebugInfoPolicy,
-    DebugInfoState,
-    is_class_debug_info_stale,
-    normalize_debug_info_policy,
-    skip_debug_method_attributes,
-    strip_class_debug_attributes,
-)
-from .info import ClassFile, FieldInfo, MethodInfo
-from .instructions import (
+from ..classfile.constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from ..classfile.info import ClassFile, FieldInfo, MethodInfo
+from ..classfile.instructions import (
     Branch,
     BranchW,
     ConstPoolIndex,
@@ -65,6 +53,18 @@ from .instructions import (
     LookupSwitch,
     MultiANewArray,
     TableSwitch,
+)
+from ..classfile.reader import ClassReader
+from ..classfile.writer import ClassWriter
+from ._attribute_clone import clone_attribute, clone_attributes
+from .constant_pool_builder import ConstantPoolBuilder
+from .debug_info import (
+    DebugInfoPolicy,
+    DebugInfoState,
+    is_class_debug_info_stale,
+    normalize_debug_info_policy,
+    skip_debug_method_attributes,
+    strip_class_debug_attributes,
 )
 from .labels import (
     BranchInsn,
@@ -105,7 +105,7 @@ from .operands import (
 )
 
 if TYPE_CHECKING:
-    from .hierarchy import ClassResolver
+    from ..analysis.hierarchy import ClassResolver
 
 
 @dataclass

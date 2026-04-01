@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .attributes import (
+from ..classfile.attributes import (
     AnnotationDefaultAttr,
     AttributeInfo,
     BootstrapMethodsAttr,
@@ -41,7 +41,7 @@ from .attributes import (
     SourceDebugExtensionAttr,
     StackMapTableAttr,
 )
-from .constant_pool import (
+from ..classfile.constant_pool import (
     ClassInfo,
     ConstantPoolInfo,
     DoubleInfo,
@@ -61,11 +61,9 @@ from .constant_pool import (
     StringInfo,
     Utf8Info,
 )
-from .constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from .debug_info import is_class_debug_info_stale, is_code_debug_info_stale
-from .descriptors import is_valid_field_descriptor, is_valid_method_descriptor
-from .info import ClassFile, FieldInfo, MethodInfo
-from .instructions import (
+from ..classfile.constants import MAGIC, ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
+from ..classfile.info import ClassFile, FieldInfo, MethodInfo
+from ..classfile.instructions import (
     Branch,
     BranchW,
     ConstPoolIndex,
@@ -77,14 +75,16 @@ from .instructions import (
     MultiANewArray,
     TableSwitch,
 )
-from .labels import (
+from ..classfile.modified_utf8 import decode_modified_utf8
+from ..descriptors import is_valid_field_descriptor, is_valid_method_descriptor
+from ..edit.debug_info import is_class_debug_info_stale, is_code_debug_info_stale
+from ..edit.labels import (
     BranchInsn,
     Label,
     LookupSwitchInsn,
     TableSwitchInsn,
 )
-from .model import ClassModel, CodeModel, FieldModel, MethodModel
-from .modified_utf8 import decode_modified_utf8
+from ..edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 
 __all__ = [
     "Category",

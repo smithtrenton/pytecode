@@ -9,11 +9,11 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from .class_reader import ClassReader
-from .debug_info import DebugInfoPolicy, normalize_debug_info_policy
-from .hierarchy import ClassResolver
-from .model import ClassModel
-from .transforms import ClassTransform
+from ..analysis.hierarchy import ClassResolver
+from ..classfile.reader import ClassReader
+from ..edit.debug_info import DebugInfoPolicy, normalize_debug_info_policy
+from ..edit.model import ClassModel
+from ..transforms import ClassTransform
 
 __all__ = ["JarFile", "JarInfo"]
 

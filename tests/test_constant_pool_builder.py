@@ -1,12 +1,12 @@
-"""Tests for pytecode.constant_pool_builder.ConstantPoolBuilder."""
+"""Tests for pytecode.edit.constant_pool_builder.ConstantPoolBuilder."""
 
 from __future__ import annotations
 
 import pytest
 
-from pytecode import constant_pool as cp_module
-from pytecode.constant_pool_builder import ConstantPoolBuilder
-from pytecode.modified_utf8 import encode_modified_utf8
+import pytecode.classfile.constant_pool as cp_module
+from pytecode.classfile.modified_utf8 import encode_modified_utf8
+from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -5,10 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from pytecode import attributes, constants, info, instructions
-from pytecode import constant_pool as cp_module
-from pytecode.class_reader import ClassReader, MalformedClassException
-from pytecode.modified_utf8 import decode_modified_utf8
+import pytecode.classfile.attributes as attributes
+import pytecode.classfile.constant_pool as cp_module
+import pytecode.classfile.constants as constants
+import pytecode.classfile.info as info
+import pytecode.classfile.instructions as instructions
+from pytecode.classfile.modified_utf8 import decode_modified_utf8
+from pytecode.classfile.reader import ClassReader, MalformedClassException
 from tests.helpers import (
     class_entry_bytes,
     compile_java_resource,

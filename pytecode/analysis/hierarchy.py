@@ -13,13 +13,13 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from .constant_pool import ClassInfo
-from .constant_pool_builder import ConstantPoolBuilder
-from .constants import ClassAccessFlag, MethodAccessFlag
-from .info import ClassFile
+from ..classfile.constant_pool import ClassInfo
+from ..classfile.constants import ClassAccessFlag, MethodAccessFlag
+from ..classfile.info import ClassFile
+from ..edit.constant_pool_builder import ConstantPoolBuilder
 
 if TYPE_CHECKING:
-    from .model import ClassModel
+    from ..edit.model import ClassModel
 
 JAVA_LANG_OBJECT = "java/lang/Object"
 
