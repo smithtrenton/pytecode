@@ -398,7 +398,7 @@ def compile_java_sources(
     release: int = 8,
     classpath: list[Path] | None = None,
 ) -> Path:
-    """Compile Java source files into `tmp_path\\classes` and return that directory."""
+    """Compile Java source files into `tmp_path/classes` and return that directory."""
     classes_dir = tmp_path / "classes"
     cache_classes_dir = _cached_java_classes_dir(
         _normalize_source_files(source_files),

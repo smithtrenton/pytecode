@@ -140,13 +140,13 @@ uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
-uv run python tools\generate_api_docs.py --check
+uv run python tools/generate_api_docs.py --check
 ```
 
 Generate local API reference HTML with:
 
 ```powershell
-uv run python tools\generate_api_docs.py
+uv run python tools/generate_api_docs.py
 ```
 
 Build source and wheel distributions locally:
@@ -155,7 +155,17 @@ Build source and wheel distributions locally:
 uv build
 ```
 
-The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache\pytecode-oracle` and also honor manually seeded jars in `tests\resources\oracle\lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
+Profile isolated JAR-processing stages without `run.py`'s output overhead:
+
+```powershell
+uv run python tools/profile_jar_pipeline.py path/to/jar.jar
+uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages class-parse model-lift model-lower
+uv run python tools/profile_jar_pipeline.py path/to/dir/with/jars --stages model-lift model-lower --summary-json output/profiles/common-libs/summary.json
+```
+
+When making runtime-performance changes, prefer checking both a focused jar such as `225.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
+
+The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache/pytecode-oracle` and also honor manually seeded jars in `tests/resources/oracle/lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
 
 ## Release automation
 
@@ -169,7 +179,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
-uv run python tools\generate_api_docs.py --check
+uv run python tools/generate_api_docs.py --check
 
 git commit -am "Bump version to X.Y.Z"
 git push origin master
@@ -181,12 +191,12 @@ The release workflow rejects tags that do not match `project.version`. Treat rel
 
 ## Repository utilities
 
-`run.py` is a manual smoke-test helper that parses a JAR file, writes pretty-printed parsed class structures under `<jar parent>\output\<jar stem>\parsed\`, and writes class-model-derived rewritten `.class` files plus copied resources under `<jar parent>\output\<jar stem>\rewritten\`.
+`run.py` is a manual smoke-test helper that parses a JAR file, writes pretty-printed parsed class structures under `<jar parent>/output/<jar stem>/parsed/`, and writes class-model-derived rewritten `.class` files plus copied resources under `<jar parent>/output/<jar stem>/rewritten/`.
 
 Example:
 
 ```powershell
-uv run python .\run.py .\path\to\input.jar
+uv run python ./run.py ./path/to/input.jar
 ```
 
 The script prints read, parse, lift, write, and rewrite timings plus class and resource counts to stdout.

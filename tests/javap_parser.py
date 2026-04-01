@@ -667,7 +667,7 @@ def semantic_diff(gold: JavapClass, ours: JavapClass) -> list[SemanticDiff]:
 
 if __name__ == "__main__":
     _SAMPLE = (
-        "Classfile /C:/Users/smith/AppData/Local/Temp/javap_test/HelloWorld.class\n"
+        "Classfile /tmp/javap_test/HelloWorld.class\n"
         "  Last modified Mar 29, 2026; size 603 bytes\n"
         "  SHA-256 checksum 04bd23f88eb390fdf45051e294a07b80\n"
         '  Compiled from "HelloWorld.java"\n'

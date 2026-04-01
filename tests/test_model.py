@@ -18,10 +18,11 @@ from pytecode.attributes import (
 from pytecode.constant_pool_builder import ConstantPoolBuilder
 from pytecode.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
 from pytecode.info import ClassFile, FieldInfo, MethodInfo
-from pytecode.instructions import InsnInfo
+from pytecode.instructions import InsnInfo, InsnInfoType
 from pytecode.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
 from pytecode.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.modified_utf8 import decode_modified_utf8
+from pytecode.operands import MethodInsn, TypeInsn
 from tests.helpers import (
     cached_java_resource_classes,
     class_entry_bytes,
@@ -611,14 +612,29 @@ class TestControlFlowModel:
         cf = _read_class(control_flow_class)
         source_method = _find_method_info(cf, "branch")
         source_code = next(attr for attr in source_method.attributes if isinstance(attr, CodeAttr))
-        source_raw = next(
-            item for item in source_code.code if type(item).__name__ in {"InsnInfo", "ByteValue", "ShortValue"}
-        )
+        source_raw_type_names = {"InsnInfo", "ByteValue", "ShortValue"}
+        source_raw: InsnInfo | None = None
+        source_raw_type_name: str | None = None
+        for source_item in source_code.code:
+            source_item_type_name = type(source_item).__name__
+            if source_item_type_name in source_raw_type_names:
+                source_raw = source_item
+                source_raw_type_name = source_item_type_name
+                break
+        assert source_raw is not None
+        assert source_raw_type_name is not None
 
         model = ClassModel.from_classfile(cf)
         method = _find_method(model, "branch")
         assert method.code is not None
-        model_raw = next(item for item in method.code.instructions if type(item).__name__ == type(source_raw).__name__)
+        model_raw: InsnInfo | None = None
+        for model_item in method.code.instructions:
+            model_item_type_name = type(model_item).__name__
+            if model_item_type_name == source_raw_type_name:
+                assert isinstance(model_item, InsnInfo)
+                model_raw = model_item
+                break
+        assert model_raw is not None
         assert isinstance(model_raw, InsnInfo)
 
         assert model_raw is not source_raw
@@ -859,6 +875,61 @@ class TestOwnership:
         model = ClassModel.from_classfile(cf)
         model.attributes.append(SyntheticAttr(attribute_name_index=1, attribute_length=0))
         assert len(cf.attributes) == original_attr_count
+
+    def test_lifted_const_pool_instructions_do_not_alias_cached_items(self) -> None:
+        code = CodeModel(
+            max_stack=2,
+            max_locals=0,
+            instructions=[
+                TypeInsn(InsnInfoType.NEW, "java/lang/StringBuilder"),
+                TypeInsn(InsnInfoType.NEW, "java/lang/StringBuilder"),
+                MethodInsn(
+                    InsnInfoType.INVOKESPECIAL,
+                    "java/lang/StringBuilder",
+                    "<init>",
+                    "()V",
+                ),
+                MethodInsn(
+                    InsnInfoType.INVOKESPECIAL,
+                    "java/lang/StringBuilder",
+                    "<init>",
+                    "()V",
+                ),
+                InsnInfo(InsnInfoType.RETURN, -1),
+            ],
+        )
+        model = ClassModel(
+            version=(52, 0),
+            access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+            name="com/example/CacheLift",
+            super_name="java/lang/Object",
+            interfaces=[],
+            fields=[],
+            methods=[
+                MethodModel(
+                    access_flags=MethodAccessFlag.PUBLIC | MethodAccessFlag.STATIC,
+                    name="demo",
+                    descriptor="()V",
+                    code=code,
+                    attributes=[],
+                )
+            ],
+            attributes=[],
+        )
+
+        reparsed = ClassModel.from_classfile(model.to_classfile())
+        lifted = reparsed.methods[0].code
+        assert lifted is not None
+
+        first_new = lifted.instructions[0]
+        second_new = lifted.instructions[1]
+        first_init = lifted.instructions[2]
+        second_init = lifted.instructions[3]
+
+        assert first_new == second_new
+        assert first_new is not second_new
+        assert first_init == second_init
+        assert first_init is not second_init
 
     def test_classfile_class_attrs_independent_from_model(self, hello_world_class: Path) -> None:
         """Appending to a lowered ClassFile's attributes must not mutate the model."""
