@@ -1,0 +1,18 @@
+[package]
+name = "pytecode-rust"
+version = "0.0.3"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust backend for pytecode – JVM class file parsing, editing, and emission"
+license = "MIT"
+
+[lib]
+name = "pytecode_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.28"
+
+[features]
+extension-module = ["pyo3/extension-module"]
+default = []

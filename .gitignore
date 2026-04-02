@@ -75,8 +75,10 @@ docs/_build/
 # Generated API reference
 docs/api/
 
-# PyBuilder
+# Rust / Cargo / Maturin
 target/
+Cargo.lock
+*.pdb
 
 # Jupyter Notebook
 .ipynb_checkpoints

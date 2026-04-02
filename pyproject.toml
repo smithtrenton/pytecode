@@ -1,15 +1,10 @@
 [build-system]
-requires = ["setuptools>=82.0.1,<83.0.0"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-include = ["pytecode*"]
-
-[tool.setuptools.package-data]
-pytecode = ["py.typed"]
+[tool.maturin]
+features = ["extension-module"]
+module-name = "pytecode._rust"
 
 [project]
 name = "pytecode"
