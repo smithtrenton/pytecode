@@ -1,7 +1,10 @@
 use pyo3::prelude::*;
 
+mod analysis;
+mod archive;
 mod binary_io;
 mod classfile;
+mod edit;
 
 /// Register a submodule in `sys.modules` so it's importable via `from a.b import c`.
 ///
@@ -24,7 +27,10 @@ fn register_submodule(
 /// through thin wrappers that preserve the existing public API.
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    archive::register(m)?;
+    analysis::register(m)?;
     binary_io::register(m)?;
     classfile::register(m)?;
+    edit::register(m)?;
     Ok(())
 }

@@ -13,6 +13,8 @@ A change is ready to merge or tag when it:
 Run the standard validation set with:
 
 ```powershell
+cargo fmt --check
+cargo clippy --all-targets --features extension-module -- -D warnings -A dead_code
 uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright

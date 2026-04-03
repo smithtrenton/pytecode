@@ -276,7 +276,7 @@ def is_reference(vt: VType) -> bool:
     return isinstance(vt, VNull | VObject | VUninitializedThis | VUninitialized)
 
 
-def merge_vtypes(a: VType, b: VType, resolver: ClassResolver | None = None) -> VType:
+def _merge_vtypes_python(a: VType, b: VType, resolver: ClassResolver | None = None) -> VType:
     """Merge two verification types at a control-flow join point.
 
     Follows JVM spec §4.10.1.2 type merging rules:
@@ -314,6 +314,11 @@ def merge_vtypes(a: VType, b: VType, resolver: ClassResolver | None = None) -> V
 
     # Everything else is incompatible.
     return _TOP
+
+
+def merge_vtypes(a: VType, b: VType, resolver: ClassResolver | None = None) -> VType:
+    """Merge two verification types at a control-flow join point."""
+    return _merge_vtypes_python(a, b, resolver)
 
 
 # ===================================================================
@@ -460,7 +465,7 @@ def initial_frame(method: MethodModel, class_name: str) -> FrameState:
 # ===================================================================
 
 
-def _merge_frames(a: FrameState, b: FrameState, resolver: ClassResolver | None) -> FrameState:
+def _merge_frames_python(a: FrameState, b: FrameState, resolver: ClassResolver | None) -> FrameState:
     """Merge two frame states at a control-flow join point.
 
     Stacks must be the same depth (JVM spec requirement).  Locals are
@@ -479,6 +484,10 @@ def _merge_frames(a: FrameState, b: FrameState, resolver: ClassResolver | None) 
         merged_locals.append(merge_vtypes(la, lb, resolver))
 
     return FrameState(merged_stack, tuple(merged_locals))
+
+
+def _merge_frames(a: FrameState, b: FrameState, resolver: ClassResolver | None) -> FrameState:
+    return _merge_frames_python(a, b, resolver)
 
 
 # ===================================================================

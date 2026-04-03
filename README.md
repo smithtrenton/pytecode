@@ -133,9 +133,13 @@ Create a local environment with development tools:
 uv sync --extra dev
 ```
 
+The repository pins **Rust 1.94.1** in `rust-toolchain.toml`, so `cargo`, `rustfmt`, and `clippy` use that stable toolchain automatically when `rustup` is installed.
+
 Common checks:
 
 ```powershell
+cargo fmt --check
+cargo clippy --all-targets --features extension-module -- -D warnings -A dead_code
 uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
@@ -160,21 +164,27 @@ Profile isolated JAR-processing stages without `run.py`'s output overhead:
 ```powershell
 uv run python tools/profile_jar_pipeline.py path/to/jar.jar
 uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages class-parse model-lift model-lower
+uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages analysis-resolver analysis-frames analysis-verify
+uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages archive-rewrite
 uv run python tools/profile_jar_pipeline.py path/to/dir/with/jars --stages model-lift model-lower --summary-json output/profiles/common-libs/summary.json
 ```
 
-When making runtime-performance changes, prefer checking both a focused jar such as `225.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
+`analysis-resolver` profiles `MappingClassResolver.from_classfiles()`, `analysis-frames` profiles `compute_frames()` across every code-bearing method in the selected jar(s), `analysis-verify` profiles `verify_classfile()` across every parsed classfile, and `archive-rewrite` profiles `JarFile.rewrite()` to a temporary output path. When making runtime-performance changes, prefer checking both a focused jar such as `225.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. A single jar still defaults to the original parse/lift/lower/write pipeline stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
+
+For Rust-experiment A/B comparisons, set `PYTECODE_BLOCK_RUST=1` before the command to force optional `pytecode._rust` imports back through the pure-Python fallback while keeping the same public API surface. The current experiment status and saved benchmark baselines live in [docs/experiments/rust-migration-overview.md](docs/experiments/rust-migration-overview.md).
 
 The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache/pytecode-oracle` and also honor manually seeded jars in `tests/resources/oracle/lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
 
 ## Release automation
 
-PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, builds both `sdist` and `wheel` with `uv build`, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
+PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, uses `PyO3/maturin-action` to build one `sdist` plus platform wheels on Linux, macOS, and Windows, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
 
 Release procedure:
 
 ```powershell
 # 1) bump project.version in pyproject.toml
+cargo fmt --check
+cargo clippy --all-targets --features extension-module -- -D warnings -A dead_code
 uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright

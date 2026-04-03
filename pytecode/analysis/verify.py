@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from .._internal.rust_import import import_optional_rust_module
 from ..classfile.attributes import (
     AnnotationDefaultAttr,
     AttributeInfo,
@@ -85,6 +86,15 @@ from ..edit.labels import (
     TableSwitchInsn,
 )
 from ..edit.model import ClassModel, CodeModel, FieldModel, MethodModel
+
+try:
+    _rust_verify = import_optional_rust_module("pytecode._rust.analysis.verify")
+except ModuleNotFoundError:
+    _rust_verify_code = None
+else:
+    _rust_verify_code = _rust_verify.verify_code
+
+_RUST_VERIFY_AVAILABLE = _rust_verify_code is not None
 
 __all__ = [
     "Category",
@@ -846,6 +856,53 @@ _CLASS_OPS = frozenset({InsnInfoType.NEW, InsnInfoType.CHECKCAST, InsnInfoType.I
 
 
 def _verify_code(
+    code: CodeAttr,
+    cf: ClassFile,
+    dc: _Collector,
+    class_name: str | None,
+    method_name: str | None,
+    method_desc: str | None,
+) -> None:
+    if _rust_verify_code is not None:
+        _verify_code_rust(code, cf, dc, class_name, method_name, method_desc)
+        return
+
+    _verify_code_python(code, cf, dc, class_name, method_name, method_desc)
+
+
+def _verify_code_rust(
+    code: CodeAttr,
+    cf: ClassFile,
+    dc: _Collector,
+    class_name: str | None,
+    method_name: str | None,
+    method_desc: str | None,
+) -> None:
+    cp = cf.constant_pool
+    major = cf.major_version
+    loc = Location(class_name=class_name, method_name=method_name, method_descriptor=method_desc)
+
+    assert _rust_verify_code is not None
+    for message, bytecode_offset in _rust_verify_code(code, cp, major):
+        diag_loc = (
+            loc
+            if bytecode_offset is None
+            else Location(
+                class_name=class_name,
+                method_name=method_name,
+                method_descriptor=method_desc,
+                bytecode_offset=bytecode_offset,
+            )
+        )
+        dc.add(Severity.ERROR, Category.CODE, message, diag_loc)
+
+    if not code.code:
+        return
+
+    _verify_attr_versions(code.attributes, major, loc, dc)
+
+
+def _verify_code_python(
     code: CodeAttr,
     cf: ClassFile,
     dc: _Collector,

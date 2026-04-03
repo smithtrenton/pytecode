@@ -2,7 +2,7 @@
 name = "pytecode-rust"
 version = "0.0.3"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.94"
 description = "Rust backend for pytecode – JVM class file parsing, editing, and emission"
 license = "MIT"
 
@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.28"
+zip = { version = "8.5", default-features = false, features = ["deflate", "time"] }
 
 [features]
 extension-module = ["pyo3/extension-module"]

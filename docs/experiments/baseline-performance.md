@@ -31,3 +31,9 @@ Captured on `rust-experiment` branch before any Rust code is wired into the Pyth
 ## Tests
 
 - 1,670 tests pass in ~10s.
+
+## Notes for Current Branch State
+
+- This baseline was captured before the Rust-backed wrappers were wired into the Python pipeline.
+- The current branch has 1,688 passing pytest tests; the difference comes from tests added during the Rust experiment.
+- Compare this file with [Phase 1 benchmarks](phase-1-benchmarks.md) for the current sampled corpus results after the persistent-wrapper redesign.

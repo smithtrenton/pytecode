@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from .._internal.bytes_utils import BytesWriter
+from .._internal.rust_import import import_optional_rust_module
 from . import attributes, constant_pool, instructions
 from .info import ClassFile, FieldInfo, MethodInfo
 
 __all__ = ["ClassWriter"]
+
+try:
+    _rust_code = import_optional_rust_module("pytecode._rust.classfile.code")
+except ModuleNotFoundError:
+    _rust_write_code_bytes = None
+else:
+    _rust_write_code_bytes = _rust_code.write_code_bytes
+
+_RUST_CODE_AVAILABLE = _rust_write_code_bytes is not None
 
 
 class ClassWriter:
@@ -176,6 +186,20 @@ def _write_attribute(writer: BytesWriter, attr: attributes.AttributeInfo) -> Non
     writer.write_bytes(payload)
 
 
+def _write_code_bytes_python(code: list[instructions.InsnInfo]) -> bytes:
+    code_writer = BytesWriter()
+    for insn in code:
+        _write_instruction(code_writer, insn)
+    return code_writer.to_bytes()
+
+
+def _write_code_bytes_rust(code: list[instructions.InsnInfo]) -> bytes:
+    rust_write = _rust_write_code_bytes
+    assert rust_write is not None
+    raw = rust_write(code)
+    return bytes(raw)
+
+
 def _write_attribute_payload(writer: BytesWriter, attr: attributes.AttributeInfo) -> None:
     if isinstance(attr, (attributes.SyntheticAttr, attributes.DeprecatedAttr)):
         return
@@ -201,10 +225,10 @@ def _write_attribute_payload(writer: BytesWriter, attr: attributes.AttributeInfo
         return
 
     if isinstance(attr, attributes.CodeAttr):
-        code_writer = BytesWriter()
-        for insn in attr.code:
-            _write_instruction(code_writer, insn)
-        code_bytes = code_writer.to_bytes()
+        if _RUST_CODE_AVAILABLE:
+            code_bytes = _write_code_bytes_rust(attr.code)
+        else:
+            code_bytes = _write_code_bytes_python(attr.code)
 
         writer.write_u2(attr.max_stacks)
         writer.write_u2(attr.max_locals)

@@ -23,11 +23,15 @@ def test_modified_utf8_round_trip(value: str) -> None:
     assert decode_modified_utf8(encode_modified_utf8(value)) == value
 
 
-def test_decode_rejects_raw_nul_byte() -> None:
-    with pytest.raises(UnicodeDecodeError, match="NUL"):
-        decode_modified_utf8(b"\x00")
-
-
-def test_decode_rejects_four_byte_sequence() -> None:
-    with pytest.raises(UnicodeDecodeError, match="four-byte sequences"):
-        decode_modified_utf8("😀".encode())
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (b"\x00", "NUL"),
+        (b"\xc1\x81", "overlong two-byte sequence"),
+        (b"\xe0\x80\x80", "overlong three-byte sequence"),
+        ("😀".encode(), "four-byte sequences"),
+    ],
+)
+def test_decode_rejects_invalid_sequences(data: bytes, message: str) -> None:
+    with pytest.raises(UnicodeDecodeError, match=message):
+        decode_modified_utf8(data)

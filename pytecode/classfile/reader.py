@@ -8,16 +8,105 @@ into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.i
 from __future__ import annotations
 
 import os
+from struct import error as StructError
 
 from .._internal.bytes_utils import BytesReader
+from .._internal.rust_import import import_optional_rust_module
 from . import attributes, constant_pool, constants, info, instructions
 from .modified_utf8 import decode_modified_utf8
 
 __all__ = ["ClassReader", "MalformedClassException"]
 
+try:
+    _rust_code = import_optional_rust_module("pytecode._rust.classfile.code")
+except ModuleNotFoundError:
+    _rust_read_code_bytes = None
+else:
+    _rust_read_code_bytes = _rust_code.read_code_bytes
+
+_RUST_CODE_AVAILABLE = _rust_read_code_bytes is not None
+
+try:
+    _rust_constant_pool = import_optional_rust_module("pytecode._rust.classfile.constant_pool")
+except ModuleNotFoundError:
+    _rust_read_constant_pool = None
+else:
+    _rust_read_constant_pool = _rust_constant_pool.read_constant_pool
+
+_RUST_CONSTANT_POOL_AVAILABLE = _rust_read_constant_pool is not None
+
 
 class MalformedClassException(Exception):
     """Raised when the input bytes do not conform to the JVM class-file format (JVMS §4)."""
+
+
+def _rust_record_int(record: tuple[object, ...], index: int) -> int:
+    value = record[index]
+    if not isinstance(value, int):
+        raise TypeError(f"expected Rust constant-pool field {index} to be int, got {type(value).__name__}")
+    return value
+
+
+def _rust_record_bytes(record: tuple[object, ...], index: int) -> bytes:
+    value = record[index]
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    raise TypeError(f"expected Rust constant-pool field {index} to be bytes-like, got {type(value).__name__}")
+
+
+def _constant_pool_info_from_rust(record: tuple[object, ...]) -> constant_pool.ConstantPoolInfo:
+    tag = _rust_record_int(record, 0)
+    index = _rust_record_int(record, 1)
+    offset = _rust_record_int(record, 2)
+    cp_type = constant_pool.ConstantPoolInfoType(tag)
+
+    if cp_type is constant_pool.ConstantPoolInfoType.CLASS:
+        return constant_pool.ClassInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.STRING:
+        return constant_pool.StringInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.METHOD_TYPE:
+        return constant_pool.MethodTypeInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.MODULE:
+        return constant_pool.ModuleInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.PACKAGE:
+        return constant_pool.PackageInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.FIELD_REF:
+        return constant_pool.FieldrefInfo(index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.METHOD_REF:
+        return constant_pool.MethodrefInfo(index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.INTERFACE_METHOD_REF:
+        return constant_pool.InterfaceMethodrefInfo(
+            index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4)
+        )
+    if cp_type is constant_pool.ConstantPoolInfoType.NAME_AND_TYPE:
+        return constant_pool.NameAndTypeInfo(
+            index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4)
+        )
+    if cp_type is constant_pool.ConstantPoolInfoType.DYNAMIC:
+        return constant_pool.DynamicInfo(index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.INVOKE_DYNAMIC:
+        return constant_pool.InvokeDynamicInfo(
+            index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4)
+        )
+    if cp_type is constant_pool.ConstantPoolInfoType.INTEGER:
+        return constant_pool.IntegerInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.FLOAT:
+        return constant_pool.FloatInfo(index, offset, tag, _rust_record_int(record, 3))
+    if cp_type is constant_pool.ConstantPoolInfoType.LONG:
+        return constant_pool.LongInfo(index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.DOUBLE:
+        return constant_pool.DoubleInfo(index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.UTF8:
+        return constant_pool.Utf8Info(index, offset, tag, _rust_record_int(record, 3), _rust_record_bytes(record, 4))
+    if cp_type is constant_pool.ConstantPoolInfoType.METHOD_HANDLE:
+        return constant_pool.MethodHandleInfo(
+            index, offset, tag, _rust_record_int(record, 3), _rust_record_int(record, 4)
+        )
+    raise ValueError(f"Unknown ConstantPoolInfoType: {cp_type}")
 
 
 class ClassReader(BytesReader):
@@ -69,6 +158,27 @@ class ClassReader(BytesReader):
             A fully-parsed :class:`ClassReader` instance.
         """
         return cls(bytes_or_bytearray)
+
+    def _read_constant_pool_python(self, cp_count: int) -> list[constant_pool.ConstantPoolInfo | None]:
+        constant_pool_entries: list[constant_pool.ConstantPoolInfo | None] = [None] * cp_count
+        index = 1
+        while index < cp_count:
+            cp_info, index_extra = self.read_constant_pool_index(index)
+            constant_pool_entries[index] = cp_info
+            index += 1 + index_extra
+        return constant_pool_entries
+
+    def _read_constant_pool_rust(self, cp_count: int) -> list[constant_pool.ConstantPoolInfo | None]:
+        rust_read_constant_pool = _rust_read_constant_pool
+        assert rust_read_constant_pool is not None
+        try:
+            raw_entries, offset = rust_read_constant_pool(self.buffer.obj, cp_count, self.offset)
+        except ValueError as exc:
+            if "unexpected end of data" in str(exc):
+                raise StructError(str(exc)) from exc
+            raise
+        self.offset = int(offset)
+        return [None if record is None else _constant_pool_info_from_rust(record) for record in raw_entries]
 
     def read_constant_pool_index(self, index: int) -> tuple[constant_pool.ConstantPoolInfo, int]:
         """Read a single constant-pool entry at the given logical index (JVMS §4.4).
@@ -218,12 +328,23 @@ class ClassReader(BytesReader):
         Returns:
             Ordered list of decoded instructions.
         """
+        if _RUST_CODE_AVAILABLE:
+            return self._read_code_bytes_rust(code_length)
+        return self._read_code_bytes_python(code_length)
+
+    def _read_code_bytes_python(self, code_length: int) -> list[instructions.InsnInfo]:
         start_method_offset = self.offset
         results: list[instructions.InsnInfo] = []
         while (current_method_offset := self.offset - start_method_offset) < code_length:
             insn = self.read_instruction(current_method_offset)
             results.append(insn)
         return results
+
+    def _read_code_bytes_rust(self, code_length: int) -> list[instructions.InsnInfo]:
+        rust_read = _rust_read_code_bytes
+        assert rust_read is not None
+        code_bytes = self.read_bytes(code_length)
+        return list(rust_read(code_bytes))
 
     def read_verification_type_info(self) -> attributes.VerificationTypeInfo:
         """Read a single ``verification_type_info`` union (JVMS §4.7.4).
@@ -766,13 +887,10 @@ class ClassReader(BytesReader):
             raise MalformedClassException(f"Invalid version {major}/{minor}")
 
         cp_count = self.read_u2()
-
-        self.constant_pool = [None] * cp_count
-        index = 1
-        while index < cp_count:
-            cp_info, index_extra = self.read_constant_pool_index(index)
-            self.constant_pool[index] = cp_info
-            index += 1 + index_extra
+        if _RUST_CONSTANT_POOL_AVAILABLE:
+            self.constant_pool = self._read_constant_pool_rust(cp_count)
+        else:
+            self.constant_pool = self._read_constant_pool_python(cp_count)
 
         access_flags = constants.ClassAccessFlag(self.read_u2())
         this_class = self.read_u2()

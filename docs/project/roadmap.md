@@ -58,3 +58,4 @@ These are not active roadmap items, but they remain plausible future directions 
 - [../architecture/target-architecture.md](../architecture/target-architecture.md) for the layered reference model.
 - [../design/editing-model.md](../design/editing-model.md) for the design rationale behind the editing surface.
 - [../design/validation-framework.md](../design/validation-framework.md) for the validation-tier breakdown.
+- [../experiments/rust-migration-overview.md](../experiments/rust-migration-overview.md) for the active Rust-backend experiment phases, benchmarks, and next-step guidance.

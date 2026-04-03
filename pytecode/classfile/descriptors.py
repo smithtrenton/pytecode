@@ -7,9 +7,12 @@ with parsing, construction, validation, and slot-counting helpers.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Never
+from typing import Literal, Never, cast
+
+from .._internal.rust_import import import_optional_rust_module
 
 __all__ = [
     "ArrayType",
@@ -42,6 +45,27 @@ __all__ = [
     "slot_size",
     "to_descriptor",
 ]
+
+try:
+    _rust_descriptors = import_optional_rust_module("pytecode._rust.classfile.descriptors")
+except ModuleNotFoundError:
+    _rust_parse_field_descriptor = None
+    _rust_parse_method_descriptor = None
+    _rust_parse_class_signature = None
+    _rust_parse_method_signature = None
+    _rust_parse_field_signature = None
+    _rust_is_valid_field_descriptor = None
+    _rust_is_valid_method_descriptor = None
+else:
+    _rust_parse_field_descriptor = _rust_descriptors.parse_field_descriptor
+    _rust_parse_method_descriptor = _rust_descriptors.parse_method_descriptor
+    _rust_parse_class_signature = _rust_descriptors.parse_class_signature
+    _rust_parse_method_signature = _rust_descriptors.parse_method_signature
+    _rust_parse_field_signature = _rust_descriptors.parse_field_signature
+    _rust_is_valid_field_descriptor = _rust_descriptors.is_valid_field_descriptor
+    _rust_is_valid_method_descriptor = _rust_descriptors.is_valid_method_descriptor
+
+_RUST_DESCRIPTORS_AVAILABLE = _rust_parse_field_descriptor is not None
 
 # ---------------------------------------------------------------------------
 # Descriptor data model (JVM spec §4.3.2, §4.3.3)
@@ -789,3 +813,149 @@ def is_valid_method_descriptor(s: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+_parse_field_descriptor_python = parse_field_descriptor
+_parse_method_descriptor_python = parse_method_descriptor
+_parse_class_signature_python = parse_class_signature
+_parse_method_signature_python = parse_method_signature
+_parse_field_signature_python = parse_field_signature
+_is_valid_field_descriptor_python = is_valid_field_descriptor
+_is_valid_method_descriptor_python = is_valid_method_descriptor
+
+
+def _parse_field_descriptor_dispatch(s: str) -> FieldDescriptor:
+    """Parse a JVM field descriptor string into a structured type (§4.3.2).
+
+    Args:
+        s: A field descriptor string such as ``"I"`` or
+            ``"Ljava/lang/String;"``.
+
+    Returns:
+        The parsed descriptor as a ``BaseType``, ``ObjectType``, or
+        ``ArrayType``.
+
+    Raises:
+        ValueError: If *s* is not a valid field descriptor.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_parse = cast(Callable[[str], FieldDescriptor], _rust_parse_field_descriptor)
+        return rust_parse(s)
+    return _parse_field_descriptor_python(s)
+
+
+def _parse_method_descriptor_dispatch(s: str) -> MethodDescriptor:
+    """Parse a JVM method descriptor string into parameter and return types (§4.3.3).
+
+    Args:
+        s: A method descriptor string such as
+            ``"(IDLjava/lang/Thread;)Ljava/lang/Object;"``.
+
+    Returns:
+        A ``MethodDescriptor`` with the parsed parameter and return types.
+
+    Raises:
+        ValueError: If *s* is not a valid method descriptor.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_parse = cast(Callable[[str], MethodDescriptor], _rust_parse_method_descriptor)
+        return rust_parse(s)
+    return _parse_method_descriptor_python(s)
+
+
+def _parse_class_signature_dispatch(s: str) -> ClassSignature:
+    """Parse a generic class signature from a ``Signature`` attribute (§4.7.9.1).
+
+    Args:
+        s: A class signature string such as
+            ``"<T:Ljava/lang/Object;>Ljava/lang/Object;"``.
+
+    Returns:
+        A ``ClassSignature`` with type parameters, superclass, and
+        superinterfaces.
+
+    Raises:
+        ValueError: If *s* is not a valid class signature.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_parse = cast(Callable[[str], ClassSignature], _rust_parse_class_signature)
+        return rust_parse(s)
+    return _parse_class_signature_python(s)
+
+
+def _parse_method_signature_dispatch(s: str) -> MethodSignature:
+    """Parse a generic method signature from a ``Signature`` attribute (§4.7.9.1).
+
+    Args:
+        s: A method signature string such as
+            ``"<T:Ljava/lang/Object;>(TT;)TT;"``.
+
+    Returns:
+        A ``MethodSignature`` with type parameters, parameter types, return
+        type, and throws clause.
+
+    Raises:
+        ValueError: If *s* is not a valid method signature.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_parse = cast(Callable[[str], MethodSignature], _rust_parse_method_signature)
+        return rust_parse(s)
+    return _parse_method_signature_python(s)
+
+
+def _parse_field_signature_dispatch(s: str) -> FieldSignature:
+    """Parse a generic field type signature from a ``Signature`` attribute (§4.7.9.1).
+
+    Args:
+        s: A field signature string such as
+            ``"Ljava/util/List<Ljava/lang/String;>;"``.
+
+    Returns:
+        The parsed reference type signature.
+
+    Raises:
+        ValueError: If *s* is not a valid field signature.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_parse = cast(Callable[[str], FieldSignature], _rust_parse_field_signature)
+        return rust_parse(s)
+    return _parse_field_signature_python(s)
+
+
+def _is_valid_field_descriptor_dispatch(s: str) -> bool:
+    """Return ``True`` if *s* is a well-formed JVM field descriptor (§4.3.2).
+
+    Args:
+        s: The string to validate.
+
+    Returns:
+        Whether *s* can be parsed as a valid field descriptor.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_validate = cast(Callable[[str], bool], _rust_is_valid_field_descriptor)
+        return rust_validate(s)
+    return _is_valid_field_descriptor_python(s)
+
+
+def _is_valid_method_descriptor_dispatch(s: str) -> bool:
+    """Return ``True`` if *s* is a well-formed JVM method descriptor (§4.3.3).
+
+    Args:
+        s: The string to validate.
+
+    Returns:
+        Whether *s* can be parsed as a valid method descriptor.
+    """
+    if _RUST_DESCRIPTORS_AVAILABLE:
+        rust_validate = cast(Callable[[str], bool], _rust_is_valid_method_descriptor)
+        return rust_validate(s)
+    return _is_valid_method_descriptor_python(s)
+
+
+parse_field_descriptor = _parse_field_descriptor_dispatch
+parse_method_descriptor = _parse_method_descriptor_dispatch
+parse_class_signature = _parse_class_signature_dispatch
+parse_method_signature = _parse_method_signature_dispatch
+parse_field_signature = _parse_field_signature_dispatch
+is_valid_field_descriptor = _is_valid_field_descriptor_dispatch
+is_valid_method_descriptor = _is_valid_method_descriptor_dispatch

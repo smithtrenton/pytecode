@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 /// Decode a JVM Modified UTF-8 byte sequence into a Python string.
 ///
@@ -25,13 +26,22 @@ pub fn decode_modified_utf8(data: &[u8]) -> PyResult<String> {
         } else if b0 & 0xE0 == 0xC0 {
             // Two-byte form (U+0000 via C0 80, or U+0080..U+07FF)
             if i + 1 >= data.len() {
-                return Err(PyValueError::new_err("truncated 2-byte Modified UTF-8 sequence"));
+                return Err(PyValueError::new_err(
+                    "truncated 2-byte Modified UTF-8 sequence",
+                ));
             }
             let b1 = data[i + 1];
             if b1 & 0xC0 != 0x80 {
-                return Err(PyValueError::new_err("invalid continuation byte in 2-byte sequence"));
+                return Err(PyValueError::new_err(
+                    "invalid continuation byte in 2-byte sequence",
+                ));
             }
             let cp = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
+            if cp < 0x80 && cp != 0 {
+                return Err(PyValueError::new_err(
+                    "overlong 2-byte Modified UTF-8 sequence",
+                ));
+            }
             out.push(
                 char::from_u32(cp).ok_or_else(|| PyValueError::new_err("invalid code point"))?,
             );
@@ -39,7 +49,9 @@ pub fn decode_modified_utf8(data: &[u8]) -> PyResult<String> {
         } else if b0 & 0xF0 == 0xE0 {
             // Three-byte form (U+0800..U+FFFF, including surrogates for supplementary)
             if i + 2 >= data.len() {
-                return Err(PyValueError::new_err("truncated 3-byte Modified UTF-8 sequence"));
+                return Err(PyValueError::new_err(
+                    "truncated 3-byte Modified UTF-8 sequence",
+                ));
             }
             let b1 = data[i + 1];
             let b2 = data[i + 2];
@@ -48,9 +60,13 @@ pub fn decode_modified_utf8(data: &[u8]) -> PyResult<String> {
                     "invalid continuation byte in 3-byte sequence",
                 ));
             }
-            let cp = (((b0 & 0x0F) as u32) << 12)
-                | (((b1 & 0x3F) as u32) << 6)
-                | ((b2 & 0x3F) as u32);
+            let cp =
+                (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
+            if cp < 0x800 {
+                return Err(PyValueError::new_err(
+                    "overlong 3-byte Modified UTF-8 sequence",
+                ));
+            }
 
             // Check for surrogate pair (supplementary character)
             if (0xD800..=0xDBFF).contains(&cp) {
@@ -97,8 +113,7 @@ pub fn decode_modified_utf8(data: &[u8]) -> PyResult<String> {
 /// Encode a Python string into JVM Modified UTF-8 bytes.
 ///
 /// Inverse of `decode_modified_utf8`.
-#[pyfunction]
-pub fn encode_modified_utf8(s: &str) -> Vec<u8> {
+pub(crate) fn encode_modified_utf8_bytes(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     for ch in s.chars() {
         let cp = ch as u32;
@@ -131,6 +146,12 @@ pub fn encode_modified_utf8(s: &str) -> Vec<u8> {
     out
 }
 
+#[pyfunction]
+pub fn encode_modified_utf8<'py>(py: Python<'py>, s: &str) -> Bound<'py, PyBytes> {
+    let out = encode_modified_utf8_bytes(s);
+    PyBytes::new(py, &out)
+}
+
 /// Register modified_utf8 functions on the parent module.
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let m = PyModule::new(parent.py(), "modified_utf8")?;
@@ -147,7 +168,7 @@ mod tests {
     #[test]
     fn ascii_roundtrip() {
         let input = "Hello, World!";
-        let encoded = encode_modified_utf8(input);
+        let encoded = encode_modified_utf8_bytes(input);
         assert_eq!(encoded, input.as_bytes());
         let decoded = decode_modified_utf8(&encoded).unwrap();
         assert_eq!(decoded, input);
@@ -155,7 +176,7 @@ mod tests {
 
     #[test]
     fn null_character() {
-        let encoded = encode_modified_utf8("\0");
+        let encoded = encode_modified_utf8_bytes("\0");
         assert_eq!(encoded, vec![0xC0, 0x80]);
         let decoded = decode_modified_utf8(&encoded).unwrap();
         assert_eq!(decoded, "\0");
@@ -167,9 +188,19 @@ mod tests {
     }
 
     #[test]
+    fn overlong_two_byte_sequence_is_invalid() {
+        assert!(decode_modified_utf8(&[0xC1, 0x81]).is_err());
+    }
+
+    #[test]
+    fn overlong_three_byte_sequence_is_invalid() {
+        assert!(decode_modified_utf8(&[0xE0, 0x80, 0x80]).is_err());
+    }
+
+    #[test]
     fn two_byte_char() {
         // U+00A9 © = C2 A9
-        let encoded = encode_modified_utf8("©");
+        let encoded = encode_modified_utf8_bytes("©");
         assert_eq!(encoded, vec![0xC2, 0xA9]);
         let decoded = decode_modified_utf8(&encoded).unwrap();
         assert_eq!(decoded, "©");
@@ -178,7 +209,7 @@ mod tests {
     #[test]
     fn three_byte_char() {
         // U+2603 ☃ = E2 98 83
-        let encoded = encode_modified_utf8("☃");
+        let encoded = encode_modified_utf8_bytes("☃");
         assert_eq!(encoded, vec![0xE2, 0x98, 0x83]);
         let decoded = decode_modified_utf8(&encoded).unwrap();
         assert_eq!(decoded, "☃");
@@ -188,7 +219,7 @@ mod tests {
     fn supplementary_surrogate_pair() {
         // U+1F600 😀 → surrogate pair D83D DE00
         let input = "😀";
-        let encoded = encode_modified_utf8(input);
+        let encoded = encode_modified_utf8_bytes(input);
         assert_eq!(encoded.len(), 6); // two 3-byte surrogates
         let decoded = decode_modified_utf8(&encoded).unwrap();
         assert_eq!(decoded, input);

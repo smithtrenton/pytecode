@@ -5,13 +5,26 @@ entries in class files.  It differs from standard UTF-8 in two ways:
 
 * The null character (U+0000) is encoded as the two-byte sequence
   ``0xC0 0x80`` rather than a single ``0x00`` byte.
-* Supplementary characters (U+10000–U+10FFFF) are represented as
+* Supplementary characters (U+10000-U+10FFFF) are represented as
   surrogate pairs, each encoded independently as three bytes.
 """
 
 from __future__ import annotations
 
 from typing import Never
+
+from .._internal.rust_import import import_optional_rust_module
+
+try:
+    _rust_modified_utf8 = import_optional_rust_module("pytecode._rust.classfile.modified_utf8")
+except ModuleNotFoundError:
+    _rust_encode_modified_utf8 = None
+    _rust_decode_modified_utf8 = None
+else:
+    _rust_encode_modified_utf8 = _rust_modified_utf8.encode_modified_utf8
+    _rust_decode_modified_utf8 = _rust_modified_utf8.decode_modified_utf8
+
+_RUST_MODIFIED_UTF8_AVAILABLE = _rust_encode_modified_utf8 is not None and _rust_decode_modified_utf8 is not None
 
 _ONE_BYTE_MAX = 0x7F
 _TWO_BYTE_MAX = 0x7FF
@@ -45,23 +58,7 @@ def _encode_code_unit(code_unit: int, out: bytearray) -> None:
     )
 
 
-def encode_modified_utf8(value: str) -> bytes:
-    """Encode a Python string to JVM Modified UTF-8 bytes (§4.4.7).
-
-    Supplementary characters (U+10000–U+10FFFF) are split into surrogate
-    pairs, each encoded as a three-byte sequence.  The null character
-    (U+0000) is encoded as ``0xC0 0x80``.
-
-    Args:
-        value: The Python string to encode.
-
-    Returns:
-        The Modified UTF-8 encoded byte string.
-
-    Raises:
-        ValueError: If any code point exceeds U+10FFFF.
-    """
-
+def _encode_modified_utf8_python(value: str) -> bytes:
     out = bytearray()
     for char in value:
         code_point = ord(char)
@@ -81,24 +78,7 @@ def encode_modified_utf8(value: str) -> bytes:
     return bytes(out)
 
 
-def decode_modified_utf8(data: bytes) -> str:
-    """Decode JVM Modified UTF-8 bytes into a Python string (§4.4.7).
-
-    Interprets one-, two-, and three-byte Modified UTF-8 sequences,
-    reassembling surrogate pairs into supplementary characters.  Bare
-    ``0x00`` bytes and standard four-byte UTF-8 sequences are rejected.
-
-    Args:
-        data: The Modified UTF-8 encoded bytes to decode.
-
-    Returns:
-        The decoded Python string.
-
-    Raises:
-        UnicodeDecodeError: If *data* contains invalid, truncated, or
-            overlong sequences.
-    """
-
+def _decode_modified_utf8_python(data: bytes) -> str:
     utf16_bytes = bytearray()
     index = 0
 
@@ -140,6 +120,30 @@ def decode_modified_utf8(data: bytes) -> str:
         utf16_bytes.extend((code_unit >> 8, code_unit & 0xFF))
 
     return utf16_bytes.decode("utf-16-be", errors="surrogatepass")
+
+
+def encode_modified_utf8(value: str) -> bytes:
+    """Encode a Python string to JVM Modified UTF-8 bytes (§4.4.7)."""
+
+    if _RUST_MODIFIED_UTF8_AVAILABLE:
+        rust_encode = _rust_encode_modified_utf8
+        assert rust_encode is not None
+        payload = rust_encode(value)
+        return payload if isinstance(payload, bytes) else bytes(payload)
+    return _encode_modified_utf8_python(value)
+
+
+def decode_modified_utf8(data: bytes) -> str:
+    """Decode JVM Modified UTF-8 bytes into a Python string (§4.4.7)."""
+
+    if _RUST_MODIFIED_UTF8_AVAILABLE:
+        rust_decode = _rust_decode_modified_utf8
+        assert rust_decode is not None
+        try:
+            return rust_decode(data)
+        except ValueError:
+            return _decode_modified_utf8_python(data)
+    return _decode_modified_utf8_python(data)
 
 
 __all__ = ["decode_modified_utf8", "encode_modified_utf8"]

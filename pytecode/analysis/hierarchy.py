@@ -13,6 +13,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from .._internal.rust_import import import_optional_rust_module
 from ..classfile.constant_pool import ClassInfo
 from ..classfile.constants import ClassAccessFlag, MethodAccessFlag
 from ..classfile.info import ClassFile
@@ -20,6 +21,27 @@ from ..edit.constant_pool_builder import ConstantPoolBuilder
 
 if TYPE_CHECKING:
     from ..edit.model import ClassModel
+
+try:
+    _rust_hierarchy = import_optional_rust_module("pytecode._rust.analysis.hierarchy")
+except ModuleNotFoundError:
+    _rust_resolved_class_from_classfile = None
+    _rust_resolved_classes_from_classfiles = None
+    _rust_iter_superclasses = None
+    _rust_iter_supertypes = None
+    _rust_is_subtype = None
+    _rust_common_superclass = None
+    _rust_find_overridden_methods = None
+else:
+    _rust_resolved_class_from_classfile = _rust_hierarchy.resolved_class_from_classfile
+    _rust_resolved_classes_from_classfiles = _rust_hierarchy.resolved_classes_from_classfiles
+    _rust_iter_superclasses = _rust_hierarchy.iter_superclasses
+    _rust_iter_supertypes = _rust_hierarchy.iter_supertypes
+    _rust_is_subtype = _rust_hierarchy.is_subtype
+    _rust_common_superclass = _rust_hierarchy.common_superclass
+    _rust_find_overridden_methods = _rust_hierarchy.find_overridden_methods
+
+_RUST_HIERARCHY_AVAILABLE = _rust_iter_superclasses is not None
 
 JAVA_LANG_OBJECT = "java/lang/Object"
 
@@ -120,23 +142,7 @@ class ResolvedClass:
         Returns:
             A new ``ResolvedClass`` populated from the class file metadata.
         """
-
-        cp = ConstantPoolBuilder.from_pool(classfile.constant_pool)
-        methods = tuple(
-            ResolvedMethod(
-                cp.resolve_utf8(method.name_index),
-                cp.resolve_utf8(method.descriptor_index),
-                method.access_flags,
-            )
-            for method in classfile.methods
-        )
-        return cls(
-            name=_resolve_class_name(cp, classfile.this_class),
-            super_name=None if classfile.super_class == 0 else _resolve_class_name(cp, classfile.super_class),
-            interfaces=tuple(_resolve_class_name(cp, index) for index in classfile.interfaces),
-            access_flags=classfile.access_flags,
-            methods=methods,
-        )
+        return _resolved_class_from_classfile(classfile)
 
     @classmethod
     def from_model(cls, model: ClassModel) -> ResolvedClass:
@@ -234,8 +240,7 @@ class MappingClassResolver:
         Returns:
             A new resolver backed by the given class files.
         """
-
-        return cls(ResolvedClass.from_classfile(classfile) for classfile in classfiles)
+        return cls(_resolved_classes_from_classfiles(classfiles))
 
     @classmethod
     def from_models(cls, models: Iterable[ClassModel]) -> MappingClassResolver:
@@ -261,7 +266,7 @@ _IMPLICIT_OBJECT = ResolvedClass(
 _NON_OVERRIDABLE_METHOD_FLAGS = MethodAccessFlag.PRIVATE | MethodAccessFlag.STATIC | MethodAccessFlag.FINAL
 
 
-def iter_superclasses(
+def _iter_superclasses_python(
     resolver: ClassResolver,
     class_name: str,
     *,
@@ -304,7 +309,7 @@ def iter_superclasses(
         current_name = current.super_name
 
 
-def iter_supertypes(
+def _iter_supertypes_python(
     resolver: ClassResolver,
     class_name: str,
     *,
@@ -359,7 +364,7 @@ def iter_supertypes(
         yield from visit(interface_name, (root.name,))
 
 
-def is_subtype(resolver: ClassResolver, class_name: str, super_name: str) -> bool:
+def _is_subtype_python(resolver: ClassResolver, class_name: str, super_name: str) -> bool:
     """Return whether *class_name* is assignable to *super_name* by ancestry.
 
     Args:
@@ -375,10 +380,12 @@ def is_subtype(resolver: ClassResolver, class_name: str, super_name: str) -> boo
     """
 
     _resolve_required(resolver, super_name)
-    return any(resolved.name == super_name for resolved in iter_supertypes(resolver, class_name, include_self=True))
+    return any(
+        resolved.name == super_name for resolved in _iter_supertypes_python(resolver, class_name, include_self=True)
+    )
 
 
-def common_superclass(resolver: ClassResolver, left: str, right: str) -> str:
+def _common_superclass_python(resolver: ClassResolver, left: str, right: str) -> str:
     """Return the nearest shared superclass for two internal class names.
 
     Follows superclass edges only (cf. JVM spec §4.10.1.2 type merging).
@@ -397,14 +404,14 @@ def common_superclass(resolver: ClassResolver, left: str, right: str) -> str:
         UnresolvedClassError: If any class in either chain cannot be resolved.
     """
 
-    left_chain = {resolved.name for resolved in iter_superclasses(resolver, left, include_self=True)}
-    for resolved in iter_superclasses(resolver, right, include_self=True):
+    left_chain = {resolved.name for resolved in _iter_superclasses_python(resolver, left, include_self=True)}
+    for resolved in _iter_superclasses_python(resolver, right, include_self=True):
         if resolved.name in left_chain:
             return resolved.name
     return JAVA_LANG_OBJECT
 
 
-def find_overridden_methods(
+def _find_overridden_methods_python(
     resolver: ClassResolver,
     class_name: str,
     method: ResolvedMethod,
@@ -438,7 +445,7 @@ def find_overridden_methods(
         return ()
 
     matches: list[InheritedMethod] = []
-    for supertype in iter_supertypes(resolver, class_name):
+    for supertype in _iter_supertypes_python(resolver, class_name):
         inherited = supertype.find_method(method.name, method.descriptor)
         if inherited is None:
             continue
@@ -541,6 +548,99 @@ def _can_override(
     if inherited_method.access_flags & (MethodAccessFlag.PUBLIC | MethodAccessFlag.PROTECTED):
         return True
     return _package_name(declaring_owner) == _package_name(inherited_owner)
+
+
+def _resolved_class_from_classfile_python(classfile: ClassFile) -> ResolvedClass:
+    cp = ConstantPoolBuilder.from_pool(classfile.constant_pool)
+    methods = tuple(
+        ResolvedMethod(
+            cp.resolve_utf8(method.name_index),
+            cp.resolve_utf8(method.descriptor_index),
+            method.access_flags,
+        )
+        for method in classfile.methods
+    )
+    return ResolvedClass(
+        name=_resolve_class_name(cp, classfile.this_class),
+        super_name=None if classfile.super_class == 0 else _resolve_class_name(cp, classfile.super_class),
+        interfaces=tuple(_resolve_class_name(cp, index) for index in classfile.interfaces),
+        access_flags=classfile.access_flags,
+        methods=methods,
+    )
+
+
+def _resolved_classes_from_classfiles_python(classfiles: Iterable[ClassFile]) -> tuple[ResolvedClass, ...]:
+    return tuple(_resolved_class_from_classfile_python(classfile) for classfile in classfiles)
+
+
+def _resolved_class_from_classfile(classfile: ClassFile) -> ResolvedClass:
+    if _rust_resolved_class_from_classfile is not None:
+        return _rust_resolved_class_from_classfile(classfile)
+    return _resolved_class_from_classfile_python(classfile)
+
+
+def _resolved_classes_from_classfiles(classfiles: Iterable[ClassFile]) -> tuple[ResolvedClass, ...]:
+    classfiles = tuple(classfiles)
+    if _rust_resolved_classes_from_classfiles is not None:
+        return _rust_resolved_classes_from_classfiles(classfiles)
+    return _resolved_classes_from_classfiles_python(classfiles)
+
+
+def iter_superclasses(
+    resolver: ClassResolver,
+    class_name: str,
+    *,
+    include_self: bool = False,
+) -> Iterator[ResolvedClass]:
+    """Yield the linear superclass chain for *class_name*.
+
+    Uses the Rust backend when available while preserving the existing iterator
+    contract and exception behavior.
+    """
+    if _rust_iter_superclasses is not None:
+        return iter(_rust_iter_superclasses(resolver, class_name, include_self=include_self))
+    return _iter_superclasses_python(resolver, class_name, include_self=include_self)
+
+
+def iter_supertypes(
+    resolver: ClassResolver,
+    class_name: str,
+    *,
+    include_self: bool = False,
+) -> Iterator[ResolvedClass]:
+    """Yield all reachable supertypes of *class_name*.
+
+    Uses the Rust backend when available while preserving the existing iterator
+    contract and exception behavior.
+    """
+    if _rust_iter_supertypes is not None:
+        return iter(_rust_iter_supertypes(resolver, class_name, include_self=include_self))
+    return _iter_supertypes_python(resolver, class_name, include_self=include_self)
+
+
+def is_subtype(resolver: ClassResolver, class_name: str, super_name: str) -> bool:
+    """Return whether *class_name* is assignable to *super_name* by ancestry."""
+    if _rust_is_subtype is not None:
+        return _rust_is_subtype(resolver, class_name, super_name)
+    return _is_subtype_python(resolver, class_name, super_name)
+
+
+def common_superclass(resolver: ClassResolver, left: str, right: str) -> str:
+    """Return the nearest shared superclass for two internal class names."""
+    if _rust_common_superclass is not None:
+        return _rust_common_superclass(resolver, left, right)
+    return _common_superclass_python(resolver, left, right)
+
+
+def find_overridden_methods(
+    resolver: ClassResolver,
+    class_name: str,
+    method: ResolvedMethod,
+) -> tuple[InheritedMethod, ...]:
+    """Return inherited declarations overridden by *method* in *class_name*."""
+    if _rust_find_overridden_methods is not None:
+        return _rust_find_overridden_methods(resolver, class_name, method)
+    return _find_overridden_methods_python(resolver, class_name, method)
 
 
 __all__ = [

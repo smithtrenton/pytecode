@@ -3,6 +3,8 @@
 Usage:
     uv run python tools/profile_jar_pipeline.py 225.jar
     uv run python tools/profile_jar_pipeline.py 225.jar --stages model-lift model-lower
+    uv run python tools/profile_jar_pipeline.py 225.jar --stages analysis-resolver analysis-frames analysis-verify
+    uv run python tools/profile_jar_pipeline.py 225.jar --stages archive-rewrite
     uv run python tools/profile_jar_pipeline.py path/to/jar-corpus --stages model-lift model-lower ^
         --summary-json output/profiles/common-libs/summary.json
 """
@@ -15,6 +17,7 @@ import io
 import json
 import os
 import pstats
+import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -22,18 +25,32 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pytecode import ClassModel, ClassReader, ClassWriter, JarFile
+from pytecode.analysis import compute_frames
+from pytecode.analysis.hierarchy import MappingClassResolver
+from pytecode.analysis.verify import verify_classfile
 from pytecode.archive import JarInfo
 from pytecode.classfile.info import ClassFile
+from pytecode.edit.labels import resolve_labels
+from pytecode.edit.model import MethodModel
 
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]
 type LiftedModels = list[tuple[JarInfo, ClassModel]]
 type LoweredClasses = list[tuple[JarInfo, ClassFile]]
 type SerializedClasses = list[tuple[JarInfo, bytes]]
+type FrameTargets = list[tuple[JarInfo, ClassModel, MethodModel]]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS_OUTPUT_DIR = REPO_ROOT / "output" / "profiles" / "common-libs"
 DEFAULT_CORPUS_STAGES = ("model-lift", "model-lower")
+DEFAULT_SINGLE_JAR_STAGES = (
+    "jar-read",
+    "jar-classify",
+    "class-parse",
+    "model-lift",
+    "model-lower",
+    "class-write",
+)
 
 SORT_CHOICES = (
     "calls",
@@ -83,6 +100,13 @@ def lower_models(models: Sequence[tuple[JarInfo, ClassModel]]) -> LoweredClasses
 def serialize_classfiles(classfiles: Sequence[tuple[JarInfo, ClassFile]]) -> SerializedClasses:
     """Serialize raw ``ClassFile`` trees into ``.class`` bytes."""
     return [(jar_info, ClassWriter.write(classfile)) for jar_info, classfile in classfiles]
+
+
+def analysis_frame_targets(models: Sequence[tuple[JarInfo, ClassModel]]) -> FrameTargets:
+    """Return code-bearing methods that can be analyzed for frame recomputation."""
+    return [
+        (jar_info, model, method) for jar_info, model in models for method in model.methods if method.code is not None
+    ]
 
 
 @dataclass
@@ -255,6 +279,85 @@ def prepare_class_write(inputs: ProfileInputs) -> PreparedStage:
     )
 
 
+def prepare_analysis_resolver(inputs: ProfileInputs) -> PreparedStage:
+    """Profile building hierarchy metadata from parsed class files."""
+    parsed_classes = inputs.parsed()
+
+    def workload() -> str:
+        MappingClassResolver.from_classfiles(reader.class_info for _jar_info, reader in parsed_classes)
+        return f"classes={len(parsed_classes)}"
+
+    return PreparedStage(
+        name="analysis-resolver",
+        description="Resolve class hierarchy metadata from parsed class files.",
+        workload=workload,
+    )
+
+
+def prepare_analysis_frames(inputs: ProfileInputs) -> PreparedStage:
+    """Profile recomputing StackMapTable frames for lifted methods."""
+    parsed_classes = inputs.parsed()
+    models = lift_models(parsed_classes)
+    resolver = MappingClassResolver.from_classfiles(reader.class_info for _jar_info, reader in parsed_classes)
+    targets = analysis_frame_targets(models)
+
+    def workload() -> str:
+        generated_tables = 0
+        for _jar_info, model, method in targets:
+            code = method.code
+            assert code is not None
+            label_offsets = resolve_labels(list(code.instructions), model.constant_pool).label_offsets
+            result = compute_frames(code, method, model.name, model.constant_pool, label_offsets, resolver)
+            if result.stack_map_table is not None:
+                generated_tables += 1
+        return f"methods={len(targets)} stack_map_tables={generated_tables}"
+
+    return PreparedStage(
+        name="analysis-frames",
+        description="Recompute frame metadata for lifted methods using the hierarchy resolver.",
+        workload=workload,
+    )
+
+
+def prepare_analysis_verify(inputs: ProfileInputs) -> PreparedStage:
+    """Profile structural classfile verification across parsed classes."""
+    parsed_classes = inputs.parsed()
+
+    def workload() -> str:
+        diagnostics = 0
+        for _jar_info, reader in parsed_classes:
+            diagnostics += len(verify_classfile(reader.class_info))
+        return f"classes={len(parsed_classes)} diagnostics={diagnostics}"
+
+    return PreparedStage(
+        name="analysis-verify",
+        description="Run structural classfile verification across parsed classfiles.",
+        workload=workload,
+    )
+
+
+def prepare_archive_rewrite(inputs: ProfileInputs) -> PreparedStage:
+    """Profile rewriting the JAR archive to a temporary output path."""
+
+    def workload() -> str:
+        jar = JarFile(inputs.jar_path)
+        class_entries, other_entries = classify_entries(jar)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / inputs.jar_path.name
+            jar.rewrite(output_path)
+            output_size = output_path.stat().st_size
+        return (
+            f"entries={len(jar.files)} class_entries={len(class_entries)} "
+            f"other_entries={len(other_entries)} output_bytes={output_size}"
+        )
+
+    return PreparedStage(
+        name="archive-rewrite",
+        description="Rewrite the JAR archive to a temporary output path.",
+        workload=workload,
+    )
+
+
 STAGE_BUILDERS: dict[str, Callable[[ProfileInputs], PreparedStage]] = {
     "jar-read": prepare_jar_read,
     "jar-classify": prepare_jar_classify,
@@ -262,6 +365,10 @@ STAGE_BUILDERS: dict[str, Callable[[ProfileInputs], PreparedStage]] = {
     "model-lift": prepare_model_lift,
     "model-lower": prepare_model_lower,
     "class-write": prepare_class_write,
+    "analysis-resolver": prepare_analysis_resolver,
+    "analysis-frames": prepare_analysis_frames,
+    "analysis-verify": prepare_analysis_verify,
+    "archive-rewrite": prepare_archive_rewrite,
 }
 
 
@@ -325,7 +432,7 @@ def default_stage_names(inputs: Sequence[Path], explicit_stage_names: Sequence[s
     if explicit_stage_names is not None:
         return list(explicit_stage_names)
     if is_single_jar_input(inputs):
-        return list(STAGE_BUILDERS)
+        return list(DEFAULT_SINGLE_JAR_STAGES)
     return list(DEFAULT_CORPUS_STAGES)
 
 

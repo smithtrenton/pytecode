@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from .._internal.rust_import import import_optional_rust_module
+
 __all__ = ["ConstantPoolBuilder"]
 
 from ..classfile.constant_pool import (
@@ -35,6 +37,15 @@ from ..classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
 
 if TYPE_CHECKING:
     pass
+
+try:
+    _rust_edit = import_optional_rust_module("pytecode._rust.edit")
+except ModuleNotFoundError:
+    _rust_constant_pool_builder = None
+else:
+    _rust_constant_pool_builder = _rust_edit.ConstantPoolBuilder
+
+_RUST_CONSTANT_POOL_BUILDER_AVAILABLE = _rust_constant_pool_builder is not None
 
 # ---------------------------------------------------------------------------
 # JVM constant-pool tag constants (§4.4)
@@ -1244,3 +1255,9 @@ class ConstantPoolBuilder:
     def __len__(self) -> int:
         """Return the number of logical entries, excluding placeholder and gap slots."""
         return sum(1 for e in self._pool if e is not None)
+
+
+_PythonConstantPoolBuilder = ConstantPoolBuilder
+if _RUST_CONSTANT_POOL_BUILDER_AVAILABLE:
+    ConstantPoolBuilder = _rust_constant_pool_builder
+    ConstantPoolBuilder.__doc__ = _PythonConstantPoolBuilder.__doc__

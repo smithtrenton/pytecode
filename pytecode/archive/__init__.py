@@ -9,6 +9,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from .._internal.rust_import import import_optional_rust_module
 from ..analysis.hierarchy import ClassResolver
 from ..classfile.reader import ClassReader
 from ..edit.debug_info import DebugInfoPolicy, normalize_debug_info_policy
@@ -16,6 +17,13 @@ from ..edit.model import ClassModel
 from ..transforms import ClassTransform
 
 __all__ = ["JarFile", "JarInfo"]
+
+try:
+    _rust_archive = import_optional_rust_module("pytecode._rust.archive")
+except ModuleNotFoundError:
+    _rust_write_archive = None
+else:
+    _rust_write_archive = _rust_archive.write_archive
 
 
 @dataclass
@@ -77,6 +85,99 @@ def _clone_zipinfo(zipinfo: zipfile.ZipInfo, *, filename: str) -> zipfile.ZipInf
 
 def _is_class_filename(filename: str) -> bool:
     return not filename.endswith(os.sep) and filename.endswith(".class")
+
+
+def _zipinfo_signature(zipinfo: zipfile.ZipInfo) -> tuple[object, ...]:
+    return (
+        zipinfo.filename,
+        zipinfo.comment,
+        zipinfo.extra,
+        zipinfo.compress_type,
+        zipinfo.date_time,
+        zipinfo.external_attr,
+        getattr(zipinfo, "create_system", 0),
+    )
+
+
+def _is_supported_rust_written_zipinfo(filename: str, zipinfo: zipfile.ZipInfo) -> bool:
+    if filename.endswith(os.sep):
+        return False
+    if zipinfo.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+        return False
+    try:
+        zipinfo.comment.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+
+    high_bits = zipinfo.external_attr >> 16
+    return high_bits == 0o100644 or 0 < high_bits <= 0o777
+
+
+def _raw_copy_filenames_for_rewrite(
+    entries: list[JarInfo],
+    original_files: dict[str, JarInfo],
+    *,
+    should_rewrite_classes: bool,
+) -> list[str]:
+    raw_copy_filenames: list[str] = []
+    for jar_info in entries:
+        original = original_files.get(jar_info.filename)
+        if original is None:
+            continue
+        if should_rewrite_classes and _is_class_filename(jar_info.filename):
+            continue
+        if jar_info.zipinfo.comment or jar_info.zipinfo.extra:
+            continue
+        if not _is_supported_rust_written_zipinfo(jar_info.filename, jar_info.zipinfo):
+            continue
+        if jar_info.bytes != original.bytes:
+            continue
+        if _zipinfo_signature(jar_info.zipinfo) != _zipinfo_signature(original.zipinfo):
+            continue
+        raw_copy_filenames.append(jar_info.filename)
+    return raw_copy_filenames
+
+
+def _can_use_rust_archive_write(
+    entries: list[JarInfo],
+    *,
+    raw_copy_filenames: list[str],
+) -> bool:
+    if _rust_write_archive is None:
+        return False
+    raw_copy = set(raw_copy_filenames)
+    return all(
+        jar_info.filename in raw_copy or _is_supported_rust_written_zipinfo(jar_info.filename, jar_info.zipinfo)
+        for jar_info in entries
+    )
+
+
+def _rewrite_archive_python(
+    entries: list[JarInfo],
+    temp_path: Path,
+    *,
+    should_rewrite_classes: bool,
+    transform: ClassTransform | None,
+    recompute_frames: bool,
+    resolver: ClassResolver | None,
+    debug_policy: DebugInfoPolicy,
+    skip_debug: bool,
+) -> None:
+    with zipfile.ZipFile(temp_path, "w") as jar:
+        for jar_info in entries:
+            data = jar_info.bytes
+            if should_rewrite_classes and _is_class_filename(jar_info.filename):
+                model = ClassModel.from_bytes(data, skip_debug=skip_debug)
+                if transform is not None:
+                    result = transform(model)
+                    if result is not None:
+                        raise TypeError("JarFile.rewrite() transforms must mutate ClassModel in place and return None")
+                data = model.to_bytes(
+                    recompute_frames=recompute_frames,
+                    resolver=resolver,
+                    debug_info=debug_policy,
+                )
+            jar.writestr(_clone_zipinfo(jar_info.zipinfo, filename=jar_info.filename), data)
 
 
 def _read_archive_state(filename: str | os.PathLike[str]) -> tuple[list[zipfile.ZipInfo], dict[str, JarInfo]]:
@@ -240,25 +341,41 @@ class JarFile:
         fd, temp_name = tempfile.mkstemp(prefix=f"{destination.name}-", suffix=".tmp", dir=destination.parent)
         os.close(fd)
         temp_path = Path(temp_name)
+        entries = list(self.files.values())
 
         try:
-            with zipfile.ZipFile(temp_path, "w") as jar:
-                for jar_info in self.files.values():
-                    data = jar_info.bytes
-                    if should_rewrite_classes and _is_class_filename(jar_info.filename):
-                        model = ClassModel.from_bytes(data, skip_debug=skip_debug)
-                        if transform is not None:
-                            result = transform(model)
-                            if result is not None:
-                                raise TypeError(
-                                    "JarFile.rewrite() transforms must mutate ClassModel in place and return None"
-                                )
-                        data = model.to_bytes(
-                            recompute_frames=recompute_frames,
-                            resolver=resolver,
-                            debug_info=debug_policy,
-                        )
-                    jar.writestr(_clone_zipinfo(jar_info.zipinfo, filename=jar_info.filename), data)
+            raw_copy_filenames = _raw_copy_filenames_for_rewrite(
+                entries,
+                _read_archive_state(self.filename)[1],
+                should_rewrite_classes=should_rewrite_classes,
+            )
+
+            if _rust_write_archive is not None and _can_use_rust_archive_write(
+                entries, raw_copy_filenames=raw_copy_filenames
+            ):
+                _rust_write_archive(
+                    self.filename,
+                    entries,
+                    os.fspath(temp_path),
+                    raw_copy_filenames,
+                    should_rewrite_classes,
+                    transform,
+                    recompute_frames,
+                    resolver,
+                    debug_policy,
+                    skip_debug,
+                )
+            else:
+                _rewrite_archive_python(
+                    entries,
+                    temp_path,
+                    should_rewrite_classes=should_rewrite_classes,
+                    transform=transform,
+                    recompute_frames=recompute_frames,
+                    resolver=resolver,
+                    debug_policy=debug_policy,
+                    skip_debug=skip_debug,
+                )
 
             temp_path.replace(destination)
             new_infolist, new_files = _read_archive_state(destination)

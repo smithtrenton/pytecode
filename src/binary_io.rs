@@ -1,10 +1,11 @@
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 /// A stateful sequential reader over a byte buffer (big-endian, JVM byte order).
 ///
 /// Mirrors the Python `BytesReader` in `pytecode._internal.bytes_utils`.
-#[pyclass]
+#[pyclass(subclass)]
 pub struct RustBytesReader {
     data: Vec<u8>,
     offset: usize,
@@ -23,6 +24,11 @@ impl RustBytesReader {
     #[getter]
     fn offset(&self) -> usize {
         self.offset
+    }
+
+    #[setter]
+    fn set_offset(&mut self, value: usize) {
+        self.offset = value;
     }
 
     fn read_u1(&mut self) -> PyResult<u8> {
@@ -69,11 +75,11 @@ impl RustBytesReader {
         self.read_u4().map(|v| v as i32)
     }
 
-    fn read_bytes(&mut self, size: usize) -> PyResult<Vec<u8>> {
+    fn read_bytes<'py>(&mut self, py: Python<'py>, size: usize) -> PyResult<Bound<'py, PyBytes>> {
         if self.offset + size > self.data.len() {
             return Err(PyValueError::new_err("read_bytes: unexpected end of data"));
         }
-        let v = self.data[self.offset..self.offset + size].to_vec();
+        let v = PyBytes::new(py, &self.data[self.offset..self.offset + size]);
         self.offset += size;
         Ok(v)
     }
@@ -110,8 +116,8 @@ impl RustBytesWriter {
         self.buf.len()
     }
 
-    fn to_bytes(&self) -> Vec<u8> {
-        self.buf.clone()
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.buf)
     }
 
     fn write_u1(&mut self, value: u8) {
@@ -228,8 +234,7 @@ mod tests {
         w.write_u4(0xCAFEBABE);
         w.write_u2(0x0034);
         w.write_u1(0xFF);
-        let bytes = w.to_bytes();
-        assert_eq!(bytes, vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x34, 0xFF]);
+        assert_eq!(w.buf, vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x34, 0xFF]);
     }
 
     #[test]
@@ -238,7 +243,7 @@ mod tests {
         let pos = w.reserve_u2();
         w.write_u1(0xAB);
         w.patch_u2(pos, 0x1234).unwrap();
-        assert_eq!(w.to_bytes(), vec![0x12, 0x34, 0xAB]);
+        assert_eq!(w.buf, vec![0x12, 0x34, 0xAB]);
     }
 
     #[test]
@@ -247,6 +252,6 @@ mod tests {
         w.write_u1(0x01);
         w.align(4);
         assert_eq!(w.position(), 4);
-        assert_eq!(w.to_bytes(), vec![0x01, 0x00, 0x00, 0x00]);
+        assert_eq!(w.buf, vec![0x01, 0x00, 0x00, 0x00]);
     }
 }

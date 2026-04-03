@@ -2,14 +2,15 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["master"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["master"]
 
 env:
   PYTHON_VERSION: "3.14"
   JAVA_VERSION: "25"
   PYTEST_CACHE_VERSION: "v1"
+  CARGO_TERM_COLOR: always
 
 jobs:
   quality:
@@ -17,6 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.0.0
         with:
@@ -34,11 +43,53 @@ jobs:
       - name: Validate API docs coverage
         run: uv run python tools/generate_api_docs.py --check
 
+  rust:
+    name: Rust backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Build crate
+        run: cargo build --verbose --features extension-module
+      - name: Check rustfmt
+        run: cargo fmt --check
+      - name: Run cargo tests
+        run: cargo test --verbose
+      - name: Run clippy
+        run: cargo clippy --all-targets --features extension-module -- -D warnings -A dead_code
+      - name: Build editable Rust extension
+        run: uv run maturin develop
+      - name: Verify public wrappers use Rust backend
+        run: uv run pytest -q tests/test_rust_phase0_wrappers.py
+
   test:
     name: Pytest (non-oracle)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.0.0
         with:
@@ -68,6 +119,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.0.0
         with:
@@ -103,12 +162,20 @@ jobs:
   pages-build:
     name: Build GitHub Pages artifact
     if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-    needs: [quality, test, oracle]
+    needs: [quality, rust, test, oracle]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v6
+      - name: Cache Rust dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.0.0
         with:
