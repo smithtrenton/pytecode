@@ -86,7 +86,7 @@ def _iter_constant_pool_entries(list pool):
             raise ValueError(f"constant pool slot {index} is unexpectedly empty")
 
         entries.append(entry)
-        expect_gap = isinstance(entry, (constant_pool.LongInfo, constant_pool.DoubleInfo))
+        expect_gap = type(entry) is constant_pool.LongInfo or type(entry) is constant_pool.DoubleInfo
 
     if expect_gap:
         raise ValueError("constant pool is missing the trailing gap slot for a Long/Double entry")
@@ -94,51 +94,52 @@ def _iter_constant_pool_entries(list pool):
     return entries
 
 
-def _write_constant_pool_entry(object writer, object entry):
+cdef _write_constant_pool_entry(object writer, object entry):
+    cdef type t = type(entry)
     writer.write_u1(entry.tag)
 
-    if isinstance(entry, constant_pool.ClassInfo):
+    if t is constant_pool.ClassInfo:
         writer.write_u2(entry.name_index)
-    elif isinstance(entry, constant_pool.StringInfo):
+    elif t is constant_pool.StringInfo:
         writer.write_u2(entry.string_index)
-    elif isinstance(entry, constant_pool.MethodTypeInfo):
+    elif t is constant_pool.MethodTypeInfo:
         writer.write_u2(entry.descriptor_index)
-    elif isinstance(entry, constant_pool.ModuleInfo):
+    elif t is constant_pool.ModuleInfo:
         writer.write_u2(entry.name_index)
-    elif isinstance(entry, constant_pool.PackageInfo):
+    elif t is constant_pool.PackageInfo:
         writer.write_u2(entry.name_index)
-    elif isinstance(entry, constant_pool.FieldrefInfo):
+    elif t is constant_pool.FieldrefInfo:
         writer.write_u2(entry.class_index)
         writer.write_u2(entry.name_and_type_index)
-    elif isinstance(entry, constant_pool.MethodrefInfo):
+    elif t is constant_pool.MethodrefInfo:
         writer.write_u2(entry.class_index)
         writer.write_u2(entry.name_and_type_index)
-    elif isinstance(entry, constant_pool.InterfaceMethodrefInfo):
+    elif t is constant_pool.InterfaceMethodrefInfo:
         writer.write_u2(entry.class_index)
         writer.write_u2(entry.name_and_type_index)
-    elif isinstance(entry, constant_pool.NameAndTypeInfo):
+    elif t is constant_pool.NameAndTypeInfo:
         writer.write_u2(entry.name_index)
         writer.write_u2(entry.descriptor_index)
-    elif isinstance(entry, constant_pool.DynamicInfo):
+    elif t is constant_pool.DynamicInfo:
         writer.write_u2(entry.bootstrap_method_attr_index)
         writer.write_u2(entry.name_and_type_index)
-    elif isinstance(entry, constant_pool.InvokeDynamicInfo):
+    elif t is constant_pool.InvokeDynamicInfo:
         writer.write_u2(entry.bootstrap_method_attr_index)
         writer.write_u2(entry.name_and_type_index)
-    elif isinstance(entry, constant_pool.IntegerInfo):
+    elif t is constant_pool.IntegerInfo:
         writer.write_u4(entry.value_bytes)
-    elif isinstance(entry, constant_pool.FloatInfo):
+    elif t is constant_pool.FloatInfo:
         writer.write_u4(entry.value_bytes)
-    elif isinstance(entry, constant_pool.LongInfo):
+    elif t is constant_pool.LongInfo:
         writer.write_u4(entry.high_bytes)
         writer.write_u4(entry.low_bytes)
-    elif isinstance(entry, constant_pool.DoubleInfo):
+    elif t is constant_pool.DoubleInfo:
         writer.write_u4(entry.high_bytes)
         writer.write_u4(entry.low_bytes)
-    elif isinstance(entry, constant_pool.Utf8Info):
+    elif t is constant_pool.Utf8Info:
         writer.write_u2(len(entry.str_bytes))
         writer.write_bytes(entry.str_bytes)
-    elif isinstance(entry, constant_pool.MethodHandleInfo):
+    elif t is constant_pool.MethodHandleInfo:
         writer.write_u1(entry.reference_kind)
         writer.write_u2(entry.reference_index)
     else:
@@ -175,31 +176,32 @@ def _write_attribute(object writer, object attr):
     writer.write_bytes(payload)
 
 
-def _write_attribute_payload(object writer, object attr):
-    if isinstance(attr, (attributes.SyntheticAttr, attributes.DeprecatedAttr)):
+cdef _write_attribute_payload(object writer, object attr):
+    cdef type t = type(attr)
+    if t is attributes.SyntheticAttr or t is attributes.DeprecatedAttr:
         return
 
-    if isinstance(attr, attributes.ConstantValueAttr):
+    if t is attributes.ConstantValueAttr:
         writer.write_u2(attr.constantvalue_index)
         return
 
-    if isinstance(attr, attributes.SignatureAttr):
+    if t is attributes.SignatureAttr:
         writer.write_u2(attr.signature_index)
         return
 
-    if isinstance(attr, attributes.SourceFileAttr):
+    if t is attributes.SourceFileAttr:
         writer.write_u2(attr.sourcefile_index)
         return
 
-    if isinstance(attr, attributes.ModuleMainClassAttr):
+    if t is attributes.ModuleMainClassAttr:
         writer.write_u2(attr.main_class_index)
         return
 
-    if isinstance(attr, attributes.NestHostAttr):
+    if t is attributes.NestHostAttr:
         writer.write_u2(attr.host_class_index)
         return
 
-    if isinstance(attr, attributes.CodeAttr):
+    if t is attributes.CodeAttr:
         code_writer = BytesWriter()
         for insn in attr.code:
             _write_instruction(code_writer, insn)
@@ -218,19 +220,19 @@ def _write_attribute_payload(object writer, object attr):
         _write_attributes(writer, attr.attributes)
         return
 
-    if isinstance(attr, attributes.StackMapTableAttr):
+    if t is attributes.StackMapTableAttr:
         writer.write_u2(len(attr.entries))
         for entry in attr.entries:
             _write_stack_map_frame_info(writer, entry)
         return
 
-    if isinstance(attr, attributes.ExceptionsAttr):
+    if t is attributes.ExceptionsAttr:
         writer.write_u2(len(attr.exception_index_table))
         for exception_index in attr.exception_index_table:
             writer.write_u2(exception_index)
         return
 
-    if isinstance(attr, attributes.InnerClassesAttr):
+    if t is attributes.InnerClassesAttr:
         writer.write_u2(len(attr.classes))
         for entry in attr.classes:
             writer.write_u2(entry.inner_class_info_index)
@@ -239,23 +241,23 @@ def _write_attribute_payload(object writer, object attr):
             writer.write_u2(int(entry.inner_class_access_flags))
         return
 
-    if isinstance(attr, attributes.EnclosingMethodAttr):
+    if t is attributes.EnclosingMethodAttr:
         writer.write_u2(attr.class_index)
         writer.write_u2(attr.method_index)
         return
 
-    if isinstance(attr, attributes.SourceDebugExtensionAttr):
+    if t is attributes.SourceDebugExtensionAttr:
         writer.write_bytes(attr.debug_extension.encode("utf-8"))
         return
 
-    if isinstance(attr, attributes.LineNumberTableAttr):
+    if t is attributes.LineNumberTableAttr:
         writer.write_u2(len(attr.line_number_table))
         for entry in attr.line_number_table:
             writer.write_u2(entry.start_pc)
             writer.write_u2(entry.line_number)
         return
 
-    if isinstance(attr, attributes.LocalVariableTableAttr):
+    if t is attributes.LocalVariableTableAttr:
         writer.write_u2(len(attr.local_variable_table))
         for entry in attr.local_variable_table:
             writer.write_u2(entry.start_pc)
@@ -265,7 +267,7 @@ def _write_attribute_payload(object writer, object attr):
             writer.write_u2(entry.index)
         return
 
-    if isinstance(attr, attributes.LocalVariableTypeTableAttr):
+    if t is attributes.LocalVariableTypeTableAttr:
         writer.write_u2(len(attr.local_variable_type_table))
         for entry in attr.local_variable_type_table:
             writer.write_u2(entry.start_pc)
@@ -275,25 +277,13 @@ def _write_attribute_payload(object writer, object attr):
             writer.write_u2(entry.index)
         return
 
-    if isinstance(
-        attr,
-        (
-            attributes.RuntimeVisibleAnnotationsAttr,
-            attributes.RuntimeInvisibleAnnotationsAttr,
-        ),
-    ):
+    if t is attributes.RuntimeVisibleAnnotationsAttr or t is attributes.RuntimeInvisibleAnnotationsAttr:
         writer.write_u2(len(attr.annotations))
         for annotation in attr.annotations:
             _write_annotation_info(writer, annotation)
         return
 
-    if isinstance(
-        attr,
-        (
-            attributes.RuntimeVisibleParameterAnnotationsAttr,
-            attributes.RuntimeInvisibleParameterAnnotationsAttr,
-        ),
-    ):
+    if t is attributes.RuntimeVisibleParameterAnnotationsAttr or t is attributes.RuntimeInvisibleParameterAnnotationsAttr:
         writer.write_u1(len(attr.parameter_annotations))
         for parameter in attr.parameter_annotations:
             writer.write_u2(len(parameter.annotations))
@@ -301,23 +291,17 @@ def _write_attribute_payload(object writer, object attr):
                 _write_annotation_info(writer, annotation)
         return
 
-    if isinstance(
-        attr,
-        (
-            attributes.RuntimeVisibleTypeAnnotationsAttr,
-            attributes.RuntimeInvisibleTypeAnnotationsAttr,
-        ),
-    ):
+    if t is attributes.RuntimeVisibleTypeAnnotationsAttr or t is attributes.RuntimeInvisibleTypeAnnotationsAttr:
         writer.write_u2(len(attr.annotations))
         for annotation in attr.annotations:
             _write_type_annotation_info(writer, annotation)
         return
 
-    if isinstance(attr, attributes.AnnotationDefaultAttr):
+    if t is attributes.AnnotationDefaultAttr:
         _write_element_value_info(writer, attr.default_value)
         return
 
-    if isinstance(attr, attributes.BootstrapMethodsAttr):
+    if t is attributes.BootstrapMethodsAttr:
         writer.write_u2(len(attr.bootstrap_methods))
         for method in attr.bootstrap_methods:
             writer.write_u2(method.bootstrap_method_ref)
@@ -326,14 +310,14 @@ def _write_attribute_payload(object writer, object attr):
                 writer.write_u2(argument)
         return
 
-    if isinstance(attr, attributes.MethodParametersAttr):
+    if t is attributes.MethodParametersAttr:
         writer.write_u1(len(attr.parameters))
         for parameter in attr.parameters:
             writer.write_u2(parameter.name_index)
             writer.write_u2(int(parameter.access_flags))
         return
 
-    if isinstance(attr, attributes.ModuleAttr):
+    if t is attributes.ModuleAttr:
         writer.write_u2(attr.module_name_index)
         writer.write_u2(int(attr.module_flags))
         writer.write_u2(attr.module_version_index)
@@ -372,19 +356,19 @@ def _write_attribute_payload(object writer, object attr):
                 writer.write_u2(implementation)
         return
 
-    if isinstance(attr, attributes.ModulePackagesAttr):
+    if t is attributes.ModulePackagesAttr:
         writer.write_u2(len(attr.package_index))
         for package_index in attr.package_index:
             writer.write_u2(package_index)
         return
 
-    if isinstance(attr, attributes.NestMembersAttr):
+    if t is attributes.NestMembersAttr:
         writer.write_u2(len(attr.classes))
         for class_index in attr.classes:
             writer.write_u2(class_index)
         return
 
-    if isinstance(attr, attributes.RecordAttr):
+    if t is attributes.RecordAttr:
         writer.write_u2(len(attr.components))
         for component in attr.components:
             writer.write_u2(component.name_index)
@@ -392,43 +376,44 @@ def _write_attribute_payload(object writer, object attr):
             _write_attributes(writer, component.attributes)
         return
 
-    if isinstance(attr, attributes.PermittedSubclassesAttr):
+    if t is attributes.PermittedSubclassesAttr:
         writer.write_u2(len(attr.classes))
         for class_index in attr.classes:
             writer.write_u2(class_index)
         return
 
-    if isinstance(attr, attributes.UnimplementedAttr):
+    if t is attributes.UnimplementedAttr:
         writer.write_bytes(attr.info)
         return
 
     raise ValueError(f"Unsupported attribute type: {type(attr).__name__}")
 
 
-def _write_stack_map_frame_info(object writer, object entry):
+cdef _write_stack_map_frame_info(object writer, object entry):
+    cdef type t = type(entry)
     writer.write_u1(entry.frame_type)
 
-    if isinstance(entry, attributes.SameFrameInfo):
+    if t is attributes.SameFrameInfo:
         return
-    if isinstance(entry, attributes.SameLocals1StackItemFrameInfo):
+    if t is attributes.SameLocals1StackItemFrameInfo:
         _write_verification_type_info(writer, entry.stack)
         return
-    if isinstance(entry, attributes.SameLocals1StackItemFrameExtendedInfo):
+    if t is attributes.SameLocals1StackItemFrameExtendedInfo:
         writer.write_u2(entry.offset_delta)
         _write_verification_type_info(writer, entry.stack)
         return
-    if isinstance(entry, attributes.ChopFrameInfo):
+    if t is attributes.ChopFrameInfo:
         writer.write_u2(entry.offset_delta)
         return
-    if isinstance(entry, attributes.SameFrameExtendedInfo):
+    if t is attributes.SameFrameExtendedInfo:
         writer.write_u2(entry.offset_delta)
         return
-    if isinstance(entry, attributes.AppendFrameInfo):
+    if t is attributes.AppendFrameInfo:
         writer.write_u2(entry.offset_delta)
         for local in entry.locals:
             _write_verification_type_info(writer, local)
         return
-    if isinstance(entry, attributes.FullFrameInfo):
+    if t is attributes.FullFrameInfo:
         writer.write_u2(entry.offset_delta)
         writer.write_u2(len(entry.locals))
         for local in entry.locals:
@@ -441,16 +426,17 @@ def _write_stack_map_frame_info(object writer, object entry):
     raise ValueError(f"Unsupported stack-map frame type: {type(entry).__name__}")
 
 
-def _write_verification_type_info(object writer, object entry):
+cdef _write_verification_type_info(object writer, object entry):
+    cdef type t = type(entry)
     writer.write_u1(int(entry.tag))
 
-    if isinstance(entry, attributes.ObjectVariableInfo):
+    if t is attributes.ObjectVariableInfo:
         writer.write_u2(entry.cpool_index)
-    elif isinstance(entry, attributes.UninitializedVariableInfo):
+    elif t is attributes.UninitializedVariableInfo:
         writer.write_u2(entry.offset)
 
 
-def _write_annotation_info(object writer, object annotation):
+cdef _write_annotation_info(object writer, object annotation):
     writer.write_u2(annotation.type_index)
     writer.write_u2(len(annotation.element_value_pairs))
     for pair in annotation.element_value_pairs:
@@ -458,37 +444,37 @@ def _write_annotation_info(object writer, object annotation):
         _write_element_value_info(writer, pair.element_value)
 
 
-def _write_element_value_info(object writer, object element_value):
+cdef _write_element_value_info(object writer, object element_value):
     cdef int tag = _element_value_tag(element_value.tag)
     writer.write_u1(tag)
 
     if tag in {ord("B"), ord("C"), ord("D"), ord("F"), ord("I"), ord("J"), ord("S"), ord("Z"), ord("s")}:
-        if not isinstance(element_value.value, attributes.ConstValueInfo):
+        if type(element_value.value) is not attributes.ConstValueInfo:
             raise ValueError("const element value must carry ConstValueInfo")
         writer.write_u2(element_value.value.const_value_index)
         return
 
     if tag == ord("e"):
-        if not isinstance(element_value.value, attributes.EnumConstantValueInfo):
+        if type(element_value.value) is not attributes.EnumConstantValueInfo:
             raise ValueError("enum element value must carry EnumConstantValueInfo")
         writer.write_u2(element_value.value.type_name_index)
         writer.write_u2(element_value.value.const_name_index)
         return
 
     if tag == ord("c"):
-        if not isinstance(element_value.value, attributes.ClassInfoValueInfo):
+        if type(element_value.value) is not attributes.ClassInfoValueInfo:
             raise ValueError("class element value must carry ClassInfoValueInfo")
         writer.write_u2(element_value.value.class_info_index)
         return
 
     if tag == ord("@"):
-        if not isinstance(element_value.value, attributes.AnnotationInfo):
+        if type(element_value.value) is not attributes.AnnotationInfo:
             raise ValueError("annotation element value must carry AnnotationInfo")
         _write_annotation_info(writer, element_value.value)
         return
 
     if tag == ord("["):
-        if not isinstance(element_value.value, attributes.ArrayValueInfo):
+        if type(element_value.value) is not attributes.ArrayValueInfo:
             raise ValueError("array element value must carry ArrayValueInfo")
         writer.write_u2(len(element_value.value.values))
         for nested in element_value.value.values:
@@ -498,9 +484,9 @@ def _write_element_value_info(object writer, object element_value):
     raise ValueError(f"Unsupported element-value tag: {tag!r}")
 
 
-def _element_value_tag(object tag):
+cdef int _element_value_tag(object tag):
     cdef int val
-    if isinstance(tag, int):
+    if type(tag) is int:
         val = <int>tag
         if not 0 <= val <= 255:
             raise ValueError(f"element-value tag must fit in u1, got {val}")
@@ -510,7 +496,7 @@ def _element_value_tag(object tag):
     return ord(tag)
 
 
-def _write_type_annotation_info(object writer, object annotation):
+cdef _write_type_annotation_info(object writer, object annotation):
     writer.write_u1(annotation.target_type)
     _write_target_info(writer, annotation.target_info)
     _write_type_path_info(writer, annotation.target_path)
@@ -521,39 +507,40 @@ def _write_type_annotation_info(object writer, object annotation):
         _write_element_value_info(writer, pair.element_value)
 
 
-def _write_target_info(object writer, object target_info):
-    if isinstance(target_info, attributes.TypeParameterTargetInfo):
+cdef _write_target_info(object writer, object target_info):
+    cdef type t = type(target_info)
+    if t is attributes.TypeParameterTargetInfo:
         writer.write_u1(target_info.type_parameter_index)
         return
-    if isinstance(target_info, attributes.SupertypeTargetInfo):
+    if t is attributes.SupertypeTargetInfo:
         writer.write_u2(target_info.supertype_index)
         return
-    if isinstance(target_info, attributes.TypeParameterBoundTargetInfo):
+    if t is attributes.TypeParameterBoundTargetInfo:
         writer.write_u1(target_info.type_parameter_index)
         writer.write_u1(target_info.bound_index)
         return
-    if isinstance(target_info, attributes.EmptyTargetInfo):
+    if t is attributes.EmptyTargetInfo:
         return
-    if isinstance(target_info, attributes.FormalParameterTargetInfo):
+    if t is attributes.FormalParameterTargetInfo:
         writer.write_u1(target_info.formal_parameter_index)
         return
-    if isinstance(target_info, attributes.ThrowsTargetInfo):
+    if t is attributes.ThrowsTargetInfo:
         writer.write_u2(target_info.throws_type_index)
         return
-    if isinstance(target_info, attributes.LocalvarTargetInfo):
+    if t is attributes.LocalvarTargetInfo:
         writer.write_u2(len(target_info.table))
         for table_entry in target_info.table:
             writer.write_u2(table_entry.start_pc)
             writer.write_u2(table_entry.length)
             writer.write_u2(table_entry.index)
         return
-    if isinstance(target_info, attributes.CatchTargetInfo):
+    if t is attributes.CatchTargetInfo:
         writer.write_u2(target_info.exception_table_index)
         return
-    if isinstance(target_info, attributes.OffsetTargetInfo):
+    if t is attributes.OffsetTargetInfo:
         writer.write_u2(target_info.offset)
         return
-    if isinstance(target_info, attributes.TypeArgumentTargetInfo):
+    if t is attributes.TypeArgumentTargetInfo:
         writer.write_u2(target_info.offset)
         writer.write_u1(target_info.type_argument_index)
         return
@@ -561,21 +548,22 @@ def _write_target_info(object writer, object target_info):
     raise ValueError(f"Unsupported target-info type: {type(target_info).__name__}")
 
 
-def _write_type_path_info(object writer, object type_path):
+cdef _write_type_path_info(object writer, object type_path):
     writer.write_u1(len(type_path.path))
     for path_item in type_path.path:
         writer.write_u1(path_item.type_path_kind)
         writer.write_u1(path_item.type_argument_index)
 
 
-def _write_instruction(object writer, object insn):
-    if isinstance(insn, instructions.LocalIndexW):
+cdef _write_instruction(object writer, object insn):
+    cdef type t = type(insn)
+    if t is instructions.LocalIndexW:
         writer.write_u1(int(instructions.InsnInfoType.WIDE))
         writer.write_u1(int(insn.type) - int(instructions.InsnInfoType.WIDE))
         writer.write_u2(insn.index)
         return
 
-    if isinstance(insn, instructions.IIncW):
+    if t is instructions.IIncW:
         writer.write_u1(int(instructions.InsnInfoType.WIDE))
         writer.write_u1(int(insn.type) - int(instructions.InsnInfoType.WIDE))
         writer.write_u2(insn.index)
@@ -584,45 +572,45 @@ def _write_instruction(object writer, object insn):
 
     writer.write_u1(int(insn.type))
 
-    if isinstance(insn, instructions.LocalIndex):
+    if t is instructions.LocalIndex:
         writer.write_u1(insn.index)
-    elif isinstance(insn, instructions.ConstPoolIndex):
+    elif t is instructions.ConstPoolIndex:
         writer.write_u2(insn.index)
-    elif isinstance(insn, instructions.ByteValue):
+    elif t is instructions.ByteValue:
         writer.write_i1(insn.value)
-    elif isinstance(insn, instructions.ShortValue):
+    elif t is instructions.ShortValue:
         writer.write_i2(insn.value)
-    elif isinstance(insn, instructions.Branch):
+    elif t is instructions.Branch:
         writer.write_i2(insn.offset)
-    elif isinstance(insn, instructions.BranchW):
+    elif t is instructions.BranchW:
         writer.write_i4(insn.offset)
-    elif isinstance(insn, instructions.IInc):
+    elif t is instructions.IInc:
         writer.write_u1(insn.index)
         writer.write_i1(insn.value)
-    elif isinstance(insn, instructions.InvokeDynamic):
+    elif t is instructions.InvokeDynamic:
         if len(insn.unused) != 2:
             raise ValueError("InvokeDynamic unused bytes must be exactly 2 bytes")
         writer.write_u2(insn.index)
         writer.write_bytes(insn.unused)
-    elif isinstance(insn, instructions.InvokeInterface):
+    elif t is instructions.InvokeInterface:
         if len(insn.unused) != 1:
             raise ValueError("InvokeInterface unused bytes must be exactly 1 byte")
         writer.write_u2(insn.index)
         writer.write_u1(insn.count)
         writer.write_bytes(insn.unused)
-    elif isinstance(insn, instructions.MultiANewArray):
+    elif t is instructions.MultiANewArray:
         writer.write_u2(insn.index)
         writer.write_u1(insn.dimensions)
-    elif isinstance(insn, instructions.NewArray):
+    elif t is instructions.NewArray:
         writer.write_u1(int(insn.atype))
-    elif isinstance(insn, instructions.LookupSwitch):
+    elif t is instructions.LookupSwitch:
         writer.align(4)
         writer.write_i4(insn.default)
         writer.write_u4(len(insn.pairs))
         for pair in insn.pairs:
             writer.write_i4(pair.match)
             writer.write_i4(pair.offset)
-    elif isinstance(insn, instructions.TableSwitch):
+    elif t is instructions.TableSwitch:
         writer.align(4)
         writer.write_i4(insn.default)
         writer.write_i4(insn.low)

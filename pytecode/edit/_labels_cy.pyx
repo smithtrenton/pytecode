@@ -79,6 +79,13 @@ if TYPE_CHECKING:
     from .model import CodeModel, MethodModel
 
 
+_BRANCH_TARGET_CONTEXTS = {
+    insn_type: f"{insn_type.name} target"
+    for insn_type in InsnInfoType
+    if insn_type.instinfo in (Branch, BranchW)
+}
+
+
 def _clone_raw_instruction(insn, *, bytecode_offset=None):
     offset = insn.bytecode_offset if bytecode_offset is None else bytecode_offset
 
@@ -321,6 +328,13 @@ class BranchInsn(InsnInfo):
         super().__init__(insn_type, bytecode_offset)
         self.target = target
 
+    @classmethod
+    def _trusted(cls, insn_type, target, bytecode_offset=-1):
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.target = target
+        return self
+
 
 @dataclass(init=False)
 class LookupSwitchInsn(InsnInfo):
@@ -338,6 +352,14 @@ class LookupSwitchInsn(InsnInfo):
         super().__init__(InsnInfoType.LOOKUPSWITCH, bytecode_offset)
         self.default_target = default_target
         self.pairs = list(pairs)
+
+    @classmethod
+    def _trusted(cls, default_target, pairs, bytecode_offset=-1):
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.LOOKUPSWITCH, bytecode_offset)
+        self.default_target = default_target
+        self.pairs = list(pairs)
+        return self
 
 
 @dataclass(init=False)
@@ -368,6 +390,16 @@ class TableSwitchInsn(InsnInfo):
         self.high = high
         self.targets = list(targets)
 
+    @classmethod
+    def _trusted(cls, default_target, low, high, targets, bytecode_offset=-1):
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.TABLESWITCH, bytecode_offset)
+        self.default_target = default_target
+        self.low = low
+        self.high = high
+        self.targets = list(targets)
+        return self
+
 
 @dataclass
 class LabelResolution:
@@ -388,23 +420,23 @@ cdef int _switch_padding(int offset):
     return (4 - ((offset + 1) % 4)) % 4
 
 
-def _fits_i2(value):
+cdef inline bint _fits_i2(int value):
     return _I2_MIN <= value <= _I2_MAX
 
 
-def _fits_i4(value):
+cdef inline bint _fits_i4(int value):
     return _I4_MIN <= value <= _I4_MAX
 
 
-def _require_label_offset(label_offsets, label, *, context):
-    try:
-        return label_offsets[label]
-    except KeyError as exc:
-        raise ValueError(f"{context} refers to a label that is not present in CodeModel.instructions") from exc
+cdef inline int _require_label_offset(dict label_offsets, object label, str context):
+    cdef object result = label_offsets.get(label)
+    if result is None and label not in label_offsets:
+        raise ValueError(f"{context} refers to a label that is not present in CodeModel.instructions")
+    return <int>result
 
 
-def _relative_offset(source_offset, label, label_offsets, *, context):
-    return _require_label_offset(label_offsets, label, context=context) - source_offset
+cdef inline int _relative_offset(int source_offset, object label, dict label_offsets, str context):
+    return _require_label_offset(label_offsets, label, context) - source_offset
 
 
 def _attribute_marshaled_size(attribute):
@@ -480,7 +512,7 @@ def _ordered_nested_code_attributes(
 
 
 def _needs_ldc_index_cache(items):
-    return any(isinstance(item, LdcInsn) and not isinstance(item.value, (LdcLong, LdcDouble)) for item in items)
+    return any(type(item) is LdcInsn and type(item.value) is not LdcLong and type(item.value) is not LdcDouble for item in items)
 
 
 def _build_ldc_index_cache(items, cp):
@@ -488,7 +520,7 @@ def _build_ldc_index_cache(items, cp):
     checkpoint = None
 
     for item in items:
-        if not isinstance(item, LdcInsn):
+        if type(item) is not LdcInsn:
             continue
 
         cached = _find_existing_ldc_index(item.value, cp)
@@ -506,15 +538,14 @@ def _build_ldc_index_cache(items, cp):
     return cache
 
 
-def _resolve_labels_with_cache(items, ldc_index_cache=None):
+def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
     cdef int offset
-    label_offsets = {}
-    instruction_offsets = []
-    instruction_offsets_append = instruction_offsets.append
+    cdef dict label_offsets = {}
+    cdef list instruction_offsets = []
     offset = 0
 
     for item in items:
-        instruction_offsets_append(offset)
+        instruction_offsets.append(offset)
         if type(item) is Label:
             label = item
             if label in label_offsets:
@@ -530,7 +561,7 @@ def _resolve_labels_with_cache(items, ldc_index_cache=None):
     )
 
 
-def _instruction_byte_size(insn, offset, ldc_index_cache=None):
+cdef int _instruction_byte_size(object insn, int offset, dict ldc_index_cache):
     cdef int slot, increment
     insn_type = type(insn)
     if insn_type is Label:
@@ -555,7 +586,8 @@ def _instruction_byte_size(insn, offset, ldc_index_cache=None):
         return 4  # opcode(1) + u2 CP index + u1 dimensions
     if insn_type is LdcInsn:
         ldc_insn = insn
-        if isinstance(ldc_insn.value, (LdcLong, LdcDouble)):
+        ldc_value_type = type(ldc_insn.value)
+        if ldc_value_type is LdcLong or ldc_value_type is LdcDouble:
             return 3  # LDC2_W: opcode(1) + u2 CP index
         if ldc_index_cache is None:
             raise ValueError("LdcInsn size requires constant-pool context")
@@ -642,14 +674,14 @@ def resolve_labels(items, cp=None):
     return _resolve_labels_with_cache(items, ldc_index_cache)
 
 
-def _promote_overflow_branches(items, resolution):
-    cdef int index, source_offset
-    changed = False
+cdef bint _promote_overflow_branches(list items, object resolution):
+    cdef int index, source_offset, relative
+    cdef bint changed = False
     index = 0
 
     while index < len(items):
         item = items[index]
-        if not isinstance(item, BranchInsn):
+        if type(item) is not BranchInsn:
             index += 1
             continue
 
@@ -658,7 +690,7 @@ def _promote_overflow_branches(items, resolution):
             source_offset,
             item.target,
             resolution.label_offsets,
-            context=f"{item.type.name} target",
+            _BRANCH_TARGET_CONTEXTS[item.type],
         )
 
         if item.type.instinfo is BranchW:
@@ -694,7 +726,8 @@ def _promote_overflow_branches(items, resolution):
     return changed
 
 
-def _lower_instruction(item, offset, label_offsets, cp):
+cdef object _lower_instruction(object item, int offset, dict label_offsets, object cp):
+    cdef int cp_index, slot, increment, count, dimensions, bootstrap_method_attr_index, relative
     item_type = type(item)
     if item_type is Label:
         return None
@@ -702,7 +735,10 @@ def _lower_instruction(item, offset, label_offsets, cp):
     if item_type is BranchInsn:
         branch_item = item
         relative = _relative_offset(
-            offset, branch_item.target, label_offsets, context=f"{branch_item.type.name} target"
+            offset,
+            branch_item.target,
+            label_offsets,
+            _BRANCH_TARGET_CONTEXTS[branch_item.type],
         )
         if branch_item.type.instinfo is BranchW:
             if not _fits_i4(relative):
@@ -718,12 +754,12 @@ def _lower_instruction(item, offset, label_offsets, cp):
             offset,
             lookup_switch_item.default_target,
             label_offsets,
-            context="lookupswitch default target",
+            "lookupswitch default target",
         )
         pairs = [
             MatchOffsetPair(
                 match,
-                _relative_offset(offset, target, label_offsets, context="lookupswitch case target"),
+                _relative_offset(offset, target, label_offsets, "lookupswitch case target"),
             )
             for match, target in lookup_switch_item.pairs
         ]
@@ -735,10 +771,10 @@ def _lower_instruction(item, offset, label_offsets, cp):
             offset,
             table_switch_item.default_target,
             label_offsets,
-            context="tableswitch default target",
+            "tableswitch default target",
         )
         offsets = [
-            _relative_offset(offset, target, label_offsets, context="tableswitch case target")
+            _relative_offset(offset, target, label_offsets, "tableswitch case target")
             for target in table_switch_item.targets
         ]
         return TableSwitch(
@@ -783,7 +819,8 @@ def _lower_instruction(item, offset, label_offsets, cp):
     if item_type is LdcInsn:
         ldc_item = item
         cp_index = _lower_ldc_value(ldc_item.value, cp)
-        if isinstance(ldc_item.value, (LdcLong, LdcDouble)):
+        ldc_value_type = type(ldc_item.value)
+        if ldc_value_type is LdcLong or ldc_value_type is LdcDouble:
             return ConstPoolIndex(InsnInfoType.LDC2_W, offset, cp_index)
         if cp_index <= 255:
             return LocalIndex(InsnInfoType.LDC, offset, cp_index)
@@ -832,7 +869,7 @@ def _lower_instruction(item, offset, label_offsets, cp):
         return MultiANewArray(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
 
     lowered = _clone_raw_instruction(item, bytecode_offset=offset)
-    if isinstance(lowered, LookupSwitch):
+    if type(lowered) is LookupSwitch:
         lowered.npairs = len(lowered.pairs)
     return lowered
 
@@ -840,9 +877,9 @@ def _lower_instruction(item, offset, label_offsets, cp):
 def _lower_exception_handlers(exception_handlers, label_offsets, cp):
     lowered = []
     for handler in exception_handlers:
-        start_pc = _require_label_offset(label_offsets, handler.start, context="exception handler start")
-        end_pc = _require_label_offset(label_offsets, handler.end, context="exception handler end")
-        handler_pc = _require_label_offset(label_offsets, handler.handler, context="exception handler target")
+        start_pc = _require_label_offset(label_offsets, handler.start, "exception handler start")
+        end_pc = _require_label_offset(label_offsets, handler.end, "exception handler end")
+        handler_pc = _require_label_offset(label_offsets, handler.handler, "exception handler target")
         if start_pc >= end_pc:
             raise ValueError("exception handler start must be strictly before end")
         catch_type = 0 if handler.catch_type is None else cp.add_class(handler.catch_type)
@@ -855,7 +892,7 @@ def _build_line_number_attribute(line_numbers, label_offsets, cp):
         return None
     table = [
         LineNumberInfo(
-            _require_label_offset(label_offsets, entry.label, context="line number entry"),
+            _require_label_offset(label_offsets, entry.label, "line number entry"),
             entry.line_number,
         )
         for entry in line_numbers
@@ -879,12 +916,12 @@ def _build_local_variable_attribute(local_variables, label_offsets, cp):
         return None
     table = []
     for entry in local_variables:
-        start_pc = _require_label_offset(label_offsets, entry.start, context="local variable start")
+        start_pc = _require_label_offset(label_offsets, entry.start, "local variable start")
         table.append(LocalVariableInfo(
             start_pc,
             _local_range_length(
                 start_pc,
-                _require_label_offset(label_offsets, entry.end, context="local variable end"),
+                _require_label_offset(label_offsets, entry.end, "local variable end"),
                 context="local variable range",
             ),
             cp.add_utf8(entry.name),
@@ -904,12 +941,12 @@ def _build_local_variable_type_attribute(local_variable_types, label_offsets, cp
         return None
     table = []
     for entry in local_variable_types:
-        start_pc = _require_label_offset(label_offsets, entry.start, context="local variable type start")
+        start_pc = _require_label_offset(label_offsets, entry.start, "local variable type start")
         table.append(LocalVariableTypeInfo(
             start_pc,
             _local_range_length(
                 start_pc,
-                _require_label_offset(label_offsets, entry.end, context="local variable type end"),
+                _require_label_offset(label_offsets, entry.end, "local variable type end"),
                 context="local variable type range",
             ),
             cp.add_utf8(entry.name),
@@ -924,16 +961,15 @@ def _build_local_variable_type_attribute(local_variable_types, label_offsets, cp
     )
 
 
-def _lower_resolved_code(code, items, resolution, cp, keep_debug_info):
-    lowered_code = []
-    lowered_code_append = lowered_code.append
-    lower_instruction = _lower_instruction
-    label_offsets = resolution.label_offsets
+def _lower_resolved_code(code, list items, object resolution, object cp, bint keep_debug_info):
+    cdef list lowered_code = []
+    cdef dict label_offsets = resolution.label_offsets
+    cdef int offset
 
     for item, offset in zip(items, resolution.instruction_offsets, strict=True):
-        lowered = lower_instruction(item, offset, label_offsets, cp)
+        lowered = _lower_instruction(item, offset, label_offsets, cp)
         if lowered is not None:
-            lowered_code_append(lowered)
+            lowered_code.append(lowered)
     exception_table = _lower_exception_handlers(code.exception_handlers, label_offsets, cp)
 
     line_number_attr = None
@@ -1097,47 +1133,49 @@ def resolve_catch_type(cp, catch_type_index):
 
 def _lower_ldc_value(value, cp):
     """Resolve an ``LdcValue`` to a CP index, adding entries as needed."""
-    if isinstance(value, LdcInt):
+    cdef type t = type(value)
+    if t is LdcInt:
         return cp.add_integer(value.value)
-    if isinstance(value, LdcFloat):
+    if t is LdcFloat:
         return cp.add_float(value.raw_bits)
-    if isinstance(value, LdcLong):
+    if t is LdcLong:
         unsigned = value.value & 0xFFFFFFFFFFFFFFFF
         high = (unsigned >> 32) & 0xFFFFFFFF
         low = unsigned & 0xFFFFFFFF
         return cp.add_long(high, low)
-    if isinstance(value, LdcDouble):
+    if t is LdcDouble:
         return cp.add_double(value.high_bytes, value.low_bytes)
-    if isinstance(value, LdcString):
+    if t is LdcString:
         return cp.add_string(value.value)
-    if isinstance(value, LdcClass):
+    if t is LdcClass:
         return cp.add_class(value.name)
-    if isinstance(value, LdcMethodType):
+    if t is LdcMethodType:
         return cp.add_method_type(value.descriptor)
-    if isinstance(value, LdcMethodHandle):
+    if t is LdcMethodHandle:
         return _lower_ldc_method_handle(value, cp)
     return cp.add_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
 
 
 def _find_existing_ldc_index(value, cp):
-    if isinstance(value, LdcInt):
+    cdef type t = type(value)
+    if t is LdcInt:
         return cp.find_integer(value.value)
-    if isinstance(value, LdcFloat):
+    if t is LdcFloat:
         return cp.find_float(value.raw_bits)
-    if isinstance(value, LdcLong):
+    if t is LdcLong:
         unsigned = value.value & 0xFFFFFFFFFFFFFFFF
         high = (unsigned >> 32) & 0xFFFFFFFF
         low = unsigned & 0xFFFFFFFF
         return cp.find_long(high, low)
-    if isinstance(value, LdcDouble):
+    if t is LdcDouble:
         return cp.find_double(value.high_bytes, value.low_bytes)
-    if isinstance(value, LdcString):
+    if t is LdcString:
         return cp.find_string(value.value)
-    if isinstance(value, LdcClass):
+    if t is LdcClass:
         return cp.find_class(value.name)
-    if isinstance(value, LdcMethodType):
+    if t is LdcMethodType:
         return cp.find_method_type(value.descriptor)
-    if isinstance(value, LdcMethodHandle):
+    if t is LdcMethodHandle:
         return _find_existing_ldc_method_handle(value, cp)
     return cp.find_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
 
