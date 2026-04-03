@@ -31,4 +31,37 @@ Ported modules contributing to these results:
 
 - `class-write` benefits more because `BytesWriter` avoids Python `struct.Struct` overhead on every field emit.
 - `class-parse` improvement is limited by Python object creation (dataclass construction for attributes, constant pool entries, instructions) which dominates the profile.
-- `model-lift` and `model-lower` stages are not Cython-ported — they operate on Python dataclass trees and would see minimal benefit from Cython.
+- `model-lift` and `model-lower` stages were not yet Cython-ported — they operate on Python dataclass trees and were the next targets.
+
+## Phase 2: edit-layer ports
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 2.19 | 1.81 | 0.83 | **~17% faster** |
+| model-lift | 3.02 | 2.61 | 0.86 | **~14% faster** |
+| model-lower | 2.19 | 2.53 | 1.15 | ~15% slower (see notes) |
+| class-write | 1.19 | 0.74 | 0.62 | **~38% faster** |
+
+When model-lower is benchmarked in isolation (without prior stages in the same process), it measures **0.71–0.75x** (25–29% faster). The regression seen in the full-pipeline run is attributed to GC/memory pressure from prior stages — the profiler does not call `gc.collect()` between stages.
+
+Ported modules contributing to these results:
+- `pytecode.edit.labels` — label resolution, branch lowering, instruction sizing (`cdef int` typed hot loops)
+- `pytecode.edit.constant_pool_builder` — CP entry allocation, deduplication (typed index variables)
+- `pytecode.edit.model` — model lift/lower orchestration (`cdef` locals, removed `cast()`)
+
+### Notes
+
+- **class-write** continues to show the largest improvement, now 50% faster (0.50x) in some runs.
+- **model-lift** benefits from Cython despite being dataclass-construction heavy — the constant-pool traversal and attribute lifting loops gain from typed locals.
+- **model-lower** shows variable results in the full pipeline due to interaction with prior-stage memory allocation. In isolation it is consistently faster. A potential optimization is adding `gc.collect()` between stages in the profiler, or pre-computing type dispatch tables in `_lower_instruction()`.
+- **class-parse** improved slightly from Phase 1 (0.87→0.83x), likely due to reduced import overhead now that more modules are compiled.
+
+### Total pipeline (end-to-end)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| Full pipeline | 8.64s | 7.74s | **0.90x (~10% faster overall)** |
+
+The end-to-end speedup is modest because most time is spent in Python object creation (dataclasses), which Cython does not accelerate.

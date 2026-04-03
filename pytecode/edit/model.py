@@ -12,8 +12,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pytecode.edit._model_py import (
         ClassModel as ClassModel,
+    )
+    from pytecode.edit._model_py import (
         CodeModel as CodeModel,
+    )
+    from pytecode.edit._model_py import (
         FieldModel as FieldModel,
+    )
+    from pytecode.edit._model_py import (
         MethodModel as MethodModel,
     )
 else:
