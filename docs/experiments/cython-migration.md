@@ -47,7 +47,9 @@ Future candidates (not in initial scope):
 - `edit/_attribute_clone.py` — 40-way attribute clone dispatch (done in Phase 3)
 - `analysis/__init__.py` — frame simulation worklist (done in Phase 4)
 - `edit/operands.py` — symbolic operand wrapper construction and validation (done in Phase 5)
-- `classfile/descriptors.py` — field/method descriptor parsing in the lower/lift path (next candidate)
+- `classfile/descriptors.py` — field/method descriptor parsing in the lower/lift path (done in Phase 6)
+- `edit/debug_info.py` — debug-info policy normalization and stale-state checks in model lowering (done in Phase 7)
+- `_model.pyx` micro-optimizations — remaining hot work is now concentrated inside the compiled model lift/lower path plus stdlib enum/codec overhead
 
 ## Build integration
 

@@ -6,10 +6,12 @@ build-backend = "setuptools.build_meta"
 ext-modules = [
   {name = "pytecode._internal._bytes_utils_cy", sources = ["pytecode/_internal/_bytes_utils_cy.pyx"]},
   {name = "pytecode.classfile._modified_utf8_cy", sources = ["pytecode/classfile/_modified_utf8_cy.pyx"]},
+  {name = "pytecode.classfile._descriptors_cy", sources = ["pytecode/classfile/_descriptors_cy.pyx"]},
   {name = "pytecode.classfile._reader_cy", sources = ["pytecode/classfile/_reader_cy.pyx"]},
   {name = "pytecode.classfile._writer_cy", sources = ["pytecode/classfile/_writer_cy.pyx"]},
   {name = "pytecode.edit._attribute_clone_cy", sources = ["pytecode/edit/_attribute_clone_cy.pyx"]},
   {name = "pytecode.edit._constant_pool_builder_cy", sources = ["pytecode/edit/_constant_pool_builder_cy.pyx"]},
+  {name = "pytecode.edit._debug_info_cy", sources = ["pytecode/edit/_debug_info_cy.pyx"]},
   {name = "pytecode.edit._labels_cy", sources = ["pytecode/edit/_labels_cy.pyx"]},
   {name = "pytecode.edit._model_cy", sources = ["pytecode/edit/_model_cy.pyx"]},
   {name = "pytecode.edit._operands_cy", sources = ["pytecode/edit/_operands_cy.pyx"]},

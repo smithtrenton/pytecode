@@ -148,3 +148,57 @@ Ported module:
 | | Python | Cython | Ratio |
 |---|---|---|---|
 | 4 stages | 10.91s | 8.48s | **0.78x (~22% faster)** |
+
+## Phase 6: descriptors port
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 2.246 | 1.974 | 0.879 | **~12% faster** |
+| model-lift | 3.134 | 2.624 | 0.837 | **~16% faster** |
+| model-lower | 2.885 | 1.961 | 0.680 | **~32% faster** |
+| class-write | 1.176 | 0.761 | 0.647 | **~35% faster** |
+
+Ported module:
+- `pytecode.classfile.descriptors` — field/method descriptor parsing, generic signature parsing, descriptor serialization, and slot counting using the standard public-module shim pattern
+
+### Notes
+
+- The targeted follow-up benchmark for the directly affected stages measured **0.804x** for `model-lower` and **0.841x** for `model-lift`, confirming that the descriptors seam improves the intended path even when unrelated pipeline stages fluctuate.
+- The first 4-stage run briefly showed `class-parse` at **1.013x**; a rerun returned it to **0.879x**, so this phase treats `class-parse` movement as benchmark variance rather than a causal effect of the descriptors port.
+- A post-port `cProfile` run no longer shows `parse_method_descriptor()` or its recursive helpers among the top costs. The remaining visible pure-Python work in the lowering path is now concentrated in `pytecode.edit.debug_info`.
+- Most of the remaining `model-lift` overhead is standard-library work (`enum` attribute access and UTF-16 decoding), so future wins there are likely to be smaller or require a different seam than the earlier structural ports.
+
+### Total pipeline (4 measured stages)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 9.44s | 7.32s | **0.78x (~22% faster)** |
+
+## Phase 7: debug_info port
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 2.533 | 2.193 | 0.866 | **~13% faster** |
+| model-lift | 3.497 | 2.829 | 0.809 | **~19% faster** |
+| model-lower | 3.085 | 2.367 | 0.767 | **~23% faster** |
+| class-write | 1.372 | 0.859 | 0.626 | **~37% faster** |
+
+Ported module:
+- `pytecode.edit.debug_info` — debug-info policy normalization, stale-state checks, and stripping helpers using the standard `_mod_py.py` / `_mod_cy.pyx` / shim layout
+
+### Notes
+
+- The `debug_info` helpers disappeared from the top visible Python costs in the post-port lowering profile, which means this seam is no longer a meaningful standalone hotspot.
+- The remaining visible `model-lower` overhead is now mostly standard-library work (`enum` attribute access, `dataclasses.is_dataclass`) plus time still aggregated inside `lower_models()` itself.
+- The remaining visible `model-lift` overhead is also dominated by standard-library work, especially `enum` access and UTF-16 decoding, which suggests future wins will likely require `_model` micro-optimizations or a different seam than the previous helper-module ports.
+- Because the remaining costs are less isolated than earlier phases, Phase 7 is best treated as another incremental step rather than a dramatic new seam.
+
+### Total pipeline (4 measured stages)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 10.49s | 8.25s | **0.79x (~21% faster)** |
