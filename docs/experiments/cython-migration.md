@@ -42,29 +42,35 @@ Ports proceed bottom-up so each module can import its Cython dependencies direct
 
 Future candidates (not in initial scope):
 
-- `edit/constant_pool_builder.py` — dict cloning and entry deduplication
-- `edit/labels.py` — 35-way instruction clone dispatch
-- `analysis/__init__.py` — frame simulation worklist
+- `edit/constant_pool_builder.py` — dict cloning and entry deduplication (done in Phase 2)
+- `edit/labels.py` — 35-way instruction clone dispatch (done in Phase 2)
+- `edit/_attribute_clone.py` — 40-way attribute clone dispatch (done in Phase 3)
+- `analysis/__init__.py` — frame simulation worklist (done in Phase 4)
+- `edit/operands.py` — symbolic operand wrapper construction and validation (done in Phase 5)
+- `classfile/descriptors.py` — field/method descriptor parsing in the lower/lift path (next candidate)
 
 ## Build integration
 
-### setuptools + `cythonize()`
+### `pyproject.toml` + `[tool.setuptools] ext-modules`
 
-The project already uses setuptools as its build backend. A `setup.py` is added with conditional `cythonize()` that discovers all `.pyx` files under `pytecode/`:
+The project uses setuptools as its build backend with no `setup.py`. Cython extensions are declared explicitly in `pyproject.toml` under `[tool.setuptools]`:
 
-```python
-from setuptools import setup
+```toml
+[build-system]
+requires = ["setuptools>=82.0.1,<83.0.0", "Cython>=3.1.1,<4.0.0"]
+build-backend = "setuptools.build_meta"
 
-try:
-    from Cython.Build import cythonize
-    ext_modules = cythonize("pytecode/**/*.pyx", language_level="3")
-except ImportError:
-    ext_modules = []
-
-setup(ext_modules=ext_modules)
+[tool.setuptools]
+ext-modules = [
+  {name = "pytecode._internal._bytes_utils_cy", sources = ["pytecode/_internal/_bytes_utils_cy.pyx"]},
+  {name = "pytecode.classfile._modified_utf8_cy", sources = ["pytecode/classfile/_modified_utf8_cy.pyx"]},
+  # ... one entry per .pyx file
+]
 ```
 
-When Cython is not installed, the build proceeds as a pure-Python package (no compiled extensions).
+Each `.pyx` file must be listed explicitly — there is no glob auto-discovery. When a new Cython module is added, a corresponding entry must be added to `ext-modules` in `pyproject.toml`.
+
+`uv build` invokes the setuptools backend, which calls `cythonize()` on the listed sources and compiles them. When Cython is not installed (e.g., a source install without the `dev` extra), the build proceeds as a pure-Python package (no compiled extensions).
 
 ### Dev dependency
 
