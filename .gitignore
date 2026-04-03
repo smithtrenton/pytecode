@@ -132,6 +132,11 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Cython build artifacts
+pytecode/**/*.c
+pytecode/**/*.so
+pytecode/**/*.pyd
+
 # VS Code
 .vscode
 .ruff_cache/

@@ -387,6 +387,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print stats without writing .prof files.",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("cython", "python"),
+        default=None,
+        help=(
+            "Force a specific backend for profiling. 'python' sets "
+            "PYTECODE_BLOCK_CYTHON=1 to use the pure-Python fallback. "
+            "'cython' ensures the Cython extensions are used (default). "
+            "When omitted, uses whatever backend is currently active."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -592,9 +603,21 @@ def print_corpus_report(
         )
 
 
+def _activate_backend(backend: str | None) -> str:
+    """Set the environment for the requested backend and return its label."""
+    if backend == "python":
+        os.environ["PYTECODE_BLOCK_CYTHON"] = "1"
+        return "python"
+    if backend == "cython":
+        os.environ.pop("PYTECODE_BLOCK_CYTHON", None)
+        return "cython"
+    return "cython" if os.environ.get("PYTECODE_BLOCK_CYTHON") != "1" else "python"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the profiling harness for one jar or a directory of jars."""
     args = parse_args(argv)
+    backend_label = _activate_backend(args.backend)
     single_jar_mode = is_single_jar_input(args.inputs)
     stage_names = default_stage_names(args.inputs, args.stages)
     try:
@@ -624,6 +647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=output_dir,
         )
         print(f"jar: {jar_path}")
+        print(f"backend: {backend_label}")
         print(f"stages: {', '.join(stage_names)}")
         print(f"profile_output_dir: {output_dir if output_dir is not None else 'disabled'}")
         if summary_json is not None:

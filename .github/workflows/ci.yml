@@ -52,6 +52,8 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
         run: uv sync --extra dev
+      - name: Build Cython extensions
+        run: uv run python setup.py build_ext --inplace
       - name: Cache Pytest data
         uses: actions/cache@v5
         with:
@@ -60,8 +62,10 @@ jobs:
           restore-keys: |
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-${{ hashFiles('uv.lock', 'tests/helpers.py', 'tests/resources/**/*.java') }}-
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-
-      - name: Run pytest (excluding oracle)
+      - name: Run pytest (Cython backend)
         run: uv run pytest -q -m "not oracle"
+      - name: Run pytest (Python fallback)
+        run: PYTECODE_BLOCK_CYTHON=1 uv run pytest -q -m "not oracle"
 
   oracle:
     name: Pytest (oracle)
@@ -81,6 +85,8 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
         run: uv sync --extra dev
+      - name: Build Cython extensions
+        run: uv run python setup.py build_ext --inplace
       - name: Cache Pytest data
         uses: actions/cache@v5
         with:
