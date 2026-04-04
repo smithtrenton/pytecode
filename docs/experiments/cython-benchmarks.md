@@ -301,3 +301,385 @@ Ported module:
 | | Python | Cython | Ratio |
 |---|---|---|---|
 | 4 stages | 8.23s | 6.82s | **0.83x (~17% faster)** |
+
+## Post-Phase 12: profiling analysis
+
+Fresh benchmark after rebuilding all 14 Cython extensions, to identify
+remaining optimization targets.
+
+### Wall-clock comparison
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 1.953 | 1.338 | 0.685 | **~32% faster** |
+| model-lift | 2.489 | 1.970 | 0.792 | **~21% faster** |
+| model-lower | 2.810 | 1.936 | 0.689 | **~31% faster** |
+| class-write | 1.330 | 0.544 | 0.409 | **~59% faster** |
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 8.58s | 5.79s | **0.67x (~33% faster)** |
+
+These numbers are significantly better than the Phase 12 report (0.83x →
+0.67x overall). The improvement likely reflects run-to-run variance
+stabilizing in a fresh build, plus any cumulative micro-optimizations from
+all 14 extensions being freshly compiled together.
+
+### cProfile: Cython backend
+
+All four stages show nearly all time consumed inside compiled `.pyd`
+extensions — cProfile cannot see individual function calls inside Cython
+code. The only visible Python-level overhead is:
+
+- **class-parse**: ~5 ms in `enum.__call__` / `enum.__new__` (2,304 calls
+  for `AccessFlags`). Negligible.
+- **model-lift**: ~2 ms in dataclass `__init__` (17,906 calls — one per
+  method). Negligible.
+- **model-lower**: ~2 ms in dataclass `__init__` + `enum.__hash__` (907
+  calls). Negligible.
+- **class-write**: zero visible Python overhead.
+
+**Conclusion**: there are no actionable pure-Python hotspots remaining in
+the Cython backend. All measurable time is inside compiled C code.
+
+### cProfile: Python fallback (for structural reference)
+
+The pure-Python profiles confirm what Cython is accelerating. Top
+functions by cumulative time in each stage:
+
+**class-parse** (6.2 s, 22.3 M calls):
+
+| Function | tottime | cumtime |
+|---|---|---|
+| `_reader_py.read_instruction` | 1.19 s | 2.79 s |
+| `_bytes_utils_py.read_u1` | 0.51 s | 1.40 s |
+| `_reader_py.read_code_bytes` | 0.38 s | 3.29 s |
+| `_bytes_utils_py.read_u2` | 0.30 s | 0.69 s |
+| `_reader_py.read_attribute` | 0.48 s | 5.31 s |
+| `struct.unpack_from` | 0.46 s | — |
+| `_modified_utf8_py.decode` | 0.17 s | 0.27 s |
+
+**model-lift** (9.0 s, 30.3 M calls):
+
+| Function | tottime | cumtime |
+|---|---|---|
+| `_model_py._lift_instructions` | 0.89 s | 4.51 s |
+| `_model_py._lift_instruction` | 0.91 s | 1.94 s |
+| `_modified_utf8_py.decode` | 0.94 s | 1.49 s |
+| `_constant_pool_builder_py.from_pool` | 0.13 s | 1.46 s |
+| `_model_py._collect_labels` | 0.62 s | 1.02 s |
+| `_model_py._lift_const_pool_index` | 0.06 s | 0.92 s |
+| `_attribute_clone_py._clone_fast_attribute` | 0.27 s | 1.12 s |
+| `isinstance` (7.5 M calls) | 0.58 s | — |
+
+**model-lower** (8.1 s, 25.5 M calls):
+
+| Function | tottime | cumtime |
+|---|---|---|
+| `_labels_py._lower_instruction` | 1.46 s | 2.63 s |
+| `_labels_py._lower_resolved_code` | 0.56 s | 4.48 s |
+| `_labels_py._resolve_labels_with_cache` | 0.55 s | 1.56 s |
+| `_labels_py._instruction_byte_size` | 0.73 s | 0.89 s |
+| `_attribute_clone_py.clone_attribute` | 0.04 s | 0.93 s |
+| `isinstance` (7.0 M calls) | 0.55 s | — |
+| `typing.cast` (2.5 M calls) | 0.15 s | — |
+| `_labels_py._promote_overflow_branches` | 0.43 s | 0.73 s |
+
+**class-write** (7.0 s, 34.0 M calls):
+
+| Function | tottime | cumtime |
+|---|---|---|
+| `_writer_py._write_instruction` | 1.72 s | 3.79 s |
+| `isinstance` (16.9 M calls) | 1.29 s | — |
+| `_bytes_utils_py.write_u1` | 0.59 s | 1.26 s |
+| `_writer_py._write_stack_map_frame_info` | 0.22 s | 1.12 s |
+| `_writer_py._write_constant_pool_entry` | 0.35 s | 0.89 s |
+| `_bytes_utils_py.write_u2` | 0.36 s | 0.77 s |
+| `struct.pack` | 0.50 s | — |
+
+### Assessment and next steps
+
+1. **All identifiable pure-Python hotspots have been ported.** The Cython
+   backend cProfile is completely opaque — every stage spends 99%+ of its
+   time inside compiled `.pyd` extensions with no visible Python-level
+   bottleneck.
+
+2. **The biggest remaining acceleration opportunity is inside the compiled
+   Cython code itself.** To find micro-optimization targets, a C-level
+   profiler (Windows Performance Analyzer, VTune, or `py-spy` in native
+   mode) would be needed — cProfile cannot see inside compiled extensions.
+
+3. **`typing.cast` noise**: the model-lower Python profile shows 2.5 M
+   calls to `typing.cast` (0.15 s). In Cython, `cast()` compiles to a
+   no-op, so this is already handled. No action needed.
+
+4. **`isinstance` dominance in Python**: the Python fallback spends 0.5–1.3 s
+   per stage on `isinstance` dispatch (up to 16.9 M calls in class-write).
+   Cython compiles these to C-level type checks, which is why class-write
+   shows a 59% speedup.
+
+5. **Diminishing returns**: the mechanical port strategy (new `_mod_cy.pyx`
+   files) has exhausted its targets. Further Cython work would be
+   micro-optimizations inside existing `.pyx` files:
+   - Replace remaining Python object allocations with `cdef` structs
+   - Use typed memoryviews where plain `bytes` slicing is still used
+   - Add `@cython.boundscheck(False)` where safe
+   - Reduce `cpdef` → `cdef` on internal-only functions
+
+6. **Alternative acceleration paths** worth considering:
+   - **Rust/PyO3 for the hottest inner loops** (instruction decode/encode)
+   - **Algorithmic caching** (e.g., memoize decoded constant-pool entries)
+   - **Batch processing** to amortize per-method overhead
+
+### Profiler backend switch
+
+`tools/profile_jar_pipeline.py` now applies `--backend python|cython`
+before importing `pytecode`, so the requested backend actually takes
+effect even when compiled extensions are installed.
+
+## Phase 14: profiled `_labels_cy` + `_reader_cy` micro-optimizations
+
+This phase uses the new opt-in `PYTECODE_CYTHON_PROFILE=1` build mode to
+profile inside compiled `.pyx` functions, optimize the hottest code, and
+re-measure the same stages.
+
+### Changes
+
+- `pytecode.edit._labels_cy`
+  - Made the internal raw-instruction clone helper a direct Cython `cdef`
+    call path instead of a Python `def`.
+  - Removed duplicate `type()` work in label resolution by passing the
+    already-computed item type into `_instruction_byte_size()`.
+  - Converted the line-number and local-variable attribute builders to
+    internal Cython helpers with explicit loops instead of list-comprehension
+    wrappers.
+- `pytecode.classfile._reader_cy`
+  - Replaced repeated enum/dict opcode lookups with precomputed instruction
+    tables.
+  - Inlined the opcode-table lookup inside `read_instruction()` so the fast
+    path does not pay extra helper-call overhead.
+
+### Wall-clock comparison
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 1.937 | 1.201 | 0.620 | **~38% faster** |
+| model-lift | 2.715 | 2.190 | 0.807 | **~19% faster** |
+| model-lower | 2.770 | 1.954 | 0.705 | **~29% faster** |
+| class-write | 1.346 | 0.612 | 0.455 | **~55% faster** |
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 8.77s | 5.96s | **0.68x (~32% faster)** |
+
+### Profiled Cython comparison to the pre-optimization baseline
+
+The profiled build compares against the earlier Cython-profiled pass on the
+same `225.jar` stages.
+
+| Hot path | Before | After | Ratio | Change |
+|---|---|---|---|---|
+| `class-parse` elapsed | 3.848s | 3.394s | 0.882x | **~12% faster** |
+| `_reader_cy.read_instruction()` | 1.964s | 1.613s | 0.821x | **~18% faster** |
+| `_reader_cy.read_code_bytes()` | 2.122s | 1.761s | 0.830x | **~17% faster** |
+| `model-lower` elapsed | 4.698s | 3.689s | 0.785x | **~21% faster** |
+| `_labels_cy._lower_resolved_code()` | 3.163s | 2.284s | 0.722x | **~28% faster** |
+| `_labels_cy._lower_instruction()` | 1.913s | 1.465s | 0.766x | **~23% faster** |
+| `_labels_cy._resolve_labels_with_cache()` | 0.645s | 0.600s | 0.930x | **~7% faster** |
+
+### Notes
+
+- The label-lowering path is still the most important optimization surface
+  even after this pass; `model-lower` remains the slowest profiled Cython
+  stage.
+- After the `_lower_instruction()` and debug-info builder wins, the next
+  visible lowering costs are:
+  - `_ordered_nested_code_attributes()` plus the nested
+    `_attribute_clone_cy` work it triggers
+  - `_resolve_labels_with_cache()` / `_instruction_byte_size()`
+  - constant-pool builder activity during lowering (`build()`, `_copy_entry()`,
+    `checkpoint()`)
+- On the parse side, `read_instruction()` and `read_code_bytes()` still
+  dominate, but the reader path is now materially smaller than the lowering
+  path. The next optimization step should stay focused on `model-lower`
+  rather than switching back to parse work immediately.
+
+## Phase 15: label-resolution lowering cleanup
+
+This follow-up pass stayed inside `pytecode.edit._labels_cy` and targeted the
+remaining label-resolution work instead of the nested-attribute clone path.
+
+### Changes
+
+- Preallocated `instruction_offsets` inside `_resolve_labels_with_cache()`
+  instead of growing the list with repeated `append()` calls.
+- Passed the already-computed `type(item)` into `_instruction_byte_size()`
+  across the full resolution loop.
+- Added a direct `InsnInfo` fast path in both `_instruction_byte_size()` and
+  `_lower_instruction()` so no-operand raw instructions avoid the generic
+  clone helper.
+
+### Wall-clock comparison
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| model-lower | 2.768 | 1.586 | 0.573 | **~43% faster** |
+| class-write | 1.363 | 0.620 | 0.455 | **~55% faster** |
+| class-parse | 2.127 | 1.302 | 0.612 | **~39% faster** |
+| model-lift | 2.567 | 1.966 | 0.766 | **~23% faster** |
+
+### Profiled Cython notes
+
+On the profiling-enabled build, the isolated `model-lower` stage moved from
+**3.689s** to **3.719s** elapsed between reruns, but the hot functions inside
+the stage improved:
+
+| Hot path | Before | After | Ratio | Change |
+|---|---|---|---|---|
+| `_labels_cy._lower_instruction()` | 1.465s | 1.449s | 0.989x | **~1% faster** |
+| `_labels_cy._resolve_labels_with_cache()` | 0.600s | 0.539s | 0.898x | **~10% faster** |
+| `_labels_cy._instruction_byte_size()` | 0.412s | 0.353s | 0.857x | **~14% faster** |
+
+The profiled wall-clock variance appears to be measurement noise from the
+profiling-enabled build; the normal benchmark is the more reliable signal for
+this pass and shows a clear improvement.
+
+### Next target
+
+`model-lower` is still the right place to keep working, but the remaining
+visible costs have shifted again:
+
+1. `_lower_resolved_code()` / `_lower_instruction()`
+2. nested attribute clone work (`_ordered_nested_code_attributes()` and
+   `_attribute_clone_cy._clone_stack_map_frame()`)
+3. constant-pool builder work during lowering
+
+The failed nested-attribute experiment in this session regressed the profiled
+run, so the next pass should revisit that area more carefully or move on to the
+constant-pool-builder side of lowering.
+
+## Phase 16: combined lowering-loop, nested-attribute, and CP-build pass
+
+This pass tackled the three remaining visible `model-lower` buckets together:
+the lowering loop itself, nested code-attribute assembly / stack-map cloning,
+and constant-pool copying during `build()`.
+
+### Changes
+
+- `pytecode.edit._labels_cy`
+  - Preallocated the lowered instruction list in `_lower_resolved_code()` and
+    filled it by index instead of repeated `append()` calls.
+  - Kept the direct `InsnInfo` lowering fast path from the previous pass.
+  - Reworked `_ordered_nested_code_attributes()` to clone non-debug nested
+    attributes in one explicit loop instead of composing `_lifted_debug_attrs()`
+    with a second clone comprehension.
+- `pytecode.edit._attribute_clone_cy`
+  - Added explicit list-clone helpers for stack-map frame lists and
+    verification-type lists, then reused them in `StackMapTableAttr`,
+    `AppendFrameInfo`, and `FullFrameInfo`.
+- `pytecode.edit._constant_pool_builder_cy`
+  - Converted `_copy_pool_entry()` / `_copy_entry()` to Cython internal helpers.
+  - Added `_copy_pool_list()` and reused it from `from_pool()`, `clone()`, and
+    `build()` to reduce Python-level list-comprehension overhead during pool
+    copying.
+
+### Wall-clock comparison
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| model-lower | 2.599 | 1.557 | 0.599 | **~40% faster** |
+| class-write | 1.106 | 0.463 | 0.419 | **~58% faster** |
+| class-parse | 1.650 | 1.199 | 0.727 | **~27% faster** |
+| model-lift | 2.169 | 1.867 | 0.861 | **~14% faster** |
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 7.52s | 5.09s | **0.68x (~32% faster)** |
+
+### Profiled Cython comparison to the previous lowering baseline
+
+The profiling-enabled `model-lower` stage moved from **3.719s** to
+**3.114s** elapsed on `225.jar`.
+
+| Hot path | Before | After | Ratio | Change |
+|---|---|---|---|---|
+| `model-lower` elapsed | 3.719s | 3.114s | 0.837x | **~16% faster** |
+| `_labels_cy._lower_resolved_code()` | 2.322s | 1.939s | 0.835x | **~17% faster** |
+| `_labels_cy._lower_instruction()` | 1.449s | 1.223s | 0.844x | **~16% faster** |
+| `_labels_cy._resolve_labels_with_cache()` | 0.539s | 0.455s | 0.844x | **~16% faster** |
+| `_labels_cy._instruction_byte_size()` | 0.353s | 0.297s | 0.841x | **~16% faster** |
+| `_labels_cy._ordered_nested_code_attributes()` | 0.416s | 0.362s | 0.870x | **~13% faster** |
+| `_attribute_clone_cy._clone_stack_map_frame()` | 0.354s | 0.315s | 0.890x | **~11% faster** |
+| `_constant_pool_builder_cy.build()` | 0.178s | 0.118s | 0.663x | **~34% faster** |
+
+### Next target
+
+`model-lower` is still the right place to continue, but the remaining hot
+surface is now narrower:
+
+1. `_lower_resolved_code()` / `_lower_instruction()` themselves
+2. stack-map cloning in `_attribute_clone_cy` (still visible, but smaller)
+3. `ConstantPoolBuilder.checkpoint()` and the remaining per-entry copy work
+
+The next pass should probably stay on lowering, but shift from broad structural
+cleanup to more targeted micro-optimizations inside `_lower_instruction()` and
+the checkpoint / rollback path.
+
+## Phase 17: checkpoint / stack-map / invokeinterface micro-pass (reverted)
+
+This pass tried three smaller `model-lower` ideas:
+
+- `pytecode.edit._constant_pool_builder_cy`
+  - snapshot dictionary lengths in `checkpoint()` / `rollback()` instead of
+    copying most caches
+- `pytecode.edit._attribute_clone_cy`
+  - inline the common stack-map frame clone cases inside
+    `_clone_stack_map_frame_list()`
+- `pytecode.edit._labels_cy`
+  - cache the computed `INVOKEINTERFACE` slot count for repeated descriptors
+
+### What the experimental profile showed
+
+The checkpoint change itself was real: in the profiling build,
+`ConstantPoolBuilder.checkpoint()` dropped from about **0.114s** to
+**0.022s** cumulative time and fell out of the top `model-lower` costs.
+
+But the overall lowering profile still did not move in the right direction:
+
+- profiled `model-lower` stayed dominated by `_lower_instruction()`
+  (**1.317s** cumulative)
+- `_resolve_labels_with_cache()` remained visible at **0.515s**
+- nested attribute / stack-map clone work still showed up at
+  `_ordered_nested_code_attributes()` **0.393s** and
+  `_clone_stack_map_frame_list()` **0.361s**
+
+### Outcome
+
+The stack-map rewrite regressed the clean wall-clock benchmark and was reverted
+first. After a second profiling and benchmark pass, the remaining checkpoint /
+descriptor-cache changes still did not produce a trustworthy end-to-end win, so
+those code changes were also reverted.
+
+The only kept changes from this pass are the added rollback coverage in
+`tests/test_constant_pool_builder.py` for imported UTF-8 and semantic cache
+state.
+
+### Current recommendation
+
+Phase 16 remains the last trusted optimization baseline. If we continue on the
+Cython side, the next target should go back to the main lowering loop:
+
+1. `_labels_cy._lower_instruction()`
+2. `_labels_cy._resolve_labels_with_cache()`
+3. `_labels_cy._ordered_nested_code_attributes()`
+
+The stack-map / checkpoint path is probably not worth another structural rewrite
+unless a much more direct win is identified first.

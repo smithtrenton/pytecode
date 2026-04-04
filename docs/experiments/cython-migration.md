@@ -52,7 +52,7 @@ Future candidates (not in initial scope):
 - `edit/_model.py` internal lift/lower optimizations — cache/allocation cleanup done in Phase 8, redundant label-target validation cleanup done in Phase 9; remaining hot work is still concentrated inside the compiled model path plus stdlib enum/codec overhead
 - `classfile/attributes.py` — class-file attribute dataclass construction on the parse/lift path (done in Phase 11)
 - `classfile/instructions.py` — instruction operand dataclasses and opcode metadata on the parse/write path (done in Phase 12)
-- No similarly obvious unported classfile helper seam remains after Phase 12; the next step should come from fresh profiling inside the already compiled `classfile.reader` / `edit._model` path rather than another mechanical classfile data-model split
+- No similarly obvious unported classfile helper seam remains after Phase 12; post-Phase-12 profiling confirmed that all measurable time in the Cython backend is inside compiled extensions with no visible pure-Python hotspot remaining — see [cython-benchmarks.md § Post-Phase 12 profiling analysis](cython-benchmarks.md#post-phase-12-profiling-analysis)
 
 ## Build integration
 
@@ -69,6 +69,20 @@ That keeps the default `uv sync --dev` and `uv build` paths pure Python while st
 ### Dev dependency
 
 Cython is added to the `dev` dependency group so that `uv sync --dev` installs it alongside the existing linting and testing tools.
+
+### Profiling build mode
+
+When you need `cProfile` visibility inside compiled `.pyx` functions, rebuild
+the optional extensions with:
+
+```powershell
+$env:PYTECODE_CYTHON_PROFILE = "1"
+uv run python setup.py build_ext --inplace
+```
+
+`setup.py` passes `compiler_directives={"profile": True}` to `cythonize()` in
+that mode. This remains opt-in because the extra profiling hooks add overhead
+and should not be used for normal benchmark baselines.
 
 ### Wheel distribution
 

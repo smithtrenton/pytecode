@@ -16,11 +16,25 @@ from .modified_utf8 import decode_modified_utf8
 __all__ = ["ClassReader", "MalformedClassException"]
 
 
-_CONSTANT_POOL_INFO_TYPES = {
-    cp_type.value: cp_type for cp_type in constant_pool.ConstantPoolInfoType
-}
-_INSTRUCTION_TYPES = {int(inst_type): inst_type for inst_type in instructions.InsnInfoType}
-_ARRAY_TYPES = {int(array_type): array_type for array_type in instructions.ArrayType}
+_constant_pool_info_types = [None] * 256
+for _cp_type in constant_pool.ConstantPoolInfoType:
+    _constant_pool_info_types[int(_cp_type.value)] = _cp_type
+_CONSTANT_POOL_INFO_TYPES = tuple(_constant_pool_info_types)
+
+_MAX_INSTRUCTION_CODE = max(int(inst_type) for inst_type in instructions.InsnInfoType)
+_instruction_types = [None] * (_MAX_INSTRUCTION_CODE + 1)
+_instruction_infos = [None] * (_MAX_INSTRUCTION_CODE + 1)
+for _inst_type in instructions.InsnInfoType:
+    _opcode = int(_inst_type)
+    _instruction_types[_opcode] = _inst_type
+    _instruction_infos[_opcode] = _inst_type.instinfo
+_INSTRUCTION_TYPES = tuple(_instruction_types)
+_INSTRUCTION_INFOS = tuple(_instruction_infos)
+
+_array_types = [None] * 256
+for _array_type_value in instructions.ArrayType:
+    _array_types[int(_array_type_value)] = _array_type_value
+_ARRAY_TYPES = tuple(_array_types)
 _ATTRIBUTE_INFO_TYPES = {
     member.value: member for member in attributes.AttributeInfoType if member.value
 }
@@ -28,15 +42,17 @@ _ENUM_MEMBER_CACHE = {}
 
 
 cdef inline object _constant_pool_info_type(int tag):
-    return _CONSTANT_POOL_INFO_TYPES.get(tag) or constant_pool.ConstantPoolInfoType(tag)
-
-
-cdef inline object _instruction_type(int opcode):
-    return _INSTRUCTION_TYPES.get(opcode) or instructions.InsnInfoType(opcode)
+    cdef object result = _CONSTANT_POOL_INFO_TYPES[tag]
+    if result is not None:
+        return result
+    return constant_pool.ConstantPoolInfoType(tag)
 
 
 cdef inline object _array_type(int atype):
-    return _ARRAY_TYPES.get(atype) or instructions.ArrayType(atype)
+    cdef object result = _ARRAY_TYPES[atype]
+    if result is not None:
+        return result
+    return instructions.ArrayType(atype)
 
 
 cdef inline object _attribute_info_type(str name):
@@ -232,10 +248,15 @@ cdef class ClassReader(BytesReader):
         Raises:
             Exception: If the opcode or its ``wide`` variant is invalid.
         """
-        cdef int opcode
+        cdef int opcode, wide_opcode
+        cdef object instinfo, wide_inst_type, atype
         opcode = _fast_u1(self)
-        inst_type = _instruction_type(opcode)
-        instinfo = inst_type.instinfo
+        inst_type = _INSTRUCTION_TYPES[opcode]
+        if inst_type is None:
+            inst_type = instructions.InsnInfoType(opcode)
+            instinfo = inst_type.instinfo
+        else:
+            instinfo = _INSTRUCTION_INFOS[opcode]
         if instinfo is instructions.LocalIndex:
             return instructions.LocalIndex(inst_type, current_method_offset, _fast_u1(self))
         elif instinfo is instructions.ConstPoolIndex:
@@ -275,10 +296,15 @@ cdef class ClassReader(BytesReader):
             return instructions.TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = _fast_u1(self)
-            wide_inst_type = _instruction_type(opcode + wide_opcode)
-            if wide_inst_type.instinfo is instructions.LocalIndexW:
+            wide_inst_type = _INSTRUCTION_TYPES[opcode + wide_opcode]
+            if wide_inst_type is None:
+                wide_inst_type = instructions.InsnInfoType(opcode + wide_opcode)
+                instinfo = wide_inst_type.instinfo
+            else:
+                instinfo = _INSTRUCTION_INFOS[opcode + wide_opcode]
+            if instinfo is instructions.LocalIndexW:
                 return instructions.LocalIndexW(wide_inst_type, current_method_offset, _fast_u2(self))
-            elif wide_inst_type.instinfo is instructions.IIncW:
+            elif instinfo is instructions.IIncW:
                 index, value = _fast_u2(self), _fast_i2(self)
                 return instructions.IIncW(wide_inst_type, current_method_offset, index, value)
         elif instinfo is instructions.InsnInfo:

@@ -943,6 +943,21 @@ def test_checkpoint_and_rollback_restore_utf8_caches():
     assert b.resolve_utf8(idx) == "original"
 
 
+def test_checkpoint_and_rollback_remove_imported_utf8_cache_entries():
+    source = ConstantPoolBuilder()
+    idx = source.add_utf8("original")
+    imported = ConstantPoolBuilder.from_pool(source.build())
+    checkpoint = imported.checkpoint()
+
+    assert imported.resolve_utf8(idx) == "original"
+    assert imported._resolved_utf8_cache
+
+    imported.rollback(checkpoint)
+
+    assert imported._resolved_utf8_cache == {}
+    assert imported.resolve_utf8(idx) == "original"
+
+
 def test_checkpoint_and_rollback_restore_semantic_caches():
     b = ConstantPoolBuilder()
     fieldref_idx = b.add_fieldref("Owner", "value", "I")
@@ -961,6 +976,28 @@ def test_checkpoint_and_rollback_restore_semantic_caches():
     assert b.find_methodref("Owner", "call", "()V") == methodref_idx
     assert b.find_fieldref("Later", "value", "I") is None
     assert b.find_methodref("Later", "call", "()V") is None
+
+
+def test_checkpoint_and_rollback_remove_imported_semantic_cache_entries():
+    source = ConstantPoolBuilder()
+    class_idx = source.add_class("Owner")
+    fieldref_idx = source.add_fieldref("Owner", "value", "I")
+    methodref_idx = source.add_methodref("Owner", "call", "()V")
+    imported = ConstantPoolBuilder.from_pool(source.build())
+    checkpoint = imported.checkpoint()
+
+    assert imported.find_class("Owner") == class_idx
+    assert imported.find_fieldref("Owner", "value", "I") == fieldref_idx
+    assert imported.find_methodref("Owner", "call", "()V") == methodref_idx
+    assert imported._class_name_to_index == {"Owner": class_idx}
+    assert imported._fieldref_to_index == {("Owner", "value", "I"): fieldref_idx}
+    assert imported._methodref_to_index == {("Owner", "call", "()V"): methodref_idx}
+
+    imported.rollback(checkpoint)
+
+    assert imported._class_name_to_index == {}
+    assert imported._fieldref_to_index == {}
+    assert imported._methodref_to_index == {}
 
 
 def test_add_compound_entries_reuse_imported_indexes_without_growth():

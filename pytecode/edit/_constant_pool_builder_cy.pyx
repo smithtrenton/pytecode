@@ -129,7 +129,7 @@ def _is_double_slot(entry):
     return type(entry) in (LongInfo, DoubleInfo)
 
 
-def _copy_pool_entry(entry):
+cdef object _copy_pool_entry(object entry):
     entry_type = type(entry)
     if entry_type is Utf8Info:
         utf8 = entry
@@ -229,8 +229,21 @@ def _copy_pool_entry(entry):
     raise ValueError(f"Unknown constant pool entry type: {entry_type.__name__}")
 
 
-def _copy_entry(entry):
+cdef object _copy_entry(object entry):
     return _copy_pool_entry(entry) if entry is not None else None
+
+
+cdef list _copy_pool_list(list pool):
+    cdef Py_ssize_t index, count
+    cdef list copied
+    cdef object entry
+    count = len(pool)
+    copied = [None] * count
+    for index in range(count):
+        entry = pool[index]
+        if entry is not None:
+            copied[index] = _copy_pool_entry(entry)
+    return copied
 
 
 def _require_pool_entry(
@@ -435,7 +448,7 @@ class ConstantPoolBuilder:
         builder = cls()
         if not skip_validation:
             _validate_import_pool(pool)
-        builder._pool = [_copy_entry(entry) for entry in pool]
+        builder._pool = _copy_pool_list(pool)
         builder._next_index = len(pool)
         for entry in builder._pool:
             if entry is None:
@@ -454,7 +467,7 @@ class ConstantPoolBuilder:
         incremental insertion.
         """
         clone = type(self)()
-        clone._pool = [_copy_entry(entry) for entry in self._pool]
+        clone._pool = _copy_pool_list(self._pool)
         clone._next_index = self._next_index
         clone._key_to_index = dict(self._key_to_index)
         clone._utf8_to_index = dict(self._utf8_to_index)
@@ -1255,7 +1268,7 @@ class ConstantPoolBuilder:
         Returns:
             A new list of entry copies suitable for class file emission.
         """
-        return [_copy_entry(entry) for entry in self._pool]
+        return _copy_pool_list(self._pool)
 
     @property
     def count(self):

@@ -89,6 +89,26 @@ def _clone_field_names(type cls):
     return tuple(field.name for field in fields(cls))
 
 
+cdef inline list _clone_verification_type_list(list values):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    count = len(values)
+    cloned = [None] * count
+    for index in range(count):
+        cloned[index] = _clone_verification_type(values[index])
+    return cloned
+
+
+cdef inline list _clone_stack_map_frame_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        cloned[index] = _clone_stack_map_frame(entries[index])
+    return cloned
+
+
 cdef inline object _clone_verification_type(object value):
     cdef type t = type(value)
     if t is TopVariableInfo:
@@ -130,16 +150,16 @@ cdef inline object _clone_stack_map_frame(object frame):
         return AppendFrameInfo(
             frame.frame_type,
             frame.offset_delta,
-            [_clone_verification_type(value) for value in frame.locals],
+            _clone_verification_type_list(frame.locals),
         )
     if t is FullFrameInfo:
         return FullFrameInfo(
             frame.frame_type,
             frame.offset_delta,
             frame.number_of_locals,
-            [_clone_verification_type(value) for value in frame.locals],
+            _clone_verification_type_list(frame.locals),
             frame.number_of_stack_items,
-            [_clone_verification_type(value) for value in frame.stack],
+            _clone_verification_type_list(frame.stack),
         )
     return _clone_value(frame)
 
@@ -511,7 +531,7 @@ cdef object _clone_fast_attribute(object attribute):
             attribute.attribute_name_index,
             attribute.attribute_length,
             attribute.number_of_entries,
-            [_clone_stack_map_frame(entry) for entry in attribute.entries],
+            _clone_stack_map_frame_list(attribute.entries),
         )
     cdef object runtime_attr = _clone_runtime_annotations_attr(attribute)
     if runtime_attr is not attribute:

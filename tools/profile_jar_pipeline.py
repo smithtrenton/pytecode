@@ -15,15 +15,36 @@ import io
 import json
 import os
 import pstats
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pytecode import ClassModel, ClassReader, ClassWriter, JarFile
-from pytecode.archive import JarInfo
-from pytecode.classfile.info import ClassFile
+
+def _requested_backend_from_argv(argv: Sequence[str]) -> str | None:
+    for index, argument in enumerate(argv):
+        if argument == "--backend":
+            if index + 1 < len(argv):
+                return argv[index + 1]
+            return None
+        if argument.startswith("--backend="):
+            return argument.partition("=")[2]
+    return None
+
+
+# Optional Cython imports are selected during module import, so the CLI backend
+# switch must be applied before importing pytecode itself.
+_requested_backend = _requested_backend_from_argv(sys.argv[1:])
+if _requested_backend == "python":
+    os.environ["PYTECODE_BLOCK_CYTHON"] = "1"
+elif _requested_backend == "cython":
+    os.environ.pop("PYTECODE_BLOCK_CYTHON", None)
+
+from pytecode import ClassModel, ClassReader, ClassWriter, JarFile  # noqa: E402
+from pytecode.archive import JarInfo  # noqa: E402
+from pytecode.classfile.info import ClassFile  # noqa: E402
 
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]

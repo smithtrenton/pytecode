@@ -139,6 +139,17 @@ Compile the optional Cython extensions in place when you want the accelerated ba
 uv run python setup.py build_ext --inplace
 ```
 
+Build the optional Cython extensions with `cProfile` hooks enabled when you want
+to inspect time inside compiled `.pyx` functions:
+
+```powershell
+$env:PYTECODE_CYTHON_PROFILE = "1"
+uv run python setup.py build_ext --inplace
+```
+
+That profiling build is opt-in because the extra hooks add overhead. Rebuild
+without `PYTECODE_CYTHON_PROFILE=1` when you want normal benchmark numbers.
+
 Common checks:
 
 ```powershell
@@ -166,9 +177,22 @@ uv build
 Profile isolated JAR-processing stages without `run.py`'s output overhead:
 
 ```powershell
-uv run python tools/profile_jar_pipeline.py path/to/jar.jar
-uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages class-parse model-lift model-lower
-uv run python tools/profile_jar_pipeline.py path/to/dir/with/jars --stages model-lift model-lower --summary-json output/profiles/common-libs/summary.json
+uv run python tools\profile_jar_pipeline.py path\to\jar.jar
+uv run python tools\profile_jar_pipeline.py path\to\jar.jar --stages class-parse model-lift model-lower
+uv run python tools\profile_jar_pipeline.py path\to\dir\with\jars --stages model-lift model-lower --summary-json output\profiles\common-libs\summary.json
+```
+
+To compare against the pure-Python fallback, either use `--backend python`:
+
+```powershell
+uv run python tools\profile_jar_pipeline.py 225.jar --backend python --stages class-parse model-lift model-lower class-write
+```
+
+or set the fallback explicitly in the shell before launching the profiler:
+
+```powershell
+$env:PYTECODE_BLOCK_CYTHON = "1"
+uv run python tools\profile_jar_pipeline.py 225.jar --stages class-parse model-lift model-lower class-write
 ```
 
 When making runtime-performance changes, prefer checking both a focused jar such as `225.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.

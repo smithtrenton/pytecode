@@ -86,7 +86,7 @@ _BRANCH_TARGET_CONTEXTS = {
 }
 
 
-def _clone_raw_instruction(insn, *, bytecode_offset=None):
+cdef object _clone_raw_instruction(object insn, object bytecode_offset):
     offset = insn.bytecode_offset if bytecode_offset is None else bytecode_offset
 
     insn_type = type(insn)
@@ -184,7 +184,7 @@ __all__ = [
 
 def clone_raw_instruction(insn, *, bytecode_offset=None):
     """Clone a raw JVM instruction without using ``copy.deepcopy``."""
-    return _clone_raw_instruction(insn, bytecode_offset=bytecode_offset)
+    return _clone_raw_instruction(insn, bytecode_offset)
 
 
 _I2_MIN = -(1 << 15)
@@ -468,13 +468,28 @@ def _lifted_debug_attrs(attributes):
     ]
 
 
-def _ordered_nested_code_attributes(
-    code,
-    line_number_attr,
-    local_variable_attr,
-    local_variable_type_attr,
+cdef object _ordered_nested_code_attributes(
+    object code,
+    object line_number_attr,
+    object local_variable_attr,
+    object local_variable_type_attr,
 ):
-    other_attrs = [clone_attribute(attribute) for attribute in _lifted_debug_attrs(code.attributes)]
+    cdef list other_attrs
+    cdef list attrs
+    cdef object attribute, token, debug_attr
+    cdef type attr_type
+    cdef int other_index
+
+    other_attrs = []
+    for attribute in code.attributes:
+        attr_type = type(attribute)
+        if (
+            attr_type is LineNumberTableAttr
+            or attr_type is LocalVariableTableAttr
+            or attr_type is LocalVariableTypeTableAttr
+        ):
+            continue
+        other_attrs.append(clone_attribute(attribute))
     if not code._nested_attribute_layout:
         attrs = other_attrs
         for debug_attr in (line_number_attr, local_variable_attr, local_variable_type_attr):
@@ -511,7 +526,7 @@ def _ordered_nested_code_attributes(
     return attrs
 
 
-def _needs_ldc_index_cache(items):
+cdef bint _needs_ldc_index_cache(list items):
     return any(type(item) is LdcInsn and type(item.value) is not LdcLong and type(item.value) is not LdcDouble for item in items)
 
 
@@ -540,19 +555,25 @@ def _build_ldc_index_cache(items, cp):
 
 def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
     cdef int offset
+    cdef Py_ssize_t index, item_count
+    cdef type item_type
     cdef dict label_offsets = {}
-    cdef list instruction_offsets = []
+    cdef list instruction_offsets
     offset = 0
+    item_count = len(items)
+    instruction_offsets = [0] * item_count
 
-    for item in items:
-        instruction_offsets.append(offset)
-        if type(item) is Label:
+    for index in range(item_count):
+        item = items[index]
+        instruction_offsets[index] = offset
+        item_type = type(item)
+        if item_type is Label:
             label = item
             if label in label_offsets:
                 raise ValueError(f"label {label!r} appears multiple times in CodeModel.instructions")
             label_offsets[label] = offset
             continue
-        offset += _instruction_byte_size(item, offset, ldc_index_cache)
+        offset += _instruction_byte_size(item, item_type, offset, ldc_index_cache)
 
     return LabelResolution(
         label_offsets=label_offsets,
@@ -561,11 +582,12 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
     )
 
 
-cdef int _instruction_byte_size(object insn, int offset, dict ldc_index_cache):
+cdef int _instruction_byte_size(object insn, type insn_type, int offset, dict ldc_index_cache):
     cdef int slot, increment
-    insn_type = type(insn)
     if insn_type is Label:
         return 0
+    if insn_type is InsnInfo:
+        return 1
     if insn_type is BranchInsn:
         branch_insn = insn
         return 5 if branch_insn.type.instinfo is BranchW else 3
@@ -728,9 +750,12 @@ cdef bint _promote_overflow_branches(list items, object resolution):
 
 cdef object _lower_instruction(object item, int offset, dict label_offsets, object cp):
     cdef int cp_index, slot, increment, count, dimensions, bootstrap_method_attr_index, relative
+    cdef object lowered
     item_type = type(item)
     if item_type is Label:
         return None
+    if item_type is InsnInfo:
+        return InsnInfo(item.type, offset)
 
     if item_type is BranchInsn:
         branch_item = item
@@ -807,8 +832,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             interface_method_item.name,
             interface_method_item.descriptor,
         )
-        desc = parse_method_descriptor(interface_method_item.descriptor)
-        count = parameter_slot_count(desc) + 1  # +1 for the object reference
+        count = parameter_slot_count(parse_method_descriptor(interface_method_item.descriptor)) + 1
         return InvokeInterface(InsnInfoType.INVOKEINTERFACE, offset, cp_index, count, b"\x00")
 
     if item_type is TypeInsn:
@@ -868,7 +892,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
         cp_index = cp.add_class(multi_anew_array_item.class_name)
         return MultiANewArray(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
 
-    lowered = _clone_raw_instruction(item, bytecode_offset=offset)
+    lowered = _clone_raw_instruction(item, offset)
     if type(lowered) is LookupSwitch:
         lowered.npairs = len(lowered.pairs)
     return lowered
@@ -887,31 +911,37 @@ def _lower_exception_handlers(exception_handlers, label_offsets, cp):
     return lowered
 
 
-def _build_line_number_attribute(line_numbers, label_offsets, cp):
+cdef object _build_line_number_attribute(object line_numbers, dict label_offsets, object cp):
+    cdef list table
+    cdef object entry
+    cdef int start_pc
+    cdef int attribute_name_index
     if not line_numbers:
         return None
-    table = [
-        LineNumberInfo(
-            _require_label_offset(label_offsets, entry.label, "line number entry"),
-            entry.line_number,
-        )
-        for entry in line_numbers
-    ]
+    table = []
+    for entry in line_numbers:
+        start_pc = _require_label_offset(label_offsets, entry.label, "line number entry")
+        table.append(LineNumberInfo(start_pc, entry.line_number))
+    attribute_name_index = cp.add_utf8("LineNumberTable")
     return LineNumberTableAttr(
-        attribute_name_index=cp.add_utf8("LineNumberTable"),
+        attribute_name_index=attribute_name_index,
         attribute_length=2 + (4 * len(table)),
         line_number_table_length=len(table),
         line_number_table=table,
     )
 
 
-def _local_range_length(start, end, *, context):
+cdef inline int _local_range_length(int start, int end, str context):
     if end < start:
         raise ValueError(f"{context} end label must not resolve before start label")
     return end - start
 
 
-def _build_local_variable_attribute(local_variables, label_offsets, cp):
+cdef object _build_local_variable_attribute(object local_variables, dict label_offsets, object cp):
+    cdef list table
+    cdef object entry
+    cdef int start_pc
+    cdef int attribute_name_index
     if not local_variables:
         return None
     table = []
@@ -922,21 +952,26 @@ def _build_local_variable_attribute(local_variables, label_offsets, cp):
             _local_range_length(
                 start_pc,
                 _require_label_offset(label_offsets, entry.end, "local variable end"),
-                context="local variable range",
+                "local variable range",
             ),
             cp.add_utf8(entry.name),
             cp.add_utf8(entry.descriptor),
             entry.slot,
         ))
+    attribute_name_index = cp.add_utf8("LocalVariableTable")
     return LocalVariableTableAttr(
-        attribute_name_index=cp.add_utf8("LocalVariableTable"),
+        attribute_name_index=attribute_name_index,
         attribute_length=2 + (10 * len(table)),
         local_variable_table_length=len(table),
         local_variable_table=table,
     )
 
 
-def _build_local_variable_type_attribute(local_variable_types, label_offsets, cp):
+cdef object _build_local_variable_type_attribute(object local_variable_types, dict label_offsets, object cp):
+    cdef list table
+    cdef object entry
+    cdef int start_pc
+    cdef int attribute_name_index
     if not local_variable_types:
         return None
     table = []
@@ -947,14 +982,15 @@ def _build_local_variable_type_attribute(local_variable_types, label_offsets, cp
             _local_range_length(
                 start_pc,
                 _require_label_offset(label_offsets, entry.end, "local variable type end"),
-                context="local variable type range",
+                "local variable type range",
             ),
             cp.add_utf8(entry.name),
             cp.add_utf8(entry.signature),
             entry.slot,
         ))
+    attribute_name_index = cp.add_utf8("LocalVariableTypeTable")
     return LocalVariableTypeTableAttr(
-        attribute_name_index=cp.add_utf8("LocalVariableTypeTable"),
+        attribute_name_index=attribute_name_index,
         attribute_length=2 + (10 * len(table)),
         local_variable_type_table_length=len(table),
         local_variable_type_table=table,
@@ -962,14 +998,24 @@ def _build_local_variable_type_attribute(local_variable_types, label_offsets, cp
 
 
 def _lower_resolved_code(code, list items, object resolution, object cp, bint keep_debug_info):
-    cdef list lowered_code = []
+    cdef Py_ssize_t index, item_count, lowered_count
+    cdef list lowered_code
+    cdef list instruction_offsets = resolution.instruction_offsets
     cdef dict label_offsets = resolution.label_offsets
     cdef int offset
 
-    for item, offset in zip(items, resolution.instruction_offsets, strict=True):
+    item_count = len(items)
+    lowered_code = [None] * item_count
+    lowered_count = 0
+    for index in range(item_count):
+        item = items[index]
+        offset = instruction_offsets[index]
         lowered = _lower_instruction(item, offset, label_offsets, cp)
         if lowered is not None:
-            lowered_code.append(lowered)
+            lowered_code[lowered_count] = lowered
+            lowered_count += 1
+    if lowered_count != item_count:
+        del lowered_code[lowered_count:]
     exception_table = _lower_exception_handlers(code.exception_handlers, label_offsets, cp)
 
     line_number_attr = None
