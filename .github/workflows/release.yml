@@ -74,7 +74,7 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
-        run: uv sync --extra dev
+        run: uv sync --dev
       - name: Validate release tag
         run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
       - name: Lint

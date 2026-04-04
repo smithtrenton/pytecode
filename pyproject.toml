@@ -52,7 +52,7 @@ Repository = "https://github.com/smithtrenton/pytecode"
 Issues = "https://github.com/smithtrenton/pytecode/issues"
 Changelog = "https://github.com/smithtrenton/pytecode/releases"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "basedpyright>=1.38.3,<2.0.0",
   "Cython>=3.1.1,<4.0.0",

@@ -24,7 +24,7 @@ jobs:
           enable-cache: true
           cache-python: true
       - name: Sync dependencies
-        run: uv sync --extra dev
+        run: uv sync --dev
       - name: Lint
         run: uv run ruff check .
       - name: Check formatting
@@ -51,9 +51,7 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
-        run: uv sync --extra dev
-      - name: Build Cython extensions
-        run: uv run python setup.py build_ext --inplace
+        run: uv sync --dev
       - name: Cache Pytest data
         uses: actions/cache@v5
         with:
@@ -84,9 +82,7 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
-        run: uv sync --extra dev
-      - name: Build Cython extensions
-        run: uv run python setup.py build_ext --inplace
+        run: uv sync --dev
       - name: Cache Pytest data
         uses: actions/cache@v5
         with:
@@ -122,7 +118,7 @@ jobs:
           enable-cache: true
           cache-python: true
       - name: Sync dependencies
-        run: uv sync --extra dev
+        run: uv sync --dev
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
       - name: Generate API docs
