@@ -122,9 +122,6 @@ def _write_bytes(data) -> bytes:
 # ---------------------------------------------------------------------------
 
 cdef class BytesReader:
-    cdef const unsigned char[:] buffer_view
-    cdef public int offset
-    cdef object _buffer_obj  # prevent GC of the buffer
 
     def __init__(self, bytes_or_bytearray, int offset=0):
         self._buffer_obj = bytes_or_bytearray
@@ -141,49 +138,49 @@ cdef class BytesReader:
         else:
             self.offset = max(self.offset - <int>distance, 0)
 
-    def read_u1(self) -> int:
+    cpdef int read_u1(self):
         if self.offset + 1 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 1 byte")
         cdef int res = _cu1(self.buffer_view, self.offset)
         self.offset += 1
         return res
 
-    def read_i1(self) -> int:
+    cpdef int read_i1(self):
         if self.offset + 1 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 1 byte")
         cdef int res = _ci1(self.buffer_view, self.offset)
         self.offset += 1
         return res
 
-    def read_u2(self) -> int:
+    cpdef int read_u2(self):
         if self.offset + 2 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 2 bytes")
         cdef int res = _cu2(self.buffer_view, self.offset)
         self.offset += 2
         return res
 
-    def read_i2(self) -> int:
+    cpdef int read_i2(self):
         if self.offset + 2 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 2 bytes")
         cdef int res = _ci2(self.buffer_view, self.offset)
         self.offset += 2
         return res
 
-    def read_u4(self) -> int:
+    cpdef unsigned int read_u4(self):
         if self.offset + 4 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 4 bytes")
         cdef unsigned int res = _cu4(self.buffer_view, self.offset)
         self.offset += 4
         return res
 
-    def read_i4(self) -> int:
+    cpdef int read_i4(self):
         if self.offset + 4 > len(self.buffer_view):
             raise _struct.error("unpack requires a buffer of at least 4 bytes")
         cdef int res = _ci4(self.buffer_view, self.offset)
         self.offset += 4
         return res
 
-    def read_bytes(self, int size) -> bytes:
+    cpdef bytes read_bytes(self, int size):
         cdef bytes res = bytes(self.buffer_view[self.offset:self.offset + size])
         self.offset += size
         return res

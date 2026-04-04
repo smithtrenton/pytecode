@@ -25,7 +25,7 @@ include-package-data = true
 include = ["pytecode*"]
 
 [tool.setuptools.package-data]
-pytecode = ["py.typed"]
+pytecode = ["py.typed", "**/*.pxd"]
 
 [project]
 name = "pytecode"

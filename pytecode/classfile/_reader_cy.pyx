@@ -7,9 +7,9 @@ into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.i
 """
 
 import os
-from functools import cache
 
 from pytecode._internal._bytes_utils_cy import BytesReader
+from pytecode._internal._bytes_utils_cy cimport BytesReader
 from . import attributes, constant_pool, constants, info, instructions
 from .modified_utf8 import decode_modified_utf8
 
@@ -21,30 +21,46 @@ _CONSTANT_POOL_INFO_TYPES = {
 }
 _INSTRUCTION_TYPES = {int(inst_type): inst_type for inst_type in instructions.InsnInfoType}
 _ARRAY_TYPES = {int(array_type): array_type for array_type in instructions.ArrayType}
+_ATTRIBUTE_INFO_TYPES = {
+    member.value: member for member in attributes.AttributeInfoType if member.value
+}
+_ENUM_MEMBER_CACHE = {}
 
 
-def _constant_pool_info_type(int tag):
+cdef inline object _constant_pool_info_type(int tag):
     return _CONSTANT_POOL_INFO_TYPES.get(tag) or constant_pool.ConstantPoolInfoType(tag)
 
 
-def _instruction_type(int opcode):
+cdef inline object _instruction_type(int opcode):
     return _INSTRUCTION_TYPES.get(opcode) or instructions.InsnInfoType(opcode)
 
 
-def _array_type(int atype):
+cdef inline object _array_type(int atype):
     return _ARRAY_TYPES.get(atype) or instructions.ArrayType(atype)
 
 
-@cache
-def _enum_member(object enum_type, int value):
-    return enum_type(value)
+cdef inline object _attribute_info_type(str name):
+    result = _ATTRIBUTE_INFO_TYPES.get(name)
+    if result is not None:
+        return result
+    return attributes.AttributeInfoType(name)
+
+
+cdef inline object _enum_member(object enum_type, int value):
+    cdef tuple key = (enum_type, value)
+    result = _ENUM_MEMBER_CACHE.get(key)
+    if result is not None:
+        return result
+    result = enum_type(value)
+    _ENUM_MEMBER_CACHE[key] = result
+    return result
 
 
 class MalformedClassException(Exception):
     """Raised when the input bytes do not conform to the JVM class-file format (JVMS §4)."""
 
 
-class ClassReader(BytesReader):
+cdef class ClassReader(BytesReader):
     """Single-pass parser that converts ``.class`` file bytes into a :class:`~pytecode.classfile.info.ClassFile` tree.
 
     The reader walks the binary layout defined in JVMS §4.1, populating the
@@ -53,9 +69,10 @@ class ClassReader(BytesReader):
     mirrors the on-disk ``ClassFile`` structure.
     """
 
-    class_info: info.ClassFile
+    cdef public list constant_pool
+    cdef public object class_info
 
-    def __init__(self, bytes_or_bytearray: bytes | bytearray) -> None:
+    def __init__(self, bytes_or_bytearray):
         """Initialise the reader and immediately parse the class-file bytes.
 
         Args:
@@ -65,7 +82,7 @@ class ClassReader(BytesReader):
             MalformedClassException: If the bytes are not a valid class file.
         """
         super().__init__(bytes_or_bytearray)
-        self.constant_pool: list = []
+        self.constant_pool = []
         self.read_class()
 
     @classmethod
@@ -94,7 +111,7 @@ class ClassReader(BytesReader):
         """
         return cls(bytes_or_bytearray)
 
-    def read_constant_pool_index(self, int index):
+    cpdef object read_constant_pool_index(self, int index):
         """Read a single constant-pool entry at the given logical index (JVMS §4.4).
 
         Args:
@@ -153,7 +170,7 @@ class ClassReader(BytesReader):
             raise ValueError(f"Unknown ConstantPoolInfoType: {cp_type}")
         return cp_info, index_extra
 
-    def read_align_bytes(self, int current_offset):
+    cpdef object read_align_bytes(self, int current_offset):
         """Read and discard padding bytes to reach 4-byte alignment.
 
         Used by ``tableswitch`` and ``lookupswitch`` instructions whose
@@ -169,7 +186,7 @@ class ClassReader(BytesReader):
         align_bytes = (4 - current_offset % 4) % 4
         return self.read_bytes(align_bytes)
 
-    def read_instruction(self, int current_method_offset):
+    cpdef object read_instruction(self, int current_method_offset):
         """Read a single JVM bytecode instruction (JVMS §6.5).
 
         Args:
@@ -236,7 +253,7 @@ class ClassReader(BytesReader):
 
         raise Exception(f"Invalid InstInfoType: {inst_type.name} {inst_type.instinfo}")
 
-    def read_code_bytes(self, int code_length):
+    cpdef list read_code_bytes(self, int code_length):
         """Read the full bytecode array of a ``Code`` attribute (JVMS §4.7.3).
 
         Args:
@@ -255,7 +272,7 @@ class ClassReader(BytesReader):
             current_method_offset = self.offset - start_method_offset
         return results
 
-    def read_verification_type_info(self):
+    cpdef object read_verification_type_info(self):
         """Read a single ``verification_type_info`` union (JVMS §4.7.4).
 
         Returns:
@@ -287,7 +304,7 @@ class ClassReader(BytesReader):
         else:
             raise ValueError(f"Unknown verification type tag: {tag}")
 
-    def read_element_value_info(self):
+    cpdef object read_element_value_info(self):
         """Read an ``element_value`` structure from an annotation (JVMS §4.7.16.1).
 
         Returns:
@@ -317,7 +334,7 @@ class ClassReader(BytesReader):
         else:
             raise ValueError(f"Unknown element value tag: {tag}")
 
-    def read_annotation_info(self):
+    cpdef object read_annotation_info(self):
         """Read an ``annotation`` structure (JVMS §4.7.16).
 
         Returns:
@@ -332,7 +349,7 @@ class ClassReader(BytesReader):
         ]
         return attributes.AnnotationInfo(type_index, num_element_value_pairs, element_value_pairs)
 
-    def read_target_info(self, int target_type):
+    cpdef object read_target_info(self, int target_type):
         """Read a ``target_info`` union for a type annotation (JVMS §4.7.20).
 
         Args:
@@ -372,7 +389,7 @@ class ClassReader(BytesReader):
         else:
             raise ValueError(f"Unknown target info type: {target_type}")
 
-    def read_target_path(self):
+    cpdef object read_target_path(self):
         """Read a ``type_path`` structure for a type annotation (JVMS §4.7.20.2).
 
         Returns:
@@ -383,7 +400,7 @@ class ClassReader(BytesReader):
         path = [attributes.PathInfo(self.read_u1(), self.read_u1()) for _ in range(path_length)]
         return attributes.TypePathInfo(path_length, path)
 
-    def read_type_annotation_info(self):
+    cpdef object read_type_annotation_info(self):
         """Read a ``type_annotation`` structure (JVMS §4.7.20).
 
         Returns:
@@ -408,7 +425,7 @@ class ClassReader(BytesReader):
             element_value_pairs,
         )
 
-    def read_attribute(self):
+    cpdef object read_attribute(self):
         """Read a single ``attribute_info`` structure (JVMS §4.7).
 
         Recognised attribute names are decoded into their specific subtypes;
@@ -438,11 +455,11 @@ class ClassReader(BytesReader):
         name_index, length = self.read_u2(), self.read_u4()
 
         name_cp = self.constant_pool[name_index]
-        if not isinstance(name_cp, constant_pool.Utf8Info):
+        if type(name_cp) is not constant_pool.Utf8Info:
             raise ValueError(f"name_index({name_index}) should be Utf8Info, not {type(name_cp)}")
 
         name = decode_modified_utf8(name_cp.str_bytes)
-        attr_type = attributes.AttributeInfoType(name)
+        attr_type = _attribute_info_type(name)
 
         if attr_type is attributes.AttributeInfoType.SYNTHETIC:
             return attributes.SyntheticAttr(name_index, length)
@@ -769,7 +786,7 @@ class ClassReader(BytesReader):
 
         return attributes.UnimplementedAttr(name_index, length, self.read_bytes(length), attr_type)
 
-    def read_field(self):
+    cpdef object read_field(self):
         """Read a single ``field_info`` structure (JVMS §4.5).
 
         Returns:
@@ -783,7 +800,7 @@ class ClassReader(BytesReader):
         attributes = [self.read_attribute() for _ in range(attributes_count)]
         return info.FieldInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
 
-    def read_method(self):
+    cpdef object read_method(self):
         """Read a single ``method_info`` structure (JVMS §4.6).
 
         Returns:
@@ -797,7 +814,7 @@ class ClassReader(BytesReader):
         attributes = [self.read_attribute() for _ in range(attributes_count)]
         return info.MethodInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
 
-    def read_class(self):
+    cpdef object read_class(self):
         """Parse the complete ``ClassFile`` structure (JVMS §4.1).
 
         Validates the magic number and version, reads the constant pool,

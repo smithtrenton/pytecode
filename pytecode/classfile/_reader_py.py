@@ -8,7 +8,7 @@ into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.i
 from __future__ import annotations
 
 import os
-from functools import cache
+from typing import Any
 
 from .._internal.bytes_utils import BytesReader
 from . import attributes, constant_pool, constants, info, instructions
@@ -20,6 +20,10 @@ __all__ = ["ClassReader", "MalformedClassException"]
 _CONSTANT_POOL_INFO_TYPES = {cp_type.value: cp_type for cp_type in constant_pool.ConstantPoolInfoType}
 _INSTRUCTION_TYPES = {int(inst_type): inst_type for inst_type in instructions.InsnInfoType}
 _ARRAY_TYPES = {int(array_type): array_type for array_type in instructions.ArrayType}
+_ATTRIBUTE_INFO_TYPES: dict[str, attributes.AttributeInfoType] = {
+    member.value: member for member in attributes.AttributeInfoType if member.value
+}
+_ENUM_MEMBER_CACHE: dict[tuple[type, int], object] = {}
 
 
 def _constant_pool_info_type(tag: int) -> constant_pool.ConstantPoolInfoType:
@@ -34,9 +38,21 @@ def _array_type(atype: int) -> instructions.ArrayType:
     return _ARRAY_TYPES.get(atype) or instructions.ArrayType(atype)
 
 
-@cache
-def _enum_member(enum_type: type, value: int):
-    return enum_type(value)
+def _attribute_info_type(name: str) -> attributes.AttributeInfoType:
+    result = _ATTRIBUTE_INFO_TYPES.get(name)
+    if result is not None:
+        return result
+    return attributes.AttributeInfoType(name)
+
+
+def _enum_member(enum_type: type, value: int) -> Any:
+    key = (enum_type, value)
+    result = _ENUM_MEMBER_CACHE.get(key)
+    if result is not None:
+        return result
+    result = enum_type(value)
+    _ENUM_MEMBER_CACHE[key] = result
+    return result
 
 
 class MalformedClassException(Exception):
@@ -414,11 +430,11 @@ class ClassReader(BytesReader):
         name_index, length = self.read_u2(), self.read_u4()
 
         name_cp = self.constant_pool[name_index]
-        if not isinstance(name_cp, constant_pool.Utf8Info):
+        if type(name_cp) is not constant_pool.Utf8Info:
             raise ValueError(f"name_index({name_index}) should be Utf8Info, not {type(name_cp)}")
 
         name = decode_modified_utf8(name_cp.str_bytes)
-        attr_type = attributes.AttributeInfoType(name)
+        attr_type = _attribute_info_type(name)
 
         if attr_type is attributes.AttributeInfoType.SYNTHETIC:
             return attributes.SyntheticAttr(name_index, length)
