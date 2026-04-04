@@ -7,12 +7,37 @@ into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.i
 """
 
 import os
+from functools import cache
 
 from pytecode._internal._bytes_utils_cy import BytesReader
 from . import attributes, constant_pool, constants, info, instructions
 from .modified_utf8 import decode_modified_utf8
 
 __all__ = ["ClassReader", "MalformedClassException"]
+
+
+_CONSTANT_POOL_INFO_TYPES = {
+    cp_type.value: cp_type for cp_type in constant_pool.ConstantPoolInfoType
+}
+_INSTRUCTION_TYPES = {int(inst_type): inst_type for inst_type in instructions.InsnInfoType}
+_ARRAY_TYPES = {int(array_type): array_type for array_type in instructions.ArrayType}
+
+
+def _constant_pool_info_type(int tag):
+    return _CONSTANT_POOL_INFO_TYPES.get(tag) or constant_pool.ConstantPoolInfoType(tag)
+
+
+def _instruction_type(int opcode):
+    return _INSTRUCTION_TYPES.get(opcode) or instructions.InsnInfoType(opcode)
+
+
+def _array_type(int atype):
+    return _ARRAY_TYPES.get(atype) or instructions.ArrayType(atype)
+
+
+@cache
+def _enum_member(object enum_type, int value):
+    return enum_type(value)
 
 
 class MalformedClassException(Exception):
@@ -84,7 +109,7 @@ class ClassReader(BytesReader):
         """
         cdef int index_extra, offset, tag
         index_extra, offset, tag = 0, self.offset, self.read_u1()
-        cp_type = constant_pool.ConstantPoolInfoType(tag)
+        cp_type = _constant_pool_info_type(tag)
 
         if cp_type is constant_pool.ConstantPoolInfoType.CLASS:
             cp_info = constant_pool.ClassInfo(index, offset, tag, self.read_u2())
@@ -159,7 +184,7 @@ class ClassReader(BytesReader):
         """
         cdef int opcode
         opcode = self.read_u1()
-        inst_type = instructions.InsnInfoType(opcode)
+        inst_type = _instruction_type(opcode)
         instinfo = inst_type.instinfo
         if instinfo is instructions.LocalIndex:
             return instructions.LocalIndex(inst_type, current_method_offset, self.read_u1())
@@ -186,7 +211,7 @@ class ClassReader(BytesReader):
             index, dimensions = self.read_u2(), self.read_u1()
             return instructions.MultiANewArray(inst_type, current_method_offset, index, dimensions)
         elif instinfo is instructions.NewArray:
-            atype = instructions.ArrayType(self.read_u1())
+            atype = _array_type(self.read_u1())
             return instructions.NewArray(inst_type, current_method_offset, atype)
         elif instinfo is instructions.LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
@@ -200,7 +225,7 @@ class ClassReader(BytesReader):
             return instructions.TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = self.read_u1()
-            wide_inst_type = instructions.InsnInfoType(opcode + wide_opcode)
+            wide_inst_type = _instruction_type(opcode + wide_opcode)
             if wide_inst_type.instinfo is instructions.LocalIndexW:
                 return instructions.LocalIndexW(wide_inst_type, current_method_offset, self.read_u2())
             elif wide_inst_type.instinfo is instructions.IIncW:
@@ -525,7 +550,7 @@ class ClassReader(BytesReader):
                     self.read_u2(),
                     self.read_u2(),
                     self.read_u2(),
-                    constants.NestedClassAccessFlag(self.read_u2()),
+                    _enum_member(constants.NestedClassAccessFlag, self.read_u2()),
                 )
                 for _ in range(number_of_classes)
             ]
@@ -644,21 +669,24 @@ class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.METHOD_PARAMETERS:
             parameters_count = self.read_u1()
             parameters = [
-                attributes.MethodParameterInfo(self.read_u2(), constants.MethodParameterAccessFlag(self.read_u2()))
+                attributes.MethodParameterInfo(
+                    self.read_u2(),
+                    _enum_member(constants.MethodParameterAccessFlag, self.read_u2()),
+                )
                 for _ in range(parameters_count)
             ]
             return attributes.MethodParametersAttr(name_index, length, parameters_count, parameters)
 
         elif attr_type is attributes.AttributeInfoType.MODULE:
             module_name_index = self.read_u2()
-            module_flags = constants.ModuleAccessFlag(self.read_u2())
+            module_flags = _enum_member(constants.ModuleAccessFlag, self.read_u2())
             module_version_index = self.read_u2()
 
             requires_count = self.read_u2()
             requires = [
                 attributes.RequiresInfo(
                     self.read_u2(),
-                    constants.ModuleRequiresAccessFlag(self.read_u2()),
+                    _enum_member(constants.ModuleRequiresAccessFlag, self.read_u2()),
                     self.read_u2(),
                 )
                 for _ in range(requires_count)
@@ -668,7 +696,7 @@ class ClassReader(BytesReader):
             exports = []
             for _ in range(exports_count):
                 exports_index = self.read_u2()
-                exports_flags = constants.ModuleExportsAccessFlag(self.read_u2())
+                exports_flags = _enum_member(constants.ModuleExportsAccessFlag, self.read_u2())
                 exports_to_count = self.read_u2()
                 exports_to_index = [self.read_u2() for __ in range(exports_to_count)]
                 exports.append(attributes.ExportInfo(exports_index, exports_flags, exports_to_count, exports_to_index))
@@ -677,7 +705,7 @@ class ClassReader(BytesReader):
             opens = []
             for _ in range(opens_count):
                 opens_index = self.read_u2()
-                opens_flags = constants.ModuleOpensAccessFlag(self.read_u2())
+                opens_flags = _enum_member(constants.ModuleOpensAccessFlag, self.read_u2())
                 opens_to_count = self.read_u2()
                 opens_to_index = [self.read_u2() for __ in range(opens_to_count)]
                 opens.append(attributes.OpensInfo(opens_index, opens_flags, opens_to_count, opens_to_index))
@@ -748,7 +776,7 @@ class ClassReader(BytesReader):
             The decoded field info including its attributes.
         """
         cdef int name_index, descriptor_index, attributes_count
-        access_flags = constants.FieldAccessFlag(self.read_u2())
+        access_flags = _enum_member(constants.FieldAccessFlag, self.read_u2())
         name_index = self.read_u2()
         descriptor_index = self.read_u2()
         attributes_count = self.read_u2()
@@ -762,7 +790,7 @@ class ClassReader(BytesReader):
             The decoded method info including its attributes.
         """
         cdef int name_index, descriptor_index, attributes_count
-        access_flags = constants.MethodAccessFlag(self.read_u2())
+        access_flags = _enum_member(constants.MethodAccessFlag, self.read_u2())
         name_index = self.read_u2()
         descriptor_index = self.read_u2()
         attributes_count = self.read_u2()
@@ -802,7 +830,7 @@ class ClassReader(BytesReader):
             self.constant_pool[index] = cp_info
             index += 1 + index_extra
 
-        access_flags = constants.ClassAccessFlag(self.read_u2())
+        access_flags = _enum_member(constants.ClassAccessFlag, self.read_u2())
         this_class = self.read_u2()
         super_class = self.read_u2()
 

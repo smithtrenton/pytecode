@@ -410,6 +410,22 @@ class FieldInsn(InsnInfo):
         self.name = name
         self.descriptor = descriptor
 
+    @classmethod
+    def _trusted(
+        cls,
+        insn_type: InsnInfoType,
+        owner: str,
+        name: str,
+        descriptor: str,
+        bytecode_offset: int = -1,
+    ) -> FieldInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.owner = owner
+        self.name = name
+        self.descriptor = descriptor
+        return self
+
 
 @dataclass(init=False)
 class MethodInsn(InsnInfo):
@@ -457,6 +473,24 @@ class MethodInsn(InsnInfo):
         self.descriptor = descriptor
         self.is_interface = is_interface
 
+    @classmethod
+    def _trusted(
+        cls,
+        insn_type: InsnInfoType,
+        owner: str,
+        name: str,
+        descriptor: str,
+        is_interface: bool = False,
+        bytecode_offset: int = -1,
+    ) -> MethodInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.owner = owner
+        self.name = name
+        self.descriptor = descriptor
+        self.is_interface = is_interface
+        return self
+
 
 @dataclass(init=False)
 class InterfaceMethodInsn(InsnInfo):
@@ -487,6 +521,21 @@ class InterfaceMethodInsn(InsnInfo):
         self.name = name
         self.descriptor = descriptor
 
+    @classmethod
+    def _trusted(
+        cls,
+        owner: str,
+        name: str,
+        descriptor: str,
+        bytecode_offset: int = -1,
+    ) -> InterfaceMethodInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.INVOKEINTERFACE, bytecode_offset)
+        self.owner = owner
+        self.name = name
+        self.descriptor = descriptor
+        return self
+
 
 @dataclass(init=False)
 class TypeInsn(InsnInfo):
@@ -516,6 +565,18 @@ class TypeInsn(InsnInfo):
             raise ValueError(f"{insn_type.name} is not a type instruction opcode")
         super().__init__(insn_type, bytecode_offset)
         self.class_name = class_name
+
+    @classmethod
+    def _trusted(
+        cls,
+        insn_type: InsnInfoType,
+        class_name: str,
+        bytecode_offset: int = -1,
+    ) -> TypeInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.class_name = class_name
+        return self
 
 
 @dataclass(init=False)
@@ -558,6 +619,18 @@ class VarInsn(InsnInfo):
         super().__init__(insn_type, bytecode_offset)
         self.slot = _require_u2(slot, context="local variable slot")
 
+    @classmethod
+    def _trusted(
+        cls,
+        insn_type: InsnInfoType,
+        slot: int,
+        bytecode_offset: int = -1,
+    ) -> VarInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.slot = slot
+        return self
+
 
 @dataclass(init=False)
 class IIncInsn(InsnInfo):
@@ -591,6 +664,19 @@ class IIncInsn(InsnInfo):
         self.slot = _require_u2(slot, context="local variable slot")
         self.increment = _require_i2(increment, context="iinc increment")
 
+    @classmethod
+    def _trusted(
+        cls,
+        slot: int,
+        increment: int,
+        bytecode_offset: int = -1,
+    ) -> IIncInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.IINC, bytecode_offset)
+        self.slot = slot
+        self.increment = increment
+        return self
+
 
 @dataclass(init=False)
 class LdcInsn(InsnInfo):
@@ -615,6 +701,17 @@ class LdcInsn(InsnInfo):
     ) -> None:
         super().__init__(InsnInfoType.LDC_W, bytecode_offset)
         self.value = value
+
+    @classmethod
+    def _trusted(
+        cls,
+        value: LdcValue,
+        bytecode_offset: int = -1,
+    ) -> LdcInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.LDC_W, bytecode_offset)
+        self.value = value
+        return self
 
 
 @dataclass(init=False)
@@ -651,6 +748,21 @@ class InvokeDynamicInsn(InsnInfo):
         self.name = name
         self.descriptor = descriptor
 
+    @classmethod
+    def _trusted(
+        cls,
+        bootstrap_method_attr_index: int,
+        name: str,
+        descriptor: str,
+        bytecode_offset: int = -1,
+    ) -> InvokeDynamicInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.INVOKEDYNAMIC, bytecode_offset)
+        self.bootstrap_method_attr_index = bootstrap_method_attr_index
+        self.name = name
+        self.descriptor = descriptor
+        return self
+
 
 @dataclass(init=False)
 class MultiANewArrayInsn(InsnInfo):
@@ -681,3 +793,16 @@ class MultiANewArrayInsn(InsnInfo):
             context="multianewarray dimensions",
             minimum=1,
         )
+
+    @classmethod
+    def _trusted(
+        cls,
+        class_name: str,
+        dimensions: int,
+        bytecode_offset: int = -1,
+    ) -> MultiANewArrayInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.MULTIANEWARRAY, bytecode_offset)
+        self.class_name = class_name
+        self.dimensions = dimensions
+        return self

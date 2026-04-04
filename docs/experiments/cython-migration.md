@@ -49,7 +49,10 @@ Future candidates (not in initial scope):
 - `edit/operands.py` — symbolic operand wrapper construction and validation (done in Phase 5)
 - `classfile/descriptors.py` — field/method descriptor parsing in the lower/lift path (done in Phase 6)
 - `edit/debug_info.py` — debug-info policy normalization and stale-state checks in model lowering (done in Phase 7)
-- `_model.pyx` micro-optimizations — remaining hot work is now concentrated inside the compiled model lift/lower path plus stdlib enum/codec overhead
+- `edit/_model.py` internal lift/lower optimizations — cache/allocation cleanup done in Phase 8, redundant label-target validation cleanup done in Phase 9; remaining hot work is still concentrated inside the compiled model path plus stdlib enum/codec overhead
+- `classfile/attributes.py` — class-file attribute dataclass construction on the parse/lift path (done in Phase 11)
+- `classfile/instructions.py` — instruction operand dataclasses and opcode metadata on the parse/write path (done in Phase 12)
+- No similarly obvious unported classfile helper seam remains after Phase 12; the next step should come from fresh profiling inside the already compiled `classfile.reader` / `edit._model` path rather than another mechanical classfile data-model split
 
 ## Build integration
 

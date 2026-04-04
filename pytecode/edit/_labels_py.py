@@ -80,6 +80,11 @@ if TYPE_CHECKING:
     from .model import CodeModel, MethodModel
 
 
+_BRANCH_TARGET_CONTEXTS: dict[InsnInfoType, str] = {
+    insn_type: f"{insn_type.name} target" for insn_type in InsnInfoType if insn_type.instinfo in (Branch, BranchW)
+}
+
+
 def _clone_raw_instruction(insn: InsnInfo, *, bytecode_offset: int | None = None) -> InsnInfo:
     offset = insn.bytecode_offset if bytecode_offset is None else bytecode_offset
 
@@ -326,6 +331,13 @@ class BranchInsn(InsnInfo):
         super().__init__(insn_type, bytecode_offset)
         self.target = target
 
+    @classmethod
+    def _trusted(cls, insn_type: InsnInfoType, target: Label, bytecode_offset: int = -1) -> BranchInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        self.target = target
+        return self
+
 
 @dataclass(init=False)
 class LookupSwitchInsn(InsnInfo):
@@ -348,6 +360,19 @@ class LookupSwitchInsn(InsnInfo):
         super().__init__(InsnInfoType.LOOKUPSWITCH, bytecode_offset)
         self.default_target = default_target
         self.pairs = list(pairs)
+
+    @classmethod
+    def _trusted(
+        cls,
+        default_target: Label,
+        pairs: list[tuple[int, Label]],
+        bytecode_offset: int = -1,
+    ) -> LookupSwitchInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.LOOKUPSWITCH, bytecode_offset)
+        self.default_target = default_target
+        self.pairs = list(pairs)
+        return self
 
 
 @dataclass(init=False)
@@ -384,6 +409,23 @@ class TableSwitchInsn(InsnInfo):
         self.low = low
         self.high = high
         self.targets = list(targets)
+
+    @classmethod
+    def _trusted(
+        cls,
+        default_target: Label,
+        low: int,
+        high: int,
+        targets: list[Label],
+        bytecode_offset: int = -1,
+    ) -> TableSwitchInsn:
+        self = cls.__new__(cls)
+        InsnInfo.__init__(self, InsnInfoType.TABLESWITCH, bytecode_offset)
+        self.default_target = default_target
+        self.low = low
+        self.high = high
+        self.targets = list(targets)
+        return self
 
 
 @dataclass
@@ -686,7 +728,7 @@ def _promote_overflow_branches(items: list[CodeItem], resolution: LabelResolutio
             source_offset,
             item.target,
             resolution.label_offsets,
-            context=f"{item.type.name} target",
+            context=_BRANCH_TARGET_CONTEXTS[item.type],
         )
 
         if item.type.instinfo is BranchW:
@@ -735,7 +777,10 @@ def _lower_instruction(
     if item_type is BranchInsn:
         branch_item = cast(BranchInsn, item)
         relative = _relative_offset(
-            offset, branch_item.target, label_offsets, context=f"{branch_item.type.name} target"
+            offset,
+            branch_item.target,
+            label_offsets,
+            context=_BRANCH_TARGET_CONTEXTS[branch_item.type],
         )
         if branch_item.type.instinfo is BranchW:
             if not _fits_i4(relative):

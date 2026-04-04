@@ -718,6 +718,10 @@ class ConstantPoolBuilder:
         if existing is not None:
             return existing
         name_index = self.add_utf8(name)
+        existing = self._key_to_index.get((_TAG_CLASS, name_index))
+        if existing is not None:
+            self._class_name_to_index[name] = existing
+            return existing
         entry = ClassInfo(index=0, offset=0, tag=_TAG_CLASS, name_index=name_index)
         index = self._allocate(entry)
         self._class_name_to_index[name] = index
@@ -738,6 +742,10 @@ class ConstantPoolBuilder:
         if existing is not None:
             return existing
         string_index = self.add_utf8(value)
+        existing = self._key_to_index.get((_TAG_STRING, string_index))
+        if existing is not None:
+            self._string_value_to_index[value] = existing
+            return existing
         entry = StringInfo(index=0, offset=0, tag=_TAG_STRING, string_index=string_index)
         index = self._allocate(entry)
         self._string_value_to_index[value] = index
@@ -761,6 +769,10 @@ class ConstantPoolBuilder:
             return existing
         name_index = self.add_utf8(name)
         descriptor_index = self.add_utf8(descriptor)
+        existing = self._key_to_index.get((_TAG_NAME_AND_TYPE, name_index, descriptor_index))
+        if existing is not None:
+            self._name_and_type_to_index[key] = existing
+            return existing
         entry = NameAndTypeInfo(
             index=0,
             offset=0,
@@ -792,6 +804,10 @@ class ConstantPoolBuilder:
             return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(field_name, descriptor)
+        existing = self._key_to_index.get((_TAG_FIELDREF, class_index, nat_index))
+        if existing is not None:
+            self._fieldref_to_index[key] = existing
+            return existing
         entry = FieldrefInfo(
             index=0,
             offset=0,
@@ -822,6 +838,10 @@ class ConstantPoolBuilder:
             return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
+        existing = self._key_to_index.get((_TAG_METHODREF, class_index, nat_index))
+        if existing is not None:
+            self._methodref_to_index[key] = existing
+            return existing
         entry = MethodrefInfo(
             index=0,
             offset=0,
@@ -852,6 +872,10 @@ class ConstantPoolBuilder:
             return existing
         class_index = self.add_class(class_name)
         nat_index = self.add_name_and_type(method_name, descriptor)
+        existing = self._key_to_index.get((_TAG_INTERFACE_METHODREF, class_index, nat_index))
+        if existing is not None:
+            self._interface_methodref_to_index[key] = existing
+            return existing
         entry = InterfaceMethodrefInfo(
             index=0,
             offset=0,
@@ -906,6 +930,9 @@ class ConstantPoolBuilder:
             The CP index of the (possibly pre-existing) entry.
         """
         descriptor_index = self.add_utf8(descriptor)
+        existing = self._key_to_index.get((_TAG_METHOD_TYPE, descriptor_index))
+        if existing is not None:
+            return existing
         entry = MethodTypeInfo(index=0, offset=0, tag=_TAG_METHOD_TYPE, descriptor_index=descriptor_index)
         return self._allocate(entry)
 
@@ -925,6 +952,9 @@ class ConstantPoolBuilder:
             The CP index of the (possibly pre-existing) entry.
         """
         nat_index = self.add_name_and_type(name, descriptor)
+        existing = self._key_to_index.get((_TAG_DYNAMIC, bootstrap_method_attr_index, nat_index))
+        if existing is not None:
+            return existing
         entry = DynamicInfo(
             index=0,
             offset=0,
@@ -950,6 +980,9 @@ class ConstantPoolBuilder:
             The CP index of the (possibly pre-existing) entry.
         """
         nat_index = self.add_name_and_type(name, descriptor)
+        existing = self._key_to_index.get((_TAG_INVOKE_DYNAMIC, bootstrap_method_attr_index, nat_index))
+        if existing is not None:
+            return existing
         entry = InvokeDynamicInfo(
             index=0,
             offset=0,

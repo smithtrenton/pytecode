@@ -17,6 +17,11 @@ _ONE_BYTE_MAX = 0x7F
 _TWO_BYTE_MAX = 0x7FF
 _THREE_BYTE_MAX = 0xFFFF
 _MAX_UNICODE = 0x10FFFF
+_HIGH_SURROGATE_START = 0xD800
+_HIGH_SURROGATE_END = 0xDBFF
+_LOW_SURROGATE_START = 0xDC00
+_LOW_SURROGATE_END = 0xDFFF
+_SUPPLEMENTAL_BASE = 0x10000
 
 
 def _decode_error(data: bytes, start: int, end: int, reason: str) -> Never:
@@ -99,8 +104,9 @@ def decode_modified_utf8(data: bytes) -> str:
             overlong sequences.
     """
 
-    utf16_bytes = bytearray()
+    parts: list[str] = []
     index = 0
+    pending_high_surrogate: int | None = None
 
     while index < len(data):
         first = data[index]
@@ -137,9 +143,35 @@ def decode_modified_utf8(data: bytes) -> str:
         else:
             _decode_error(data, index, index + 1, "modified UTF-8 does not permit four-byte sequences")
 
-        utf16_bytes.extend((code_unit >> 8, code_unit & 0xFF))
+        if _HIGH_SURROGATE_START <= code_unit <= _HIGH_SURROGATE_END:
+            if pending_high_surrogate is not None:
+                parts.append(chr(pending_high_surrogate))
+            pending_high_surrogate = code_unit
+            continue
 
-    return utf16_bytes.decode("utf-16-be", errors="surrogatepass")
+        if _LOW_SURROGATE_START <= code_unit <= _LOW_SURROGATE_END:
+            if pending_high_surrogate is not None:
+                parts.append(
+                    chr(
+                        _SUPPLEMENTAL_BASE
+                        + ((pending_high_surrogate - _HIGH_SURROGATE_START) << 10)
+                        + (code_unit - _LOW_SURROGATE_START)
+                    )
+                )
+                pending_high_surrogate = None
+            else:
+                parts.append(chr(code_unit))
+            continue
+
+        if pending_high_surrogate is not None:
+            parts.append(chr(pending_high_surrogate))
+            pending_high_surrogate = None
+        parts.append(chr(code_unit))
+
+    if pending_high_surrogate is not None:
+        parts.append(chr(pending_high_surrogate))
+
+    return "".join(parts)
 
 
 __all__ = ["decode_modified_utf8", "encode_modified_utf8"]

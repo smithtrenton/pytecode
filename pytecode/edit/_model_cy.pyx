@@ -107,6 +107,25 @@ if TYPE_CHECKING:
     from ..analysis.hierarchy import ClassResolver
 
 
+_BRANCH_TARGET_CONTEXTS = {
+    insn_type: f"{insn_type.name} target"
+    for insn_type in InsnInfoType
+    if insn_type.instinfo in (Branch, BranchW)
+}
+_trusted_branch_insn = BranchInsn._trusted
+_trusted_lookup_switch_insn = LookupSwitchInsn._trusted
+_trusted_table_switch_insn = TableSwitchInsn._trusted
+_trusted_field_insn = FieldInsn._trusted
+_trusted_method_insn = MethodInsn._trusted
+_trusted_interface_method_insn = InterfaceMethodInsn._trusted
+_trusted_invoke_dynamic_insn = InvokeDynamicInsn._trusted
+_trusted_ldc_insn = LdcInsn._trusted
+_trusted_multi_anew_array_insn = MultiANewArrayInsn._trusted
+_trusted_type_insn = TypeInsn._trusted
+_trusted_var_insn = VarInsn._trusted
+_trusted_iinc_insn = IIncInsn._trusted
+
+
 @dataclass
 class CodeModel:
     """Mutable wrapper around a method's Code attribute (JVMS §4.7.3).
@@ -246,7 +265,7 @@ class ClassModel:
 
         # Resolve this_class → class name string.
         this_class_entry = cp.peek(cf.this_class)
-        if not isinstance(this_class_entry, ClassInfo):
+        if type(this_class_entry) is not ClassInfo:
             raise ValueError(f"this_class CP index {cf.this_class} is not a CONSTANT_Class")
         name = cp.resolve_utf8(this_class_entry.name_index)
 
@@ -254,7 +273,7 @@ class ClassModel:
         super_name = None
         if cf.super_class != 0:
             super_entry = cp.peek(cf.super_class)
-            if not isinstance(super_entry, ClassInfo):
+            if type(super_entry) is not ClassInfo:
                 raise ValueError(f"super_class CP index {cf.super_class} is not a CONSTANT_Class")
             super_name = cp.resolve_utf8(super_entry.name_index)
 
@@ -262,15 +281,26 @@ class ClassModel:
         interfaces = []
         for iface_index in cf.interfaces:
             iface_entry = cp.peek(iface_index)
-            if not isinstance(iface_entry, ClassInfo):
+            if type(iface_entry) is not ClassInfo:
                 raise ValueError(f"interface CP index {iface_index} is not a CONSTANT_Class")
             interfaces.append(cp.resolve_utf8(iface_entry.name_index))
 
         # Convert fields.
         fields = [_field_from_info(fi, cp) for fi in cf.fields]
 
+        # Reuse lifted CP-backed wrappers across methods in the same class.
+        lifted_cp_item_cache = {}
+
         # Convert methods.
-        methods = [_method_from_info(mi, cp, skip_debug=skip_debug) for mi in cf.methods]
+        methods = [
+            _method_from_info(
+                mi,
+                cp,
+                skip_debug=skip_debug,
+                const_pool_item_cache=lifted_cp_item_cache,
+            )
+            for mi in cf.methods
+        ]
         class_attributes = clone_attributes(cf.attributes)
         if skip_debug:
             class_attributes = strip_class_debug_attributes(class_attributes)
@@ -422,13 +452,24 @@ def _field_from_info(object fi, object cp):
     )
 
 
-def _method_from_info(object mi, object cp, *, bint skip_debug=False):
+def _method_from_info(
+    object mi,
+    object cp,
+    *,
+    bint skip_debug=False,
+    dict const_pool_item_cache=None,
+):
     code = None
     cdef list non_code_attrs = []
 
     for attr in mi.attributes:
-        if isinstance(attr, CodeAttr):
-            code = _code_from_attr(attr, cp, skip_debug=skip_debug)
+        if type(attr) is CodeAttr:
+            code = _code_from_attr(
+                attr,
+                cp,
+                skip_debug=skip_debug,
+                const_pool_item_cache=const_pool_item_cache,
+            )
         else:
             non_code_attrs.append(clone_attribute(attr))
     if skip_debug:
@@ -485,130 +526,130 @@ def _method_to_info(
     )
 
 
-def _validate_code_offset(int offset, int code_length, *, str context):
+cdef inline int _validate_code_offset(int offset, int code_length, str context):
     if not 0 <= offset <= code_length:
         raise ValueError(f"{context} offset {offset} is outside code range [0, {code_length}]")
     return offset
 
 
-def _label_for_offset(dict labels_by_offset, int offset):
+cdef inline object _label_for_offset(dict labels_by_offset, int offset):
     return labels_by_offset[offset]
 
 
-def _branch_target_offset(object insn, int code_length):
-    return _validate_code_offset(
-        insn.bytecode_offset + insn.offset,
-        code_length,
-        context=f"{insn.type.name} target",
-    )
-
-
 def _collect_labels(object code_attr, *, bint skip_debug=False):
-    cdef dict labels_by_offset = {}
     cdef int code_length = code_attr.code_length
-
-    def ensure_label(int offset, *, str context):
-        cdef int validated = _validate_code_offset(offset, code_length, context=context)
-        labels_by_offset.setdefault(validated, Label(f"L{validated}"))
+    cdef set label_offsets = set()
+    add_label_offset = label_offsets.add
 
     for insn in code_attr.code:
-        if isinstance(insn, (Branch, BranchW)):
-            ensure_label(_branch_target_offset(insn, code_length), context=f"{insn.type.name} target")
-        elif isinstance(insn, LookupSwitch):
-            ensure_label(
+        insn_type = type(insn)
+        if insn_type is Branch or insn_type is BranchW:
+            add_label_offset(
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.offset,
+                    code_length,
+                    _BRANCH_TARGET_CONTEXTS[insn.type],
+                )
+            )
+        elif insn_type is LookupSwitch:
+            add_label_offset(
                 _validate_code_offset(
                     insn.bytecode_offset + insn.default,
                     code_length,
-                    context="lookupswitch default target",
-                ),
-                context="lookupswitch default target",
+                    "lookupswitch default target",
+                )
             )
             for pair in insn.pairs:
-                ensure_label(
+                add_label_offset(
                     _validate_code_offset(
                         insn.bytecode_offset + pair.offset,
                         code_length,
-                        context="lookupswitch case target",
-                    ),
-                    context="lookupswitch case target",
+                        "lookupswitch case target",
+                    )
                 )
-        elif isinstance(insn, TableSwitch):
-            ensure_label(
+        elif insn_type is TableSwitch:
+            add_label_offset(
                 _validate_code_offset(
                     insn.bytecode_offset + insn.default,
                     code_length,
-                    context="tableswitch default target",
-                ),
-                context="tableswitch default target",
+                    "tableswitch default target",
+                )
             )
             for relative in insn.offsets:
-                ensure_label(
+                add_label_offset(
                     _validate_code_offset(
                         insn.bytecode_offset + relative,
                         code_length,
-                        context="tableswitch case target",
-                    ),
-                    context="tableswitch case target",
+                        "tableswitch case target",
+                    )
                 )
 
     for exception in code_attr.exception_table:
-        ensure_label(exception.start_pc, context="exception handler start")
-        ensure_label(exception.end_pc, context="exception handler end")
-        ensure_label(exception.handler_pc, context="exception handler target")
+        add_label_offset(_validate_code_offset(exception.start_pc, code_length, "exception handler start"))
+        add_label_offset(_validate_code_offset(exception.end_pc, code_length, "exception handler end"))
+        add_label_offset(_validate_code_offset(exception.handler_pc, code_length, "exception handler target"))
 
     if skip_debug:
+        labels_by_offset = {}
+        for offset in label_offsets:
+            labels_by_offset[offset] = Label(f"L{offset}")
         return labels_by_offset
 
     for attribute in code_attr.attributes:
-        if isinstance(attribute, LineNumberTableAttr):
+        attr_type = type(attribute)
+        if attr_type is LineNumberTableAttr:
             for entry in attribute.line_number_table:
-                ensure_label(entry.start_pc, context="line number entry")
-        elif isinstance(attribute, LocalVariableTableAttr):
+                add_label_offset(_validate_code_offset(entry.start_pc, code_length, "line number entry"))
+        elif attr_type is LocalVariableTableAttr:
             for entry in attribute.local_variable_table:
-                ensure_label(entry.start_pc, context="local variable start")
-                ensure_label(entry.start_pc + entry.length, context="local variable end")
-        elif isinstance(attribute, LocalVariableTypeTableAttr):
+                add_label_offset(_validate_code_offset(entry.start_pc, code_length, "local variable start"))
+                add_label_offset(
+                    _validate_code_offset(entry.start_pc + entry.length, code_length, "local variable end")
+                )
+        elif attr_type is LocalVariableTypeTableAttr:
             for entry in attribute.local_variable_type_table:
-                ensure_label(entry.start_pc, context="local variable type start")
-                ensure_label(entry.start_pc + entry.length, context="local variable type end")
+                add_label_offset(
+                    _validate_code_offset(entry.start_pc, code_length, "local variable type start")
+                )
+                add_label_offset(
+                    _validate_code_offset(
+                        entry.start_pc + entry.length,
+                        code_length,
+                        "local variable type end",
+                    )
+                )
 
+    labels_by_offset = {}
+    for offset in label_offsets:
+        labels_by_offset[offset] = Label(f"L{offset}")
     return labels_by_offset
 
 
-def _lift_instruction(
+cdef object _lift_instruction(
     object insn,
     dict labels_by_offset,
-    int code_length,
     object cp,
 ):
     insn_type = type(insn)
-    if insn_type in (Branch, BranchW):
+    if insn_type is Branch or insn_type is BranchW:
         branch_insn = insn
-        return BranchInsn(
+        return _trusted_branch_insn(
             branch_insn.type,
-            _label_for_offset(labels_by_offset, _branch_target_offset(branch_insn, code_length)),
+            _label_for_offset(labels_by_offset, branch_insn.bytecode_offset + branch_insn.offset),
         )
     if insn_type is LookupSwitch:
         lookup_switch = insn
-        return LookupSwitchInsn(
+        return _trusted_lookup_switch_insn(
             _label_for_offset(
                 labels_by_offset,
-                _validate_code_offset(
-                    lookup_switch.bytecode_offset + lookup_switch.default,
-                    code_length,
-                    context="lookupswitch default target",
-                ),
+                lookup_switch.bytecode_offset + lookup_switch.default,
             ),
             [
                 (
                     pair.match,
                     _label_for_offset(
                         labels_by_offset,
-                        _validate_code_offset(
-                            lookup_switch.bytecode_offset + pair.offset,
-                            code_length,
-                            context="lookupswitch case target",
-                        ),
+                        lookup_switch.bytecode_offset + pair.offset,
                     ),
                 )
                 for pair in lookup_switch.pairs
@@ -616,32 +657,24 @@ def _lift_instruction(
         )
     if insn_type is TableSwitch:
         table_switch = insn
-        return TableSwitchInsn(
+        return _trusted_table_switch_insn(
             _label_for_offset(
                 labels_by_offset,
-                _validate_code_offset(
-                    table_switch.bytecode_offset + table_switch.default,
-                    code_length,
-                    context="tableswitch default target",
-                ),
+                table_switch.bytecode_offset + table_switch.default,
             ),
             table_switch.low,
             table_switch.high,
             [
                 _label_for_offset(
                     labels_by_offset,
-                    _validate_code_offset(
-                        table_switch.bytecode_offset + relative,
-                        code_length,
-                        context="tableswitch case target",
-                    ),
+                    table_switch.bytecode_offset + relative,
                 )
                 for relative in table_switch.offsets
             ],
         )
-    if insn_type in (IInc, IIncW):
+    if insn_type is IInc or insn_type is IIncW:
         iinc_insn = insn
-        return IIncInsn(iinc_insn.index, iinc_insn.value)
+        return _trusted_iinc_insn(iinc_insn.index, iinc_insn.value)
     if insn_type is InvokeDynamic:
         invoke_dynamic = insn
         return _lift_invoke_dynamic(invoke_dynamic, cp)
@@ -650,7 +683,7 @@ def _lift_instruction(
         return _lift_invoke_interface(invoke_interface, cp)
     if insn_type is MultiANewArray:
         multi_anew_array = insn
-        return MultiANewArrayInsn(
+        return _trusted_multi_anew_array_insn(
             _resolve_class_name(cp, multi_anew_array.index),
             multi_anew_array.dimensions,
         )
@@ -661,18 +694,18 @@ def _lift_instruction(
         local_index_w = insn
         # WIDE var opcodes: normalize to VarInsn with canonical base opcode.
         base = _WIDE_TO_BASE[local_index_w.type]
-        return VarInsn(base, local_index_w.index)
+        return _trusted_var_insn(base, local_index_w.index)
     if insn_type is LocalIndex:
         local_index = insn
         # LDC (0x12) uses a u1 CP index stored in LocalIndex.index.
         if local_index.type == InsnInfoType.LDC:
-            return LdcInsn(_resolve_ldc_value(cp, local_index.index))
-        return VarInsn(local_index.type, local_index.index)
+            return _trusted_ldc_insn(_resolve_ldc_value(cp, local_index.index))
+        return _trusted_var_insn(local_index.type, local_index.index)
     # Implicit slot variants: ILOAD_0 through ASTORE_3.
     implicit = _IMPLICIT_VAR_SLOTS.get(insn.type)
     if implicit is not None:
         base_opcode, slot = implicit
-        return VarInsn(base_opcode, slot)
+        return _trusted_var_insn(base_opcode, slot)
     return clone_raw_instruction(insn)
 
 
@@ -680,10 +713,12 @@ def _lift_instructions(
     object code_attr,
     dict labels_by_offset,
     object cp,
+    dict const_pool_item_cache=None,
 ):
     cdef list instructions = []
     cdef set inserted_offsets = set()
-    cdef dict const_pool_item_cache = {}
+    if const_pool_item_cache is None:
+        const_pool_item_cache = {}
     append = instructions.append
     inserted_add = inserted_offsets.add
     labels_get = labels_by_offset.get
@@ -704,7 +739,7 @@ def _lift_instructions(
             append(_clone_lifted_code_item(cached))
             continue
 
-        append(_lift_instruction(insn, labels_by_offset, code_attr.code_length, cp))
+        append(_lift_instruction(insn, labels_by_offset, cp))
 
     cdef int code_length = code_attr.code_length
     end_label = labels_get(code_length)
@@ -722,14 +757,14 @@ def _lift_instructions(
     return instructions
 
 
-def _clone_lifted_code_item(object item):
+cdef object _clone_lifted_code_item(object item):
     item_type = type(item)
     if item_type is FieldInsn:
         field_item = item
-        return FieldInsn(field_item.type, field_item.owner, field_item.name, field_item.descriptor)
+        return _trusted_field_insn(field_item.type, field_item.owner, field_item.name, field_item.descriptor)
     if item_type is MethodInsn:
         method_item = item
-        return MethodInsn(
+        return _trusted_method_insn(
             method_item.type,
             method_item.owner,
             method_item.name,
@@ -738,10 +773,10 @@ def _clone_lifted_code_item(object item):
         )
     if item_type is TypeInsn:
         type_item = item
-        return TypeInsn(type_item.type, type_item.class_name)
+        return _trusted_type_insn(type_item.type, type_item.class_name)
     if item_type is LdcInsn:
         ldc_item = item
-        return LdcInsn(ldc_item.value)
+        return _trusted_ldc_insn(ldc_item.value)
     return clone_raw_instruction(insn=item)
 
 
@@ -775,7 +810,8 @@ def _lift_nested_code_attributes(
     cdef list layout = []
 
     for attribute in code_attr.attributes:
-        if isinstance(attribute, LineNumberTableAttr):
+        attr_type = type(attribute)
+        if attr_type is LineNumberTableAttr:
             layout.append("line_numbers")
             if skip_debug:
                 continue
@@ -786,7 +822,7 @@ def _lift_nested_code_attributes(
                 )
                 for entry in attribute.line_number_table
             )
-        elif isinstance(attribute, LocalVariableTableAttr):
+        elif attr_type is LocalVariableTableAttr:
             layout.append("local_variables")
             if skip_debug:
                 continue
@@ -800,7 +836,7 @@ def _lift_nested_code_attributes(
                 )
                 for entry in attribute.local_variable_table
             )
-        elif isinstance(attribute, LocalVariableTypeTableAttr):
+        elif attr_type is LocalVariableTypeTableAttr:
             layout.append("local_variable_types")
             if skip_debug:
                 continue
@@ -821,7 +857,13 @@ def _lift_nested_code_attributes(
     return line_numbers, local_variables, local_variable_types, attributes, tuple(layout)
 
 
-def _code_from_attr(object attr, object cp, *, bint skip_debug=False):
+def _code_from_attr(
+    object attr,
+    object cp,
+    *,
+    bint skip_debug=False,
+    dict const_pool_item_cache=None,
+):
     labels_by_offset = _collect_labels(attr, skip_debug=skip_debug)
     line_numbers, local_variables, local_variable_types, attributes, layout = _lift_nested_code_attributes(
         attr,
@@ -832,7 +874,12 @@ def _code_from_attr(object attr, object cp, *, bint skip_debug=False):
     return CodeModel(
         max_stack=attr.max_stacks,
         max_locals=attr.max_locals,
-        instructions=_lift_instructions(attr, labels_by_offset, cp),
+        instructions=_lift_instructions(
+            attr,
+            labels_by_offset,
+            cp,
+            const_pool_item_cache,
+        ),
         exception_handlers=_lift_exception_handlers(attr, labels_by_offset, cp),
         line_numbers=line_numbers,
         local_variables=local_variables,
@@ -847,83 +894,97 @@ def _code_from_attr(object attr, object cp, *, bint skip_debug=False):
 # ---------------------------------------------------------------------------
 
 
-def _resolve_class_name(object cp, int index):
+cdef object _resolve_class_name(object cp, int index):
     """Resolve a CONSTANT_Class CP index to its internal name string."""
     entry = cp.peek(index)
-    if not isinstance(entry, ClassInfo):
+    if type(entry) is not ClassInfo:
         raise ValueError(f"CP index {index} is not a CONSTANT_Class: {type(entry).__name__}")
     return cp.resolve_utf8(entry.name_index)
 
 
-def _resolve_member_ref(
+cdef _resolve_member_ref(
     object cp,
     int index,
 ):
     """Resolve a Fieldref/Methodref/InterfaceMethodref to (owner, name, descriptor, is_interface)."""
     entry = cp.peek(index)
-    if not isinstance(entry, (FieldrefInfo, MethodrefInfo, InterfaceMethodrefInfo)):
+    cdef type t = type(entry)
+    if t is not FieldrefInfo and t is not MethodrefInfo and t is not InterfaceMethodrefInfo:
         raise ValueError(f"CP index {index} is not a member ref entry: {type(entry).__name__}")
-    cdef bint is_interface = isinstance(entry, InterfaceMethodrefInfo)
+    cdef bint is_interface = t is InterfaceMethodrefInfo
     owner = _resolve_class_name(cp, entry.class_index)
     nat = cp.peek(entry.name_and_type_index)
-    if not isinstance(nat, NameAndTypeInfo):
+    if type(nat) is not NameAndTypeInfo:
         raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
     name = cp.resolve_utf8(nat.name_index)
     descriptor = cp.resolve_utf8(nat.descriptor_index)
     return owner, name, descriptor, is_interface
 
 
-def _resolve_ldc_value(object cp, int index):
+cdef object _resolve_ldc_value(
+    object cp,
+    int index,
+):
     """Resolve an LDC/LDC_W/LDC2_W CP index to a typed ``LdcValue``."""
     entry = cp.peek(index)
-    if isinstance(entry, IntegerInfo):
-        return LdcInt(entry.value_bytes)
-    if isinstance(entry, FloatInfo):
-        return LdcFloat(entry.value_bytes)
-    if isinstance(entry, LongInfo):
+    cdef type t = type(entry)
+    if t is IntegerInfo:
+        value = LdcInt(entry.value_bytes)
+    elif t is FloatInfo:
+        value = LdcFloat(entry.value_bytes)
+    elif t is LongInfo:
         unsigned = (entry.high_bytes << 32) | (entry.low_bytes & 0xFFFFFFFF)
         value = unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
-        return LdcLong(value)
-    if isinstance(entry, DoubleInfo):
-        return LdcDouble(entry.high_bytes, entry.low_bytes)
-    if isinstance(entry, StringInfo):
-        return LdcString(cp.resolve_utf8(entry.string_index))
-    if isinstance(entry, ClassInfo):
-        return LdcClass(cp.resolve_utf8(entry.name_index))
-    if isinstance(entry, MethodTypeInfo):
-        return LdcMethodType(cp.resolve_utf8(entry.descriptor_index))
-    if isinstance(entry, MethodHandleInfo):
-        return _resolve_ldc_method_handle(cp, entry)
-    if isinstance(entry, DynamicInfo):
+        value = LdcLong(value)
+    elif t is DoubleInfo:
+        value = LdcDouble(entry.high_bytes, entry.low_bytes)
+    elif t is StringInfo:
+        value = LdcString(cp.resolve_utf8(entry.string_index))
+    elif t is ClassInfo:
+        value = LdcClass(cp.resolve_utf8(entry.name_index))
+    elif t is MethodTypeInfo:
+        value = LdcMethodType(cp.resolve_utf8(entry.descriptor_index))
+    elif t is MethodHandleInfo:
+        value = _resolve_ldc_method_handle(cp, entry)
+    elif t is DynamicInfo:
         nat = cp.peek(entry.name_and_type_index)
-        if not isinstance(nat, NameAndTypeInfo):
+        if type(nat) is not NameAndTypeInfo:
             raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
-        return LdcDynamic(
+        value = LdcDynamic(
             entry.bootstrap_method_attr_index,
             cp.resolve_utf8(nat.name_index),
             cp.resolve_utf8(nat.descriptor_index),
         )
-    raise ValueError(f"CP index {index} has unsupported type for LDC: {type(entry).__name__}")
+    else:
+        raise ValueError(f"CP index {index} has unsupported type for LDC: {type(entry).__name__}")
+    return value
 
 
-def _resolve_ldc_method_handle(object cp, object entry):
+cdef object _resolve_ldc_method_handle(
+    object cp,
+    object entry,
+):
     """Resolve a CONSTANT_MethodHandle entry to an ``LdcMethodHandle``."""
     ref_entry = cp.peek(entry.reference_index)
-    if not isinstance(ref_entry, (FieldrefInfo, MethodrefInfo, InterfaceMethodrefInfo)):
+    cdef type t = type(ref_entry)
+    if t is not FieldrefInfo and t is not MethodrefInfo and t is not InterfaceMethodrefInfo:
         raise ValueError(
             f"MethodHandle reference index {entry.reference_index} has unexpected type: {type(ref_entry).__name__}"
         )
-    cdef bint is_interface = isinstance(ref_entry, InterfaceMethodrefInfo)
+    cdef bint is_interface = t is InterfaceMethodrefInfo
     owner = _resolve_class_name(cp, ref_entry.class_index)
     nat = cp.peek(ref_entry.name_and_type_index)
-    if not isinstance(nat, NameAndTypeInfo):
+    if type(nat) is not NameAndTypeInfo:
         raise ValueError(f"CP index {ref_entry.name_and_type_index} is not a CONSTANT_NameAndType")
     name = cp.resolve_utf8(nat.name_index)
     descriptor = cp.resolve_utf8(nat.descriptor_index)
     return LdcMethodHandle(entry.reference_kind, owner, name, descriptor, is_interface)
 
 
-def _lift_const_pool_index(object insn, object cp):
+cdef object _lift_const_pool_index(
+    object insn,
+    object cp,
+):
     """Lift a raw ``ConstPoolIndex`` instruction to a symbolic wrapper."""
     opcode = insn.type
     if opcode in (
@@ -933,43 +994,46 @@ def _lift_const_pool_index(object insn, object cp):
         InsnInfoType.PUTSTATIC,
     ):
         owner, name, descriptor, _ = _resolve_member_ref(cp, insn.index)
-        return FieldInsn(opcode, owner, name, descriptor)
+        return _trusted_field_insn(opcode, owner, name, descriptor)
     if opcode in (
         InsnInfoType.INVOKEVIRTUAL,
         InsnInfoType.INVOKESPECIAL,
         InsnInfoType.INVOKESTATIC,
     ):
         owner, name, descriptor, is_interface = _resolve_member_ref(cp, insn.index)
-        return MethodInsn(opcode, owner, name, descriptor, is_interface)
+        return _trusted_method_insn(opcode, owner, name, descriptor, is_interface)
     if opcode in (
         InsnInfoType.NEW,
         InsnInfoType.CHECKCAST,
         InsnInfoType.INSTANCEOF,
         InsnInfoType.ANEWARRAY,
     ):
-        return TypeInsn(opcode, _resolve_class_name(cp, insn.index))
+        return _trusted_type_insn(opcode, _resolve_class_name(cp, insn.index))
     if opcode in (InsnInfoType.LDC_W, InsnInfoType.LDC2_W):
-        return LdcInsn(_resolve_ldc_value(cp, insn.index))
+        return _trusted_ldc_insn(_resolve_ldc_value(cp, insn.index))
     # Unknown ConstPoolIndex opcode: pass through unchanged (e.g. future opcodes).
     return clone_raw_instruction(insn)
 
 
-def _lift_invoke_dynamic(object insn, object cp):
+cdef object _lift_invoke_dynamic(object insn, object cp):
     """Lift a raw ``InvokeDynamic`` instruction to an ``InvokeDynamicInsn``."""
     entry = cp.peek(insn.index)
-    if not isinstance(entry, InvokeDynamicInfo):
+    if type(entry) is not InvokeDynamicInfo:
         raise ValueError(f"CP index {insn.index} is not a CONSTANT_InvokeDynamic: {type(entry).__name__}")
     nat = cp.peek(entry.name_and_type_index)
-    if not isinstance(nat, NameAndTypeInfo):
+    if type(nat) is not NameAndTypeInfo:
         raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
-    return InvokeDynamicInsn(
+    return _trusted_invoke_dynamic_insn(
         entry.bootstrap_method_attr_index,
         cp.resolve_utf8(nat.name_index),
         cp.resolve_utf8(nat.descriptor_index),
     )
 
 
-def _lift_invoke_interface(object insn, object cp):
+cdef object _lift_invoke_interface(
+    object insn,
+    object cp,
+):
     """Lift a raw ``InvokeInterface`` instruction to an ``InterfaceMethodInsn``."""
     owner, name, descriptor, _ = _resolve_member_ref(cp, insn.index)
-    return InterfaceMethodInsn(owner, name, descriptor)
+    return _trusted_interface_method_insn(owner, name, descriptor)

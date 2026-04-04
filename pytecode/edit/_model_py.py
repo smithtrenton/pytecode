@@ -108,6 +108,23 @@ if TYPE_CHECKING:
     from ..analysis.hierarchy import ClassResolver
 
 
+_BRANCH_TARGET_CONTEXTS: dict[InsnInfoType, str] = {
+    insn_type: f"{insn_type.name} target" for insn_type in InsnInfoType if insn_type.instinfo in (Branch, BranchW)
+}
+_trusted_branch_insn = BranchInsn._trusted
+_trusted_lookup_switch_insn = LookupSwitchInsn._trusted
+_trusted_table_switch_insn = TableSwitchInsn._trusted
+_trusted_field_insn = FieldInsn._trusted
+_trusted_method_insn = MethodInsn._trusted
+_trusted_interface_method_insn = InterfaceMethodInsn._trusted
+_trusted_invoke_dynamic_insn = InvokeDynamicInsn._trusted
+_trusted_ldc_insn = LdcInsn._trusted
+_trusted_multi_anew_array_insn = MultiANewArrayInsn._trusted
+_trusted_type_insn = TypeInsn._trusted
+_trusted_var_insn = VarInsn._trusted
+_trusted_iinc_insn = IIncInsn._trusted
+
+
 @dataclass
 class CodeModel:
     """Mutable wrapper around a method's Code attribute (JVMS §4.7.3).
@@ -270,8 +287,18 @@ class ClassModel:
         # Convert fields.
         fields = [_field_from_info(fi, cp) for fi in cf.fields]
 
+        # Reuse lifted CP-backed wrappers across methods in the same class.
+        lifted_cp_item_cache: dict[tuple[InsnInfoType, int], CodeItem] = {}
         # Convert methods.
-        methods = [_method_from_info(mi, cp, skip_debug=skip_debug) for mi in cf.methods]
+        methods = [
+            _method_from_info(
+                mi,
+                cp,
+                skip_debug=skip_debug,
+                const_pool_item_cache=lifted_cp_item_cache,
+            )
+            for mi in cf.methods
+        ]
         class_attributes = clone_attributes(cf.attributes)
         if skip_debug:
             class_attributes = strip_class_debug_attributes(class_attributes)
@@ -423,13 +450,24 @@ def _field_from_info(fi: FieldInfo, cp: ConstantPoolBuilder) -> FieldModel:
     )
 
 
-def _method_from_info(mi: MethodInfo, cp: ConstantPoolBuilder, *, skip_debug: bool = False) -> MethodModel:
+def _method_from_info(
+    mi: MethodInfo,
+    cp: ConstantPoolBuilder,
+    *,
+    skip_debug: bool = False,
+    const_pool_item_cache: dict[tuple[InsnInfoType, int], CodeItem] | None = None,
+) -> MethodModel:
     code: CodeModel | None = None
     non_code_attrs: list[AttributeInfo] = []
 
     for attr in mi.attributes:
         if isinstance(attr, CodeAttr):
-            code = _code_from_attr(attr, cp, skip_debug=skip_debug)
+            code = _code_from_attr(
+                attr,
+                cp,
+                skip_debug=skip_debug,
+                const_pool_item_cache=const_pool_item_cache,
+            )
         else:
             non_code_attrs.append(clone_attribute(attr))
     if skip_debug:
@@ -496,119 +534,112 @@ def _label_for_offset(labels_by_offset: dict[int, Label], offset: int) -> Label:
     return labels_by_offset[offset]
 
 
-def _branch_target_offset(insn: Branch | BranchW, code_length: int) -> int:
-    return _validate_code_offset(
-        insn.bytecode_offset + insn.offset,
-        code_length,
-        context=f"{insn.type.name} target",
-    )
-
-
 def _collect_labels(code_attr: CodeAttr, *, skip_debug: bool = False) -> dict[int, Label]:
-    labels_by_offset: dict[int, Label] = {}
-
-    def ensure_label(offset: int, *, context: str) -> None:
-        validated = _validate_code_offset(offset, code_attr.code_length, context=context)
-        labels_by_offset.setdefault(validated, Label(f"L{validated}"))
+    code_length = code_attr.code_length
+    label_offsets: set[int] = set()
+    add_label_offset = label_offsets.add
 
     for insn in code_attr.code:
         if isinstance(insn, (Branch, BranchW)):
-            ensure_label(_branch_target_offset(insn, code_attr.code_length), context=f"{insn.type.name} target")
+            add_label_offset(
+                _validate_code_offset(
+                    insn.bytecode_offset + insn.offset,
+                    code_length,
+                    context=_BRANCH_TARGET_CONTEXTS[insn.type],
+                )
+            )
         elif isinstance(insn, LookupSwitch):
-            ensure_label(
+            add_label_offset(
                 _validate_code_offset(
                     insn.bytecode_offset + insn.default,
-                    code_attr.code_length,
+                    code_length,
                     context="lookupswitch default target",
-                ),
-                context="lookupswitch default target",
+                )
             )
             for pair in insn.pairs:
-                ensure_label(
+                add_label_offset(
                     _validate_code_offset(
                         insn.bytecode_offset + pair.offset,
-                        code_attr.code_length,
+                        code_length,
                         context="lookupswitch case target",
-                    ),
-                    context="lookupswitch case target",
+                    )
                 )
         elif isinstance(insn, TableSwitch):
-            ensure_label(
+            add_label_offset(
                 _validate_code_offset(
                     insn.bytecode_offset + insn.default,
-                    code_attr.code_length,
+                    code_length,
                     context="tableswitch default target",
-                ),
-                context="tableswitch default target",
+                )
             )
             for relative in insn.offsets:
-                ensure_label(
+                add_label_offset(
                     _validate_code_offset(
                         insn.bytecode_offset + relative,
-                        code_attr.code_length,
+                        code_length,
                         context="tableswitch case target",
-                    ),
-                    context="tableswitch case target",
+                    )
                 )
 
     for exception in code_attr.exception_table:
-        ensure_label(exception.start_pc, context="exception handler start")
-        ensure_label(exception.end_pc, context="exception handler end")
-        ensure_label(exception.handler_pc, context="exception handler target")
+        add_label_offset(_validate_code_offset(exception.start_pc, code_length, context="exception handler start"))
+        add_label_offset(_validate_code_offset(exception.end_pc, code_length, context="exception handler end"))
+        add_label_offset(_validate_code_offset(exception.handler_pc, code_length, context="exception handler target"))
 
     if skip_debug:
-        return labels_by_offset
+        return {offset: Label(f"L{offset}") for offset in label_offsets}
 
     for attribute in code_attr.attributes:
         if isinstance(attribute, LineNumberTableAttr):
             for entry in attribute.line_number_table:
-                ensure_label(entry.start_pc, context="line number entry")
+                add_label_offset(_validate_code_offset(entry.start_pc, code_length, context="line number entry"))
         elif isinstance(attribute, LocalVariableTableAttr):
             for entry in attribute.local_variable_table:
-                ensure_label(entry.start_pc, context="local variable start")
-                ensure_label(entry.start_pc + entry.length, context="local variable end")
+                add_label_offset(_validate_code_offset(entry.start_pc, code_length, context="local variable start"))
+                add_label_offset(
+                    _validate_code_offset(entry.start_pc + entry.length, code_length, context="local variable end")
+                )
         elif isinstance(attribute, LocalVariableTypeTableAttr):
             for entry in attribute.local_variable_type_table:
-                ensure_label(entry.start_pc, context="local variable type start")
-                ensure_label(entry.start_pc + entry.length, context="local variable type end")
+                add_label_offset(
+                    _validate_code_offset(entry.start_pc, code_length, context="local variable type start")
+                )
+                add_label_offset(
+                    _validate_code_offset(
+                        entry.start_pc + entry.length,
+                        code_length,
+                        context="local variable type end",
+                    )
+                )
 
-    return labels_by_offset
+    return {offset: Label(f"L{offset}") for offset in label_offsets}
 
 
 def _lift_instruction(
     insn: InsnInfo,
     labels_by_offset: dict[int, Label],
-    code_length: int,
     cp: ConstantPoolBuilder,
 ) -> CodeItem:
     insn_type = type(insn)
     if insn_type in (Branch, BranchW):
         branch_insn = cast(Branch | BranchW, insn)
-        return BranchInsn(
+        return _trusted_branch_insn(
             branch_insn.type,
-            _label_for_offset(labels_by_offset, _branch_target_offset(branch_insn, code_length)),
+            _label_for_offset(labels_by_offset, branch_insn.bytecode_offset + branch_insn.offset),
         )
     if insn_type is LookupSwitch:
         lookup_switch = cast(LookupSwitch, insn)
-        return LookupSwitchInsn(
+        return _trusted_lookup_switch_insn(
             _label_for_offset(
                 labels_by_offset,
-                _validate_code_offset(
-                    lookup_switch.bytecode_offset + lookup_switch.default,
-                    code_length,
-                    context="lookupswitch default target",
-                ),
+                lookup_switch.bytecode_offset + lookup_switch.default,
             ),
             [
                 (
                     pair.match,
                     _label_for_offset(
                         labels_by_offset,
-                        _validate_code_offset(
-                            lookup_switch.bytecode_offset + pair.offset,
-                            code_length,
-                            context="lookupswitch case target",
-                        ),
+                        lookup_switch.bytecode_offset + pair.offset,
                     ),
                 )
                 for pair in lookup_switch.pairs
@@ -616,32 +647,24 @@ def _lift_instruction(
         )
     if insn_type is TableSwitch:
         table_switch = cast(TableSwitch, insn)
-        return TableSwitchInsn(
+        return _trusted_table_switch_insn(
             _label_for_offset(
                 labels_by_offset,
-                _validate_code_offset(
-                    table_switch.bytecode_offset + table_switch.default,
-                    code_length,
-                    context="tableswitch default target",
-                ),
+                table_switch.bytecode_offset + table_switch.default,
             ),
             table_switch.low,
             table_switch.high,
             [
                 _label_for_offset(
                     labels_by_offset,
-                    _validate_code_offset(
-                        table_switch.bytecode_offset + relative,
-                        code_length,
-                        context="tableswitch case target",
-                    ),
+                    table_switch.bytecode_offset + relative,
                 )
                 for relative in table_switch.offsets
             ],
         )
     if insn_type in (IInc, IIncW):
         iinc_insn = cast(IInc | IIncW, insn)
-        return IIncInsn(iinc_insn.index, iinc_insn.value)
+        return _trusted_iinc_insn(iinc_insn.index, iinc_insn.value)
     if insn_type is InvokeDynamic:
         invoke_dynamic = cast(InvokeDynamic, insn)
         return _lift_invoke_dynamic(invoke_dynamic, cp)
@@ -650,7 +673,7 @@ def _lift_instruction(
         return _lift_invoke_interface(invoke_interface, cp)
     if insn_type is MultiANewArray:
         multi_anew_array = cast(MultiANewArray, insn)
-        return MultiANewArrayInsn(
+        return _trusted_multi_anew_array_insn(
             _resolve_class_name(cp, multi_anew_array.index),
             multi_anew_array.dimensions,
         )
@@ -661,18 +684,18 @@ def _lift_instruction(
         local_index_w = cast(LocalIndexW, insn)
         # WIDE var opcodes: normalize to VarInsn with canonical base opcode.
         base = _WIDE_TO_BASE[local_index_w.type]
-        return VarInsn(base, local_index_w.index)
+        return _trusted_var_insn(base, local_index_w.index)
     if insn_type is LocalIndex:
         local_index = cast(LocalIndex, insn)
         # LDC (0x12) uses a u1 CP index stored in LocalIndex.index.
         if local_index.type == InsnInfoType.LDC:
-            return LdcInsn(_resolve_ldc_value(cp, local_index.index))
-        return VarInsn(local_index.type, local_index.index)
+            return _trusted_ldc_insn(_resolve_ldc_value(cp, local_index.index))
+        return _trusted_var_insn(local_index.type, local_index.index)
     # Implicit slot variants: ILOAD_0 through ASTORE_3.
     implicit = _IMPLICIT_VAR_SLOTS.get(insn.type)
     if implicit is not None:
         base_opcode, slot = implicit
-        return VarInsn(base_opcode, slot)
+        return _trusted_var_insn(base_opcode, slot)
     return clone_raw_instruction(insn)
 
 
@@ -680,10 +703,12 @@ def _lift_instructions(
     code_attr: CodeAttr,
     labels_by_offset: dict[int, Label],
     cp: ConstantPoolBuilder,
+    const_pool_item_cache: dict[tuple[InsnInfoType, int], CodeItem] | None = None,
 ) -> list[CodeItem]:
     instructions: list[CodeItem] = []
     inserted_offsets: set[int] = set()
-    const_pool_item_cache: dict[tuple[InsnInfoType, int], CodeItem] = {}
+    if const_pool_item_cache is None:
+        const_pool_item_cache = {}
     append = instructions.append
     inserted_add = inserted_offsets.add
     labels_get = labels_by_offset.get
@@ -704,7 +729,7 @@ def _lift_instructions(
             append(_clone_lifted_code_item(cached))
             continue
 
-        append(_lift_instruction(insn, labels_by_offset, code_attr.code_length, cp))
+        append(_lift_instruction(insn, labels_by_offset, cp))
 
     end_label = labels_get(code_attr.code_length)
     if end_label is not None and code_attr.code_length not in inserted_offsets:
@@ -725,10 +750,10 @@ def _clone_lifted_code_item(item: CodeItem) -> CodeItem:
     item_type = type(item)
     if item_type is FieldInsn:
         field_item = cast(FieldInsn, item)
-        return FieldInsn(field_item.type, field_item.owner, field_item.name, field_item.descriptor)
+        return _trusted_field_insn(field_item.type, field_item.owner, field_item.name, field_item.descriptor)
     if item_type is MethodInsn:
         method_item = cast(MethodInsn, item)
-        return MethodInsn(
+        return _trusted_method_insn(
             method_item.type,
             method_item.owner,
             method_item.name,
@@ -737,10 +762,10 @@ def _clone_lifted_code_item(item: CodeItem) -> CodeItem:
         )
     if item_type is TypeInsn:
         type_item = cast(TypeInsn, item)
-        return TypeInsn(type_item.type, type_item.class_name)
+        return _trusted_type_insn(type_item.type, type_item.class_name)
     if item_type is LdcInsn:
         ldc_item = cast(LdcInsn, item)
-        return LdcInsn(ldc_item.value)
+        return _trusted_ldc_insn(ldc_item.value)
     return clone_raw_instruction(cast(InsnInfo, item))
 
 
@@ -826,7 +851,13 @@ def _lift_nested_code_attributes(
     return line_numbers, local_variables, local_variable_types, attributes, tuple(layout)
 
 
-def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder, *, skip_debug: bool = False) -> CodeModel:
+def _code_from_attr(
+    attr: CodeAttr,
+    cp: ConstantPoolBuilder,
+    *,
+    skip_debug: bool = False,
+    const_pool_item_cache: dict[tuple[InsnInfoType, int], CodeItem] | None = None,
+) -> CodeModel:
     labels_by_offset = _collect_labels(attr, skip_debug=skip_debug)
     line_numbers, local_variables, local_variable_types, attributes, layout = _lift_nested_code_attributes(
         attr,
@@ -837,7 +868,12 @@ def _code_from_attr(attr: CodeAttr, cp: ConstantPoolBuilder, *, skip_debug: bool
     return CodeModel(
         max_stack=attr.max_stacks,
         max_locals=attr.max_locals,
-        instructions=_lift_instructions(attr, labels_by_offset, cp),
+        instructions=_lift_instructions(
+            attr,
+            labels_by_offset,
+            cp,
+            const_pool_item_cache,
+        ),
         exception_handlers=_lift_exception_handlers(attr, labels_by_offset, cp),
         line_numbers=line_numbers,
         local_variables=local_variables,
@@ -860,10 +896,7 @@ def _resolve_class_name(cp: ConstantPoolBuilder, index: int) -> str:
     return cp.resolve_utf8(entry.name_index)
 
 
-def _resolve_member_ref(
-    cp: ConstantPoolBuilder,
-    index: int,
-) -> tuple[str, str, str, bool]:
+def _resolve_member_ref(cp: ConstantPoolBuilder, index: int) -> tuple[str, str, str, bool]:
     """Resolve a Fieldref/Methodref/InterfaceMethodref to (owner, name, descriptor, is_interface)."""
     entry = cp.peek(index)
     if not isinstance(entry, (FieldrefInfo, MethodrefInfo, InterfaceMethodrefInfo)):
@@ -882,33 +915,35 @@ def _resolve_ldc_value(cp: ConstantPoolBuilder, index: int) -> LdcValue:
     """Resolve an LDC/LDC_W/LDC2_W CP index to a typed ``LdcValue``."""
     entry = cp.peek(index)
     if isinstance(entry, IntegerInfo):
-        return LdcInt(entry.value_bytes)
-    if isinstance(entry, FloatInfo):
-        return LdcFloat(entry.value_bytes)
-    if isinstance(entry, LongInfo):
+        value: LdcValue = LdcInt(entry.value_bytes)
+    elif isinstance(entry, FloatInfo):
+        value = LdcFloat(entry.value_bytes)
+    elif isinstance(entry, LongInfo):
         unsigned = (entry.high_bytes << 32) | (entry.low_bytes & 0xFFFFFFFF)
-        value = unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
-        return LdcLong(value)
-    if isinstance(entry, DoubleInfo):
-        return LdcDouble(entry.high_bytes, entry.low_bytes)
-    if isinstance(entry, StringInfo):
-        return LdcString(cp.resolve_utf8(entry.string_index))
-    if isinstance(entry, ClassInfo):
-        return LdcClass(cp.resolve_utf8(entry.name_index))
-    if isinstance(entry, MethodTypeInfo):
-        return LdcMethodType(cp.resolve_utf8(entry.descriptor_index))
-    if isinstance(entry, MethodHandleInfo):
-        return _resolve_ldc_method_handle(cp, entry)
-    if isinstance(entry, DynamicInfo):
+        long_value = unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
+        value = LdcLong(long_value)
+    elif isinstance(entry, DoubleInfo):
+        value = LdcDouble(entry.high_bytes, entry.low_bytes)
+    elif isinstance(entry, StringInfo):
+        value = LdcString(cp.resolve_utf8(entry.string_index))
+    elif isinstance(entry, ClassInfo):
+        value = LdcClass(cp.resolve_utf8(entry.name_index))
+    elif isinstance(entry, MethodTypeInfo):
+        value = LdcMethodType(cp.resolve_utf8(entry.descriptor_index))
+    elif isinstance(entry, MethodHandleInfo):
+        value = _resolve_ldc_method_handle(cp, entry)
+    elif isinstance(entry, DynamicInfo):
         nat = cp.peek(entry.name_and_type_index)
         if not isinstance(nat, NameAndTypeInfo):
             raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
-        return LdcDynamic(
+        value = LdcDynamic(
             entry.bootstrap_method_attr_index,
             cp.resolve_utf8(nat.name_index),
             cp.resolve_utf8(nat.descriptor_index),
         )
-    raise ValueError(f"CP index {index} has unsupported type for LDC: {type(entry).__name__}")
+    else:
+        raise ValueError(f"CP index {index} has unsupported type for LDC: {type(entry).__name__}")
+    return value
 
 
 def _resolve_ldc_method_handle(cp: ConstantPoolBuilder, entry: MethodHandleInfo) -> LdcMethodHandle:
@@ -938,23 +973,23 @@ def _lift_const_pool_index(insn: ConstPoolIndex, cp: ConstantPoolBuilder) -> Cod
         InsnInfoType.PUTSTATIC,
     ):
         owner, name, descriptor, _ = _resolve_member_ref(cp, insn.index)
-        return FieldInsn(opcode, owner, name, descriptor)
+        return _trusted_field_insn(opcode, owner, name, descriptor)
     if opcode in (
         InsnInfoType.INVOKEVIRTUAL,
         InsnInfoType.INVOKESPECIAL,
         InsnInfoType.INVOKESTATIC,
     ):
         owner, name, descriptor, is_interface = _resolve_member_ref(cp, insn.index)
-        return MethodInsn(opcode, owner, name, descriptor, is_interface)
+        return _trusted_method_insn(opcode, owner, name, descriptor, is_interface)
     if opcode in (
         InsnInfoType.NEW,
         InsnInfoType.CHECKCAST,
         InsnInfoType.INSTANCEOF,
         InsnInfoType.ANEWARRAY,
     ):
-        return TypeInsn(opcode, _resolve_class_name(cp, insn.index))
+        return _trusted_type_insn(opcode, _resolve_class_name(cp, insn.index))
     if opcode in (InsnInfoType.LDC_W, InsnInfoType.LDC2_W):
-        return LdcInsn(_resolve_ldc_value(cp, insn.index))
+        return _trusted_ldc_insn(_resolve_ldc_value(cp, insn.index))
     # Unknown ConstPoolIndex opcode: pass through unchanged (e.g. future opcodes).
     return clone_raw_instruction(insn)
 
@@ -967,7 +1002,7 @@ def _lift_invoke_dynamic(insn: InvokeDynamic, cp: ConstantPoolBuilder) -> Invoke
     nat = cp.peek(entry.name_and_type_index)
     if not isinstance(nat, NameAndTypeInfo):
         raise ValueError(f"CP index {entry.name_and_type_index} is not a CONSTANT_NameAndType")
-    return InvokeDynamicInsn(
+    return _trusted_invoke_dynamic_insn(
         entry.bootstrap_method_attr_index,
         cp.resolve_utf8(nat.name_index),
         cp.resolve_utf8(nat.descriptor_index),
@@ -977,4 +1012,4 @@ def _lift_invoke_dynamic(insn: InvokeDynamic, cp: ConstantPoolBuilder) -> Invoke
 def _lift_invoke_interface(insn: InvokeInterface, cp: ConstantPoolBuilder) -> InterfaceMethodInsn:
     """Lift a raw ``InvokeInterface`` instruction to an ``InterfaceMethodInsn``."""
     owner, name, descriptor, _ = _resolve_member_ref(cp, insn.index)
-    return InterfaceMethodInsn(owner, name, descriptor)
+    return _trusted_interface_method_insn(owner, name, descriptor)

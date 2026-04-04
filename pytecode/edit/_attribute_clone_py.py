@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from dataclasses import fields
 from functools import cache
 from typing import Any, cast
 
@@ -529,8 +529,8 @@ def _clone_value(value: object) -> object:
         fast = _clone_fast_attribute(value)
         if fast is not None:
             return fast
-    if is_dataclass(value) and not isinstance(value, type):
-        cls = type(value)
+    cls = type(value)
+    if cls is not type and getattr(cls, "__dataclass_fields__", None) is not None:
         cloned = {name: _clone_value(getattr(value, name)) for name in _clone_field_names(cls)}
         return cast(Any, cls)(**cloned)
     return value

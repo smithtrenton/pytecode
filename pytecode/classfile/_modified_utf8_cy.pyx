@@ -10,6 +10,11 @@ cdef int _ONE_BYTE_MAX = 0x7F
 cdef int _TWO_BYTE_MAX = 0x7FF
 cdef int _THREE_BYTE_MAX = 0xFFFF
 cdef int _MAX_UNICODE = 0x10FFFF
+cdef int _HIGH_SURROGATE_START = 0xD800
+cdef int _HIGH_SURROGATE_END = 0xDBFF
+cdef int _LOW_SURROGATE_START = 0xDC00
+cdef int _LOW_SURROGATE_END = 0xDFFF
+cdef int _SUPPLEMENTAL_BASE = 0x10000
 
 
 cdef inline void _encode_code_unit(int code_unit, bytearray out):
@@ -87,12 +92,12 @@ def decode_modified_utf8(bytes data) -> str:
         UnicodeDecodeError: If *data* contains invalid, truncated, or
             overlong sequences.
     """
-    cdef bytearray utf16_bytes = bytearray()
+    cdef list parts = []
     cdef int index = 0
     cdef int length = len(data)
     cdef const unsigned char[:] buf = data
     cdef unsigned char first, second, third
-    cdef int code_unit
+    cdef int code_unit, pending_high_surrogate = -1, supplemental
 
     while index < length:
         first = buf[index]
@@ -156,10 +161,34 @@ def decode_modified_utf8(bytes data) -> str:
                 "modified UTF-8 does not permit four-byte sequences",
             )
 
-        utf16_bytes.append((code_unit >> 8) & 0xFF)
-        utf16_bytes.append(code_unit & 0xFF)
+        if _HIGH_SURROGATE_START <= code_unit <= _HIGH_SURROGATE_END:
+            if pending_high_surrogate != -1:
+                parts.append(chr(pending_high_surrogate))
+            pending_high_surrogate = code_unit
+            continue
 
-    return utf16_bytes.decode("utf-16-be", errors="surrogatepass")
+        if _LOW_SURROGATE_START <= code_unit <= _LOW_SURROGATE_END:
+            if pending_high_surrogate != -1:
+                supplemental = (
+                    _SUPPLEMENTAL_BASE
+                    + ((pending_high_surrogate - _HIGH_SURROGATE_START) << 10)
+                    + (code_unit - _LOW_SURROGATE_START)
+                )
+                parts.append(chr(supplemental))
+                pending_high_surrogate = -1
+            else:
+                parts.append(chr(code_unit))
+            continue
+
+        if pending_high_surrogate != -1:
+            parts.append(chr(pending_high_surrogate))
+            pending_high_surrogate = -1
+        parts.append(chr(code_unit))
+
+    if pending_high_surrogate != -1:
+        parts.append(chr(pending_high_surrogate))
+
+    return "".join(parts)
 
 
 __all__ = ["decode_modified_utf8", "encode_modified_utf8"]

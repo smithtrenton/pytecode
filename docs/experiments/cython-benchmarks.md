@@ -202,3 +202,102 @@ Ported module:
 | | Python | Cython | Ratio |
 |---|---|---|---|
 | 4 stages | 10.49s | 8.25s | **0.79x (~21% faster)** |
+
+## Phase 8: `_model` lift cache and label allocation cleanup
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 2.589 | 2.273 | 0.878 | **~12% faster** |
+| model-lift | 3.378 | 2.808 | 0.831 | **~17% faster** |
+| model-lower | 3.175 | 2.241 | 0.706 | **~29% faster** |
+| class-write | 1.364 | 0.869 | 0.637 | **~36% faster** |
+
+Optimized path:
+- `pytecode.edit._model_py` / `pytecode.edit._model_cy` — reuse lifted constant-pool-backed wrappers across all methods in a class and stop eagerly allocating duplicate `Label(...)` objects during label collection
+
+### Notes
+
+- This phase is the first `_model`-internal optimization pass rather than a new helper-module port.
+- Sharing the lifted constant-pool item cache at class scope reduces repeated symbolic wrapper construction when multiple methods reference the same constant-pool entries.
+- Replacing `dict.setdefault(..., Label(...))` with an explicit membership check removes unnecessary `Label` allocation on already-seen branch targets.
+- The benchmark still shows the remaining visible lift/lower overhead concentrated inside `_model` plus standard-library work such as `enum` access and text decoding, so future gains are likely to come from more fine-grained internal `_model` changes rather than another standalone seam.
+
+### Total pipeline (4 measured stages)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 10.51s | 8.19s | **0.78x (~22% faster)** |
+
+## Phase 9: `_model` label target validation cleanup
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time, rerun focused on the directly affected stages.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| model-lower | 3.134 | 2.350 | 0.750 | **~25% faster** |
+| model-lift | 3.127 | 2.272 | 0.727 | **~27% faster** |
+
+Optimized path:
+- `pytecode.edit._model_py` / `pytecode.edit._model_cy` — collect and validate label target offsets once, then reuse those prevalidated offsets when lifting branch and switch instructions instead of recomputing and revalidating them in the hot instruction loop
+
+### Notes
+
+- This phase keeps the optimization inside `_model` rather than introducing a new helper-module seam.
+- The pure-Python lift profile on `225.jar` showed `_collect_labels()` drop from about **1.87s** to **1.55s**, and `_lift_instruction()` drop from about **3.12s** to **2.78s**, which matches the intended effect of removing redundant offset work from the lift path.
+- Repeated 4-stage reruns moved `class-parse` and `class-write` enough that they do not look causally tied to this change, so Phase 9 treats the focused `model-lower` / `model-lift` rerun as the reliable measurement.
+- Remaining visible lift-side costs are still concentrated in `_lift_const_pool_index()`, member-ref resolution, UTF-16 decoding, and `enum` attribute access, so the next `_model` step should stay on symbolic instruction lifting rather than label collection.
+
+## Phase 11: `classfile.attributes` port
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 2.968 | 1.807 | 0.609 | **~39% faster** |
+| model-lift | 4.097 | 2.606 | 0.636 | **~36% faster** |
+| model-lower | 3.203 | 3.049 | 0.952 | **~5% faster** |
+| class-write | 1.395 | 0.868 | 0.622 | **~38% faster** |
+
+Ported module:
+- `pytecode.classfile.attributes` — class-file attribute dataclasses and enum-backed attribute type metadata using the standard `_mod_py.py` / `_mod_cy.pyx` / shim layout
+
+### Notes
+
+- This phase moves a large amount of class-parse object construction out of pure Python by compiling the attribute data model itself, rather than only the reader logic that instantiates it.
+- A focused parse-only rerun landed at **0.778x**, while the first full 4-stage rerun landed at **0.609x** for `class-parse`; both runs point in the same direction, so this phase treats the large exact delta as benchmark-sensitive but the parse improvement itself as real.
+- `model-lift` also improved materially because the lifted pipeline still depends on the parsed attribute object graph produced by `ClassReader`.
+- With `classfile.attributes` ported, the next plausible classfile-side seam is `classfile.instructions`, which has a similarly dataclass-heavy shape on the parse/write path.
+
+### Total pipeline (4 measured stages)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 11.66s | 8.33s | **0.71x (~29% faster)** |
+
+## Phase 12: `classfile.instructions` port
+
+Benchmark: `225.jar`, 5 iterations, median wall-clock time.
+
+| Stage | Python (s) | Cython (s) | Ratio (Cy/Py) | Speedup |
+|---|---|---|---|---|
+| class-parse | 1.912 | 1.873 | 0.980 | **~2% faster** |
+| model-lift | 2.612 | 2.065 | 0.790 | **~21% faster** |
+| model-lower | 2.599 | 2.126 | 0.818 | **~18% faster** |
+| class-write | 1.107 | 0.754 | 0.681 | **~32% faster** |
+
+Ported module:
+- `pytecode.classfile.instructions` — JVM instruction operand dataclasses and enum-backed opcode metadata using the standard `_mod_py.py` / `_mod_cy.pyx` / shim layout
+
+### Notes
+
+- This phase compiles the instruction operand data model itself, so both instruction decoding and later symbolic/model write paths spend less time constructing and handling pure-Python wrapper objects.
+- `class-parse` was nearly flat on this run, which suggests the main win here is not raw decode speed inside `ClassReader` but the downstream cost of working with instruction operand objects after parse.
+- With both `classfile.attributes` and `classfile.instructions` ported, there is no similarly obvious remaining classfile-side helper seam; the next gains are more likely to come from re-profiling the already compiled hot paths (`classfile.reader`, `edit._model`) and from unavoidable stdlib enum/codec overhead.
+
+### Total pipeline (4 measured stages)
+
+| | Python | Cython | Ratio |
+|---|---|---|---|
+| 4 stages | 8.23s | 6.82s | **0.83x (~17% faster)** |

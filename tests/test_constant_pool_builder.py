@@ -971,6 +971,9 @@ def test_add_compound_entries_reuse_imported_indexes_without_growth():
     fieldref_idx = b.add_fieldref("Owner", "value", "I")
     methodref_idx = b.add_methodref("Owner", "call", "()V")
     interface_methodref_idx = b.add_interface_methodref("Iface", "run", "()V")
+    method_type_idx = b.add_method_type("()V")
+    dynamic_idx = b.add_dynamic(7, "dyn", "I")
+    invoke_dynamic_idx = b.add_invoke_dynamic(7, "callsite", "()V")
 
     imported = ConstantPoolBuilder.from_pool(b.build())
     imported_count = imported.count
@@ -981,6 +984,9 @@ def test_add_compound_entries_reuse_imported_indexes_without_growth():
     assert imported.add_fieldref("Owner", "value", "I") == fieldref_idx
     assert imported.add_methodref("Owner", "call", "()V") == methodref_idx
     assert imported.add_interface_methodref("Iface", "run", "()V") == interface_methodref_idx
+    assert imported.add_method_type("()V") == method_type_idx
+    assert imported.add_dynamic(7, "dyn", "I") == dynamic_idx
+    assert imported.add_invoke_dynamic(7, "callsite", "()V") == invoke_dynamic_idx
     assert imported.count == imported_count
 
 
