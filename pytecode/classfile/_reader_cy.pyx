@@ -9,7 +9,7 @@ into the in-memory ``ClassFile`` structure exposed by :mod:`pytecode.classfile.i
 import os
 
 from pytecode._internal._bytes_utils_cy import BytesReader
-from pytecode._internal._bytes_utils_cy cimport BytesReader
+from pytecode._internal._bytes_utils_cy cimport BytesReader, _cu1, _ci1, _cu2, _ci2, _cu4, _ci4
 from . import attributes, constant_pool, constants, info, instructions
 from .modified_utf8 import decode_modified_utf8
 
@@ -58,6 +58,39 @@ cdef inline object _enum_member(object enum_type, int value):
 
 class MalformedClassException(Exception):
     """Raised when the input bytes do not conform to the JVM class-file format (JVMS §4)."""
+
+
+# Fast byte-read helpers: bypass cpdef dispatch and bounds checks.
+# These call the .pxd inline functions directly on the BytesReader's buffer.
+cdef inline int _fast_u1(BytesReader r):
+    cdef int v = _cu1(r.buffer_view, r.offset)
+    r.offset += 1
+    return v
+
+cdef inline int _fast_i1(BytesReader r):
+    cdef int v = _ci1(r.buffer_view, r.offset)
+    r.offset += 1
+    return v
+
+cdef inline int _fast_u2(BytesReader r):
+    cdef int v = _cu2(r.buffer_view, r.offset)
+    r.offset += 2
+    return v
+
+cdef inline int _fast_i2(BytesReader r):
+    cdef int v = _ci2(r.buffer_view, r.offset)
+    r.offset += 2
+    return v
+
+cdef inline unsigned int _fast_u4(BytesReader r):
+    cdef unsigned int v = _cu4(r.buffer_view, r.offset)
+    r.offset += 4
+    return v
+
+cdef inline int _fast_i4(BytesReader r):
+    cdef int v = _ci4(r.buffer_view, r.offset)
+    r.offset += 4
+    return v
 
 
 cdef class ClassReader(BytesReader):
@@ -125,47 +158,47 @@ cdef class ClassReader(BytesReader):
             ValueError: If the constant-pool tag is unrecognised.
         """
         cdef int index_extra, offset, tag
-        index_extra, offset, tag = 0, self.offset, self.read_u1()
+        index_extra, offset, tag = 0, self.offset, _fast_u1(self)
         cp_type = _constant_pool_info_type(tag)
 
         if cp_type is constant_pool.ConstantPoolInfoType.CLASS:
-            cp_info = constant_pool.ClassInfo(index, offset, tag, self.read_u2())
+            cp_info = constant_pool.ClassInfo(index, offset, tag, _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.STRING:
-            cp_info = constant_pool.StringInfo(index, offset, tag, self.read_u2())
+            cp_info = constant_pool.StringInfo(index, offset, tag, _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.METHOD_TYPE:
-            cp_info = constant_pool.MethodTypeInfo(index, offset, tag, self.read_u2())
+            cp_info = constant_pool.MethodTypeInfo(index, offset, tag, _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.MODULE:
-            cp_info = constant_pool.ModuleInfo(index, offset, tag, self.read_u2())
+            cp_info = constant_pool.ModuleInfo(index, offset, tag, _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.PACKAGE:
-            cp_info = constant_pool.PackageInfo(index, offset, tag, self.read_u2())
+            cp_info = constant_pool.PackageInfo(index, offset, tag, _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.FIELD_REF:
-            cp_info = constant_pool.FieldrefInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.FieldrefInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.METHOD_REF:
-            cp_info = constant_pool.MethodrefInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.MethodrefInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.INTERFACE_METHOD_REF:
-            cp_info = constant_pool.InterfaceMethodrefInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.InterfaceMethodrefInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.NAME_AND_TYPE:
-            cp_info = constant_pool.NameAndTypeInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.NameAndTypeInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.DYNAMIC:
-            cp_info = constant_pool.DynamicInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.DynamicInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.INVOKE_DYNAMIC:
-            cp_info = constant_pool.InvokeDynamicInfo(index, offset, tag, self.read_u2(), self.read_u2())
+            cp_info = constant_pool.InvokeDynamicInfo(index, offset, tag, _fast_u2(self), _fast_u2(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.INTEGER:
-            cp_info = constant_pool.IntegerInfo(index, offset, tag, self.read_u4())
+            cp_info = constant_pool.IntegerInfo(index, offset, tag, _fast_u4(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.FLOAT:
-            cp_info = constant_pool.FloatInfo(index, offset, tag, self.read_u4())
+            cp_info = constant_pool.FloatInfo(index, offset, tag, _fast_u4(self))
         elif cp_type is constant_pool.ConstantPoolInfoType.LONG:
-            cp_info = constant_pool.LongInfo(index, offset, tag, self.read_u4(), self.read_u4())
+            cp_info = constant_pool.LongInfo(index, offset, tag, _fast_u4(self), _fast_u4(self))
             index_extra = 1
         elif cp_type is constant_pool.ConstantPoolInfoType.DOUBLE:
-            cp_info = constant_pool.DoubleInfo(index, offset, tag, self.read_u4(), self.read_u4())
+            cp_info = constant_pool.DoubleInfo(index, offset, tag, _fast_u4(self), _fast_u4(self))
             index_extra = 1
         elif cp_type is constant_pool.ConstantPoolInfoType.UTF8:
-            length = self.read_u2()
+            length = _fast_u2(self)
             str_bytes = self.read_bytes(length)
             cp_info = constant_pool.Utf8Info(index, offset, tag, length, str_bytes)
         elif cp_type is constant_pool.ConstantPoolInfoType.METHOD_HANDLE:
-            cp_info = constant_pool.MethodHandleInfo(index, offset, tag, self.read_u1(), self.read_u2())
+            cp_info = constant_pool.MethodHandleInfo(index, offset, tag, _fast_u1(self), _fast_u2(self))
         else:
             raise ValueError(f"Unknown ConstantPoolInfoType: {cp_type}")
         return cp_info, index_extra
@@ -200,53 +233,53 @@ cdef class ClassReader(BytesReader):
             Exception: If the opcode or its ``wide`` variant is invalid.
         """
         cdef int opcode
-        opcode = self.read_u1()
+        opcode = _fast_u1(self)
         inst_type = _instruction_type(opcode)
         instinfo = inst_type.instinfo
         if instinfo is instructions.LocalIndex:
-            return instructions.LocalIndex(inst_type, current_method_offset, self.read_u1())
+            return instructions.LocalIndex(inst_type, current_method_offset, _fast_u1(self))
         elif instinfo is instructions.ConstPoolIndex:
-            return instructions.ConstPoolIndex(inst_type, current_method_offset, self.read_u2())
+            return instructions.ConstPoolIndex(inst_type, current_method_offset, _fast_u2(self))
         elif instinfo is instructions.ByteValue:
-            return instructions.ByteValue(inst_type, current_method_offset, self.read_i1())
+            return instructions.ByteValue(inst_type, current_method_offset, _fast_i1(self))
         elif instinfo is instructions.ShortValue:
-            return instructions.ShortValue(inst_type, current_method_offset, self.read_i2())
+            return instructions.ShortValue(inst_type, current_method_offset, _fast_i2(self))
         elif instinfo is instructions.Branch:
-            return instructions.Branch(inst_type, current_method_offset, self.read_i2())
+            return instructions.Branch(inst_type, current_method_offset, _fast_i2(self))
         elif instinfo is instructions.BranchW:
-            return instructions.BranchW(inst_type, current_method_offset, self.read_i4())
+            return instructions.BranchW(inst_type, current_method_offset, _fast_i4(self))
         elif instinfo is instructions.IInc:
-            index, value = self.read_u1(), self.read_i1()
+            index, value = _fast_u1(self), _fast_i1(self)
             return instructions.IInc(inst_type, current_method_offset, index, value)
         elif instinfo is instructions.InvokeDynamic:
-            index, unused = self.read_u2(), self.read_bytes(2)
+            index, unused = _fast_u2(self), self.read_bytes(2)
             return instructions.InvokeDynamic(inst_type, current_method_offset, index, unused)
         elif instinfo is instructions.InvokeInterface:
-            index, count, unused = self.read_u2(), self.read_u1(), self.read_bytes(1)
+            index, count, unused = _fast_u2(self), _fast_u1(self), self.read_bytes(1)
             return instructions.InvokeInterface(inst_type, current_method_offset, index, count, unused)
         elif instinfo is instructions.MultiANewArray:
-            index, dimensions = self.read_u2(), self.read_u1()
+            index, dimensions = _fast_u2(self), _fast_u1(self)
             return instructions.MultiANewArray(inst_type, current_method_offset, index, dimensions)
         elif instinfo is instructions.NewArray:
-            atype = _array_type(self.read_u1())
+            atype = _array_type(_fast_u1(self))
             return instructions.NewArray(inst_type, current_method_offset, atype)
         elif instinfo is instructions.LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
-            default, npairs = self.read_i4(), self.read_u4()
-            pairs = [instructions.MatchOffsetPair(self.read_i4(), self.read_i4()) for _ in range(npairs)]
+            default, npairs = _fast_i4(self), _fast_u4(self)
+            pairs = [instructions.MatchOffsetPair(_fast_i4(self), _fast_i4(self)) for _ in range(npairs)]
             return instructions.LookupSwitch(inst_type, current_method_offset, default, npairs, pairs)
         elif instinfo is instructions.TableSwitch:
             self.read_align_bytes(current_method_offset + 1)
-            default, low, high = self.read_i4(), self.read_i4(), self.read_i4()
-            offsets = [self.read_i4() for _ in range(high - low + 1)]
+            default, low, high = _fast_i4(self), _fast_i4(self), _fast_i4(self)
+            offsets = [_fast_i4(self) for _ in range(high - low + 1)]
             return instructions.TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
-            wide_opcode = self.read_u1()
+            wide_opcode = _fast_u1(self)
             wide_inst_type = _instruction_type(opcode + wide_opcode)
             if wide_inst_type.instinfo is instructions.LocalIndexW:
-                return instructions.LocalIndexW(wide_inst_type, current_method_offset, self.read_u2())
+                return instructions.LocalIndexW(wide_inst_type, current_method_offset, _fast_u2(self))
             elif wide_inst_type.instinfo is instructions.IIncW:
-                index, value = self.read_u2(), self.read_i2()
+                index, value = _fast_u2(self), _fast_i2(self)
                 return instructions.IIncW(wide_inst_type, current_method_offset, index, value)
         elif instinfo is instructions.InsnInfo:
             return instructions.InsnInfo(inst_type, current_method_offset)
@@ -282,7 +315,7 @@ cdef class ClassReader(BytesReader):
             ValueError: If the verification-type tag is unrecognised.
         """
         cdef int tag
-        tag = self.read_u1()
+        tag = _fast_u1(self)
         if tag == constants.VerificationType.TOP:
             return attributes.TopVariableInfo(tag)
         elif tag == constants.VerificationType.INTEGER:
@@ -298,9 +331,9 @@ cdef class ClassReader(BytesReader):
         elif tag == constants.VerificationType.UNINITIALIZED_THIS:
             return attributes.UninitializedThisVariableInfo(tag)
         elif tag == constants.VerificationType.OBJECT:
-            return attributes.ObjectVariableInfo(tag, self.read_u2())
+            return attributes.ObjectVariableInfo(tag, _fast_u2(self))
         elif tag == constants.VerificationType.UNINITIALIZED:
-            return attributes.UninitializedVariableInfo(tag, self.read_u2())
+            return attributes.UninitializedVariableInfo(tag, _fast_u2(self))
         else:
             raise ValueError(f"Unknown verification type tag: {tag}")
 
@@ -314,21 +347,21 @@ cdef class ClassReader(BytesReader):
             ValueError: If the element-value tag character is unrecognised.
         """
         cdef int num_values
-        tag = self.read_u1().to_bytes(1, "big").decode("ascii")
+        tag = _fast_u1(self).to_bytes(1, "big").decode("ascii")
 
         if tag in ("B", "C", "D", "F", "I", "J", "S", "Z", "s"):
-            return attributes.ElementValueInfo(tag, attributes.ConstValueInfo(self.read_u2()))
+            return attributes.ElementValueInfo(tag, attributes.ConstValueInfo(_fast_u2(self)))
         elif tag == "e":
             return attributes.ElementValueInfo(
                 tag,
-                attributes.EnumConstantValueInfo(self.read_u2(), self.read_u2()),
+                attributes.EnumConstantValueInfo(_fast_u2(self), _fast_u2(self)),
             )
         elif tag == "c":
-            return attributes.ElementValueInfo(tag, attributes.ClassInfoValueInfo(self.read_u2()))
+            return attributes.ElementValueInfo(tag, attributes.ClassInfoValueInfo(_fast_u2(self)))
         elif tag == "@":
             return attributes.ElementValueInfo(tag, self.read_annotation_info())
         elif tag == "[":
-            num_values = self.read_u2()
+            num_values = _fast_u2(self)
             values = [self.read_element_value_info() for _ in range(num_values)]
             return attributes.ElementValueInfo(tag, attributes.ArrayValueInfo(num_values, values))
         else:
@@ -341,10 +374,10 @@ cdef class ClassReader(BytesReader):
             The decoded annotation info including its element-value pairs.
         """
         cdef int type_index, num_element_value_pairs
-        type_index = self.read_u2()
-        num_element_value_pairs = self.read_u2()
+        type_index = _fast_u2(self)
+        num_element_value_pairs = _fast_u2(self)
         element_value_pairs = [
-            attributes.ElementValuePairInfo(self.read_u2(), self.read_element_value_info())
+            attributes.ElementValuePairInfo(_fast_u2(self), self.read_element_value_info())
             for _ in range(num_element_value_pairs)
         ]
         return attributes.AnnotationInfo(type_index, num_element_value_pairs, element_value_pairs)
@@ -363,29 +396,29 @@ cdef class ClassReader(BytesReader):
         """
         cdef int table_length
         if target_type in constants.TargetInfoType.TYPE_PARAMETER.value:
-            return attributes.TypeParameterTargetInfo(self.read_u1())
+            return attributes.TypeParameterTargetInfo(_fast_u1(self))
         elif target_type in constants.TargetInfoType.SUPERTYPE.value:
-            return attributes.SupertypeTargetInfo(self.read_u2())
+            return attributes.SupertypeTargetInfo(_fast_u2(self))
         elif target_type in constants.TargetInfoType.TYPE_PARAMETER_BOUND.value:
-            return attributes.TypeParameterBoundTargetInfo(self.read_u1(), self.read_u1())
+            return attributes.TypeParameterBoundTargetInfo(_fast_u1(self), _fast_u1(self))
         elif target_type in constants.TargetInfoType.EMPTY.value:
             return attributes.EmptyTargetInfo()
         elif target_type in constants.TargetInfoType.FORMAL_PARAMETER.value:
-            return attributes.FormalParameterTargetInfo(self.read_u1())
+            return attributes.FormalParameterTargetInfo(_fast_u1(self))
         elif target_type in constants.TargetInfoType.THROWS.value:
-            return attributes.ThrowsTargetInfo(self.read_u2())
+            return attributes.ThrowsTargetInfo(_fast_u2(self))
         elif target_type in constants.TargetInfoType.LOCALVAR.value:
-            table_length = self.read_u2()
+            table_length = _fast_u2(self)
             table = [
-                attributes.TableInfo(self.read_u2(), self.read_u2(), self.read_u2()) for _ in range(table_length)
+                attributes.TableInfo(_fast_u2(self), _fast_u2(self), _fast_u2(self)) for _ in range(table_length)
             ]
             return attributes.LocalvarTargetInfo(table_length, table)
         elif target_type in constants.TargetInfoType.CATCH.value:
-            return attributes.CatchTargetInfo(self.read_u2())
+            return attributes.CatchTargetInfo(_fast_u2(self))
         elif target_type in constants.TargetInfoType.OFFSET.value:
-            return attributes.OffsetTargetInfo(self.read_u2())
+            return attributes.OffsetTargetInfo(_fast_u2(self))
         elif target_type in constants.TargetInfoType.TYPE_ARGUMENT.value:
-            return attributes.TypeArgumentTargetInfo(self.read_u2(), self.read_u1())
+            return attributes.TypeArgumentTargetInfo(_fast_u2(self), _fast_u1(self))
         else:
             raise ValueError(f"Unknown target info type: {target_type}")
 
@@ -396,8 +429,8 @@ cdef class ClassReader(BytesReader):
             The decoded type-path info.
         """
         cdef int path_length
-        path_length = self.read_u1()
-        path = [attributes.PathInfo(self.read_u1(), self.read_u1()) for _ in range(path_length)]
+        path_length = _fast_u1(self)
+        path = [attributes.PathInfo(_fast_u1(self), _fast_u1(self)) for _ in range(path_length)]
         return attributes.TypePathInfo(path_length, path)
 
     cpdef object read_type_annotation_info(self):
@@ -407,13 +440,13 @@ cdef class ClassReader(BytesReader):
             The decoded type-annotation info.
         """
         cdef int target_type, type_index, num_element_value_pairs
-        target_type = self.read_u1()
+        target_type = _fast_u1(self)
         target_info = self.read_target_info(target_type)
         target_path = self.read_target_path()
-        type_index = self.read_u2()
-        num_element_value_pairs = self.read_u2()
+        type_index = _fast_u2(self)
+        num_element_value_pairs = _fast_u2(self)
         element_value_pairs = [
-            attributes.ElementValuePairInfo(self.read_u2(), self.read_element_value_info())
+            attributes.ElementValuePairInfo(_fast_u2(self), self.read_element_value_info())
             for _ in range(num_element_value_pairs)
         ]
         return attributes.TypeAnnotationInfo(
@@ -452,7 +485,7 @@ cdef class ClassReader(BytesReader):
         cdef int max_stack, max_locals
         cdef unsigned int code_length
 
-        name_index, length = self.read_u2(), self.read_u4()
+        name_index, length = _fast_u2(self), _fast_u4(self)
 
         name_cp = self.constant_pool[name_index]
         if type(name_cp) is not constant_pool.Utf8Info:
@@ -468,30 +501,30 @@ cdef class ClassReader(BytesReader):
             return attributes.DeprecatedAttr(name_index, length)
 
         elif attr_type is attributes.AttributeInfoType.CONSTANT_VALUE:
-            return attributes.ConstantValueAttr(name_index, length, self.read_u2())
+            return attributes.ConstantValueAttr(name_index, length, _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.SIGNATURE:
-            return attributes.SignatureAttr(name_index, length, self.read_u2())
+            return attributes.SignatureAttr(name_index, length, _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.SOURCE_FILE:
-            return attributes.SourceFileAttr(name_index, length, self.read_u2())
+            return attributes.SourceFileAttr(name_index, length, _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.MODULE_MAIN_CLASS:
-            return attributes.ModuleMainClassAttr(name_index, length, self.read_u2())
+            return attributes.ModuleMainClassAttr(name_index, length, _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.NEST_HOST:
-            return attributes.NestHostAttr(name_index, length, self.read_u2())
+            return attributes.NestHostAttr(name_index, length, _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.CODE:
-            max_stack, max_locals = self.read_u2(), self.read_u2()
-            code_length = self.read_u4()
+            max_stack, max_locals = _fast_u2(self), _fast_u2(self)
+            code_length = _fast_u4(self)
             code = self.read_code_bytes(code_length)
-            exception_table_length = self.read_u2()
+            exception_table_length = _fast_u2(self)
             exception_table = [
-                attributes.ExceptionInfo(self.read_u2(), self.read_u2(), self.read_u2(), self.read_u2())
+                attributes.ExceptionInfo(_fast_u2(self), _fast_u2(self), _fast_u2(self), _fast_u2(self))
                 for _ in range(exception_table_length)
             ]
-            attributes_count = self.read_u2()
+            attributes_count = _fast_u2(self)
             attributes_list = [self.read_attribute() for _ in range(attributes_count)]
             return attributes.CodeAttr(
                 name_index,
@@ -507,10 +540,10 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.STACK_MAP_TABLE:
-            number_of_entries = self.read_u2()
+            number_of_entries = _fast_u2(self)
             entries = []
             for _ in range(number_of_entries):
-                frame_type = self.read_u1()
+                frame_type = _fast_u1(self)
 
                 if 0 <= frame_type < 64:
                     entries.append(attributes.SameFrameInfo(frame_type))
@@ -522,23 +555,23 @@ cdef class ClassReader(BytesReader):
                     entries.append(
                         attributes.SameLocals1StackItemFrameExtendedInfo(
                             frame_type,
-                            self.read_u2(),
+                            _fast_u2(self),
                             self.read_verification_type_info(),
                         )
                     )
                 elif 248 <= frame_type <= 250:
-                    entries.append(attributes.ChopFrameInfo(frame_type, self.read_u2()))
+                    entries.append(attributes.ChopFrameInfo(frame_type, _fast_u2(self)))
                 elif frame_type == 251:
-                    entries.append(attributes.SameFrameExtendedInfo(frame_type, self.read_u2()))
+                    entries.append(attributes.SameFrameExtendedInfo(frame_type, _fast_u2(self)))
                 elif 252 <= frame_type <= 254:
-                    offset_delta = self.read_u2()
+                    offset_delta = _fast_u2(self)
                     verification_type_infos = [self.read_verification_type_info() for __ in range(frame_type - 251)]
                     entries.append(attributes.AppendFrameInfo(frame_type, offset_delta, verification_type_infos))
                 elif frame_type == 255:
-                    offset_delta = self.read_u2()
-                    number_of_locals = self.read_u2()
+                    offset_delta = _fast_u2(self)
+                    number_of_locals = _fast_u2(self)
                     locals = [self.read_verification_type_info() for __ in range(number_of_locals)]
-                    number_of_stack_items = self.read_u2()
+                    number_of_stack_items = _fast_u2(self)
                     stack = [self.read_verification_type_info() for __ in range(number_of_stack_items)]
                     entries.append(
                         attributes.FullFrameInfo(
@@ -556,45 +589,45 @@ cdef class ClassReader(BytesReader):
             return attributes.StackMapTableAttr(name_index, length, number_of_entries, entries)
 
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
-            number_of_exceptions = self.read_u2()
-            exception_index_table = [self.read_u2() for _ in range(number_of_exceptions)]
+            number_of_exceptions = _fast_u2(self)
+            exception_index_table = [_fast_u2(self) for _ in range(number_of_exceptions)]
             return attributes.ExceptionsAttr(name_index, length, number_of_exceptions, exception_index_table)
 
         elif attr_type is attributes.AttributeInfoType.INNER_CLASSES:
-            number_of_classes = self.read_u2()
+            number_of_classes = _fast_u2(self)
             classes = [
                 attributes.InnerClassInfo(
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
-                    _enum_member(constants.NestedClassAccessFlag, self.read_u2()),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _enum_member(constants.NestedClassAccessFlag, _fast_u2(self)),
                 )
                 for _ in range(number_of_classes)
             ]
             return attributes.InnerClassesAttr(name_index, length, number_of_classes, classes)
 
         elif attr_type is attributes.AttributeInfoType.ENCLOSING_METHOD:
-            return attributes.EnclosingMethodAttr(name_index, length, self.read_u2(), self.read_u2())
+            return attributes.EnclosingMethodAttr(name_index, length, _fast_u2(self), _fast_u2(self))
 
         elif attr_type is attributes.AttributeInfoType.SOURCE_DEBUG_EXTENSION:
             return attributes.SourceDebugExtensionAttr(name_index, length, self.read_bytes(length).decode("utf-8"))
 
         elif attr_type is attributes.AttributeInfoType.LINE_NUMBER_TABLE:
-            line_number_table_length = self.read_u2()
+            line_number_table_length = _fast_u2(self)
             line_number_table = [
-                attributes.LineNumberInfo(self.read_u2(), self.read_u2()) for _ in range(line_number_table_length)
+                attributes.LineNumberInfo(_fast_u2(self), _fast_u2(self)) for _ in range(line_number_table_length)
             ]
             return attributes.LineNumberTableAttr(name_index, length, line_number_table_length, line_number_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TABLE:
-            local_variable_table_length = self.read_u2()
+            local_variable_table_length = _fast_u2(self)
             local_variable_table = [
                 attributes.LocalVariableInfo(
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
                 )
                 for _ in range(local_variable_table_length)
             ]
@@ -603,14 +636,14 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TYPE_TABLE:
-            local_variable_type_table_length = self.read_u2()
+            local_variable_type_table_length = _fast_u2(self)
             local_variable_type_table = [
                 attributes.LocalVariableTypeInfo(
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
-                    self.read_u2(),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
+                    _fast_u2(self),
                 )
                 for _ in range(local_variable_type_table_length)
             ]
@@ -619,20 +652,20 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_VISIBLE_ANNOTATIONS:
-            num_annotations = self.read_u2()
+            num_annotations = _fast_u2(self)
             annotation_list = [self.read_annotation_info() for _ in range(num_annotations)]
             return attributes.RuntimeVisibleAnnotationsAttr(name_index, length, num_annotations, annotation_list)
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_INVISIBLE_ANNOTATIONS:
-            num_annotations = self.read_u2()
+            num_annotations = _fast_u2(self)
             annotation_list = [self.read_annotation_info() for _ in range(num_annotations)]
             return attributes.RuntimeInvisibleAnnotationsAttr(name_index, length, num_annotations, annotation_list)
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_VISIBLE_PARAMETER_ANNOTATIONS:
-            num_parameters = self.read_u1()
+            num_parameters = _fast_u1(self)
             parameter_annotations = []
             for _ in range(num_parameters):
-                num_annotations = self.read_u2()
+                num_annotations = _fast_u2(self)
                 annotation_list = [self.read_annotation_info() for _ in range(num_annotations)]
                 parameter_annotations.append(attributes.ParameterAnnotationInfo(num_annotations, annotation_list))
             return attributes.RuntimeVisibleParameterAnnotationsAttr(
@@ -640,10 +673,10 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_INVISIBLE_PARAMETER_ANNOTATIONS:
-            num_parameters = self.read_u1()
+            num_parameters = _fast_u1(self)
             parameter_annotations_list = []
             for _ in range(num_parameters):
-                num_annotations = self.read_u2()
+                num_annotations = _fast_u2(self)
                 annotation_list = [self.read_annotation_info() for _ in range(num_annotations)]
                 parameter_annotations_list.append(attributes.ParameterAnnotationInfo(num_annotations, annotation_list))
             return attributes.RuntimeInvisibleParameterAnnotationsAttr(
@@ -651,14 +684,14 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_VISIBLE_TYPE_ANNOTATIONS:
-            num_annotations = self.read_u2()
+            num_annotations = _fast_u2(self)
             type_annotation_list = [self.read_type_annotation_info() for _ in range(num_annotations)]
             return attributes.RuntimeVisibleTypeAnnotationsAttr(
                 name_index, length, num_annotations, type_annotation_list
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_INVISIBLE_TYPE_ANNOTATIONS:
-            num_annotations = self.read_u2()
+            num_annotations = _fast_u2(self)
             type_annotation_list = [self.read_type_annotation_info() for _ in range(num_annotations)]
             return attributes.RuntimeInvisibleTypeAnnotationsAttr(
                 name_index, length, num_annotations, type_annotation_list
@@ -668,12 +701,12 @@ cdef class ClassReader(BytesReader):
             return attributes.AnnotationDefaultAttr(name_index, length, self.read_element_value_info())
 
         elif attr_type is attributes.AttributeInfoType.BOOTSTRAP_METHODS:
-            num_bootstrap_methods = self.read_u2()
+            num_bootstrap_methods = _fast_u2(self)
             bootstrap_methods = []
             for _ in range(num_bootstrap_methods):
-                bootstrap_method_ref = self.read_u2()
-                num_bootstrap_arguments = self.read_u2()
-                bootstrap_arguments = [self.read_u2() for __ in range(num_bootstrap_arguments)]
+                bootstrap_method_ref = _fast_u2(self)
+                num_bootstrap_arguments = _fast_u2(self)
+                bootstrap_arguments = [_fast_u2(self) for __ in range(num_bootstrap_arguments)]
                 bootstrap_methods.append(
                     attributes.BootstrapMethodInfo(
                         bootstrap_method_ref,
@@ -684,58 +717,58 @@ cdef class ClassReader(BytesReader):
             return attributes.BootstrapMethodsAttr(name_index, length, num_bootstrap_methods, bootstrap_methods)
 
         elif attr_type is attributes.AttributeInfoType.METHOD_PARAMETERS:
-            parameters_count = self.read_u1()
+            parameters_count = _fast_u1(self)
             parameters = [
                 attributes.MethodParameterInfo(
-                    self.read_u2(),
-                    _enum_member(constants.MethodParameterAccessFlag, self.read_u2()),
+                    _fast_u2(self),
+                    _enum_member(constants.MethodParameterAccessFlag, _fast_u2(self)),
                 )
                 for _ in range(parameters_count)
             ]
             return attributes.MethodParametersAttr(name_index, length, parameters_count, parameters)
 
         elif attr_type is attributes.AttributeInfoType.MODULE:
-            module_name_index = self.read_u2()
-            module_flags = _enum_member(constants.ModuleAccessFlag, self.read_u2())
-            module_version_index = self.read_u2()
+            module_name_index = _fast_u2(self)
+            module_flags = _enum_member(constants.ModuleAccessFlag, _fast_u2(self))
+            module_version_index = _fast_u2(self)
 
-            requires_count = self.read_u2()
+            requires_count = _fast_u2(self)
             requires = [
                 attributes.RequiresInfo(
-                    self.read_u2(),
-                    _enum_member(constants.ModuleRequiresAccessFlag, self.read_u2()),
-                    self.read_u2(),
+                    _fast_u2(self),
+                    _enum_member(constants.ModuleRequiresAccessFlag, _fast_u2(self)),
+                    _fast_u2(self),
                 )
                 for _ in range(requires_count)
             ]
 
-            exports_count = self.read_u2()
+            exports_count = _fast_u2(self)
             exports = []
             for _ in range(exports_count):
-                exports_index = self.read_u2()
-                exports_flags = _enum_member(constants.ModuleExportsAccessFlag, self.read_u2())
-                exports_to_count = self.read_u2()
-                exports_to_index = [self.read_u2() for __ in range(exports_to_count)]
+                exports_index = _fast_u2(self)
+                exports_flags = _enum_member(constants.ModuleExportsAccessFlag, _fast_u2(self))
+                exports_to_count = _fast_u2(self)
+                exports_to_index = [_fast_u2(self) for __ in range(exports_to_count)]
                 exports.append(attributes.ExportInfo(exports_index, exports_flags, exports_to_count, exports_to_index))
 
-            opens_count = self.read_u2()
+            opens_count = _fast_u2(self)
             opens = []
             for _ in range(opens_count):
-                opens_index = self.read_u2()
-                opens_flags = _enum_member(constants.ModuleOpensAccessFlag, self.read_u2())
-                opens_to_count = self.read_u2()
-                opens_to_index = [self.read_u2() for __ in range(opens_to_count)]
+                opens_index = _fast_u2(self)
+                opens_flags = _enum_member(constants.ModuleOpensAccessFlag, _fast_u2(self))
+                opens_to_count = _fast_u2(self)
+                opens_to_index = [_fast_u2(self) for __ in range(opens_to_count)]
                 opens.append(attributes.OpensInfo(opens_index, opens_flags, opens_to_count, opens_to_index))
 
-            uses_count = self.read_u2()
-            uses = [self.read_u2() for _ in range(uses_count)]
+            uses_count = _fast_u2(self)
+            uses = [_fast_u2(self) for _ in range(uses_count)]
 
-            provides_count = self.read_u2()
+            provides_count = _fast_u2(self)
             provides = []
             for _ in range(provides_count):
-                provides_index = self.read_u2()
-                provides_with_count = self.read_u2()
-                provides_with_index = [self.read_u2() for __ in range(provides_with_count)]
+                provides_index = _fast_u2(self)
+                provides_with_count = _fast_u2(self)
+                provides_with_index = [_fast_u2(self) for __ in range(provides_with_count)]
                 provides.append(attributes.ProvidesInfo(provides_index, provides_with_count, provides_with_index))
 
             return attributes.ModuleAttr(
@@ -757,22 +790,22 @@ cdef class ClassReader(BytesReader):
             )
 
         elif attr_type is attributes.AttributeInfoType.MODULE_PACKAGES:
-            package_count = self.read_u2()
-            package_index = [self.read_u2() for _ in range(package_count)]
+            package_count = _fast_u2(self)
+            package_index = [_fast_u2(self) for _ in range(package_count)]
             return attributes.ModulePackagesAttr(name_index, length, package_count, package_index)
 
         elif attr_type is attributes.AttributeInfoType.NEST_MEMBERS:
-            number_of_classes = self.read_u2()
-            classes_list = [self.read_u2() for _ in range(number_of_classes)]
+            number_of_classes = _fast_u2(self)
+            classes_list = [_fast_u2(self) for _ in range(number_of_classes)]
             return attributes.NestMembersAttr(name_index, length, number_of_classes, classes_list)
 
         elif attr_type is attributes.AttributeInfoType.RECORD:
-            components_count = self.read_u2()
+            components_count = _fast_u2(self)
             components = []
             for _ in range(components_count):
-                comp_name_index = self.read_u2()
-                descriptor_index = self.read_u2()
-                attributes_count = self.read_u2()
+                comp_name_index = _fast_u2(self)
+                descriptor_index = _fast_u2(self)
+                attributes_count = _fast_u2(self)
                 _attributes = [self.read_attribute() for _ in range(attributes_count)]
                 components.append(
                     attributes.RecordComponentInfo(comp_name_index, descriptor_index, attributes_count, _attributes)
@@ -780,8 +813,8 @@ cdef class ClassReader(BytesReader):
             return attributes.RecordAttr(name_index, length, components_count, components)
 
         elif attr_type is attributes.AttributeInfoType.PERMITTED_SUBCLASSES:
-            number_of_classes = self.read_u2()
-            classes_list = [self.read_u2() for _ in range(number_of_classes)]
+            number_of_classes = _fast_u2(self)
+            classes_list = [_fast_u2(self) for _ in range(number_of_classes)]
             return attributes.PermittedSubclassesAttr(name_index, length, number_of_classes, classes_list)
 
         return attributes.UnimplementedAttr(name_index, length, self.read_bytes(length), attr_type)
@@ -793,10 +826,10 @@ cdef class ClassReader(BytesReader):
             The decoded field info including its attributes.
         """
         cdef int name_index, descriptor_index, attributes_count
-        access_flags = _enum_member(constants.FieldAccessFlag, self.read_u2())
-        name_index = self.read_u2()
-        descriptor_index = self.read_u2()
-        attributes_count = self.read_u2()
+        access_flags = _enum_member(constants.FieldAccessFlag, _fast_u2(self))
+        name_index = _fast_u2(self)
+        descriptor_index = _fast_u2(self)
+        attributes_count = _fast_u2(self)
         attributes = [self.read_attribute() for _ in range(attributes_count)]
         return info.FieldInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
 
@@ -807,10 +840,10 @@ cdef class ClassReader(BytesReader):
             The decoded method info including its attributes.
         """
         cdef int name_index, descriptor_index, attributes_count
-        access_flags = _enum_member(constants.MethodAccessFlag, self.read_u2())
-        name_index = self.read_u2()
-        descriptor_index = self.read_u2()
-        attributes_count = self.read_u2()
+        access_flags = _enum_member(constants.MethodAccessFlag, _fast_u2(self))
+        name_index = _fast_u2(self)
+        descriptor_index = _fast_u2(self)
+        attributes_count = _fast_u2(self)
         attributes = [self.read_attribute() for _ in range(attributes_count)]
         return info.MethodInfo(access_flags, name_index, descriptor_index, attributes_count, attributes)
 
@@ -830,15 +863,15 @@ cdef class ClassReader(BytesReader):
         cdef int interfaces_count, fields_count, methods_count, attributes_count
 
         self.rewind()
-        magic = self.read_u4()
+        magic = _fast_u4(self)
         if magic != constants.MAGIC:
             raise MalformedClassException(f"Invalid magic number 0x{magic:x}, requires 0x{constants.MAGIC:x}")
 
-        minor, major = self.read_u2(), self.read_u2()
+        minor, major = _fast_u2(self), _fast_u2(self)
         if major >= 56 and minor not in (0, 65535):
             raise MalformedClassException(f"Invalid version {major}/{minor}")
 
-        cp_count = self.read_u2()
+        cp_count = _fast_u2(self)
 
         self.constant_pool = [None] * cp_count
         index = 1
@@ -847,20 +880,20 @@ cdef class ClassReader(BytesReader):
             self.constant_pool[index] = cp_info
             index += 1 + index_extra
 
-        access_flags = _enum_member(constants.ClassAccessFlag, self.read_u2())
-        this_class = self.read_u2()
-        super_class = self.read_u2()
+        access_flags = _enum_member(constants.ClassAccessFlag, _fast_u2(self))
+        this_class = _fast_u2(self)
+        super_class = _fast_u2(self)
 
-        interfaces_count = self.read_u2()
-        interfaces = [self.read_u2() for _ in range(interfaces_count)]
+        interfaces_count = _fast_u2(self)
+        interfaces = [_fast_u2(self) for _ in range(interfaces_count)]
 
-        fields_count = self.read_u2()
+        fields_count = _fast_u2(self)
         fields = [self.read_field() for _ in range(fields_count)]
 
-        methods_count = self.read_u2()
+        methods_count = _fast_u2(self)
         methods = [self.read_method() for _ in range(methods_count)]
 
-        attributes_count = self.read_u2()
+        attributes_count = _fast_u2(self)
         attributes = [self.read_attribute() for _ in range(attributes_count)]
 
         self.class_info = info.ClassFile(

@@ -9,39 +9,8 @@ import struct as _struct
 
 from libc.string cimport memcpy
 
-# ---------------------------------------------------------------------------
-# Read helpers — operate on a raw buffer pointer via memoryview
-# ---------------------------------------------------------------------------
-
-cdef inline int _cu1(const unsigned char[:] buf, int off):
-    return buf[off]
-
-cdef inline int _ci1(const unsigned char[:] buf, int off):
-    cdef unsigned char v = buf[off]
-    if v >= 128:
-        return <int>v - 256
-    return <int>v
-
-cdef inline int _cu2(const unsigned char[:] buf, int off):
-    return (buf[off] << 8) | buf[off + 1]
-
-cdef inline int _ci2(const unsigned char[:] buf, int off):
-    cdef int v = (buf[off] << 8) | buf[off + 1]
-    if v >= 32768:
-        return v - 65536
-    return v
-
-cdef inline unsigned int _cu4(const unsigned char[:] buf, int off):
-    return (
-        (<unsigned int>buf[off] << 24)
-        | (<unsigned int>buf[off + 1] << 16)
-        | (<unsigned int>buf[off + 2] << 8)
-        | <unsigned int>buf[off + 3]
-    )
-
-cdef inline int _ci4(const unsigned char[:] buf, int off):
-    cdef unsigned int u = _cu4(buf, off)
-    return <int>u
+# Inline read helpers are defined in the .pxd file and available here
+# automatically via Cython's .pxd/.pyx pairing.
 
 
 # ---------------------------------------------------------------------------
