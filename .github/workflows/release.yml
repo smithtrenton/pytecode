@@ -75,6 +75,8 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
       - name: Sync dependencies
         run: uv sync --dev
+      - name: Build Cython extensions in place
+        run: uv run python setup.py build_ext --inplace
       - name: Validate release tag
         run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
       - name: Lint
@@ -106,6 +108,10 @@ jobs:
           cache-python: true
       - name: Validate release tag
         run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
+      - name: Sync dependencies
+        run: uv sync --only-dev
+      - name: Build Cython extensions in place
+        run: uv run python setup.py build_ext --inplace
       - name: Build distributions
         run: uv build
       - name: Upload distributions

@@ -130,7 +130,13 @@ Supported submodules:
 Create a local environment with development tools:
 
 ```powershell
-uv sync --extra dev
+uv sync --dev
+```
+
+Compile the optional Cython extensions in place when you want the accelerated backend in your checkout:
+
+```powershell
+uv run python setup.py build_ext --inplace
 ```
 
 Common checks:
@@ -154,6 +160,8 @@ Build source and wheel distributions locally:
 ```powershell
 uv build
 ```
+
+`uv build` produces the default pure-Python distributions. Use `setup.py build_ext --inplace` when you want a local checkout to load the compiled Cython modules.
 
 Profile isolated JAR-processing stages without `run.py`'s output overhead:
 

@@ -56,34 +56,23 @@ Future candidates (not in initial scope):
 
 ## Build integration
 
-### `pyproject.toml` + `[tool.setuptools] ext-modules`
+### `setup.py` on-demand compilation
 
-The project uses setuptools as its build backend with no `setup.py`. Cython extensions are declared explicitly in `pyproject.toml` under `[tool.setuptools]`:
+The project keeps setuptools as its build backend, but optional Cython compilation now lives in `setup.py` instead of `pyproject.toml`. The script discovers `*_cy.pyx` modules under `pytecode/` and only calls `cythonize()` when you run an explicit extension build command such as:
 
-```toml
-[build-system]
-requires = ["setuptools>=82.0.1,<83.0.0", "Cython>=3.1.1,<4.0.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-ext-modules = [
-  {name = "pytecode._internal._bytes_utils_cy", sources = ["pytecode/_internal/_bytes_utils_cy.pyx"]},
-  {name = "pytecode.classfile._modified_utf8_cy", sources = ["pytecode/classfile/_modified_utf8_cy.pyx"]},
-  # ... one entry per .pyx file
-]
+```powershell
+uv run python setup.py build_ext --inplace
 ```
 
-Each `.pyx` file must be listed explicitly — there is no glob auto-discovery. When a new Cython module is added, a corresponding entry must be added to `ext-modules` in `pyproject.toml`.
-
-`uv build` invokes the setuptools backend, which calls `cythonize()` on the listed sources and compiles them. When Cython is not installed (e.g., a source install without the `dev` extra), the build proceeds as a pure-Python package (no compiled extensions).
+That keeps the default `uv sync --dev` and `uv build` paths pure Python while still making the accelerated backend available on demand for local profiling, benchmarking, and CI coverage.
 
 ### Dev dependency
 
-Cython is added to `[project.optional-dependencies] dev` so that `uv sync --extra dev` installs it alongside the existing linting and testing tools.
+Cython is added to the `dev` dependency group so that `uv sync --dev` installs it alongside the existing linting and testing tools.
 
 ### Wheel distribution
 
-Built wheels include the compiled `.so`/`.pyd` extensions. Source distributions include the `.pyx` source so that users can compile from source if desired.
+Default wheels are pure Python. Source distributions continue to include the `.pyx` sources so users can compile the optional extensions in their own checkout when desired.
 
 ## Testing strategy
 
