@@ -1,6 +1,49 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True
 """Serialize a ClassFile tree into JVM ``.class`` file bytes (JVMS §4)."""
 
+from ._attributes_cy cimport (
+    AppendFrameInfo,
+    BootstrapMethodInfo,
+    ChopFrameInfo,
+    CodeAttr,
+    ExceptionInfo,
+    FullFrameInfo,
+    InnerClassInfo,
+    LineNumberInfo,
+    LineNumberTableAttr,
+    LocalVariableInfo,
+    LocalVariableTableAttr,
+    LocalVariableTypeInfo,
+    LocalVariableTypeTableAttr,
+    MethodParameterInfo,
+    ObjectVariableInfo,
+    RecordComponentInfo,
+    SameFrameExtendedInfo,
+    SameFrameInfo,
+    SameLocals1StackItemFrameExtendedInfo,
+    SameLocals1StackItemFrameInfo,
+    StackMapTableAttr,
+    UninitializedVariableInfo,
+)
+from ._instructions_cy cimport (
+    Branch,
+    BranchW,
+    ByteValue,
+    ConstPoolIndex,
+    IInc,
+    IIncW,
+    InsnInfo,
+    InvokeDynamic,
+    InvokeInterface,
+    LocalIndex,
+    LocalIndexW,
+    LookupSwitch,
+    MatchOffsetPair,
+    MultiANewArray,
+    NewArray,
+    ShortValue,
+    TableSwitch,
+)
 from pytecode._internal._bytes_utils_cy import BytesWriter
 from . import attributes, constant_pool, instructions
 from .info import ClassFile, FieldInfo, MethodInfo
@@ -201,28 +244,45 @@ cdef _write_attribute_payload(object writer, object attr):
         writer.write_u2(attr.host_class_index)
         return
 
-    if t is attributes.CodeAttr:
+    cdef CodeAttr code_attr
+    cdef StackMapTableAttr stack_map_attr
+    cdef LineNumberTableAttr line_number_table_attr
+    cdef LocalVariableTableAttr local_variable_table_attr
+    cdef LocalVariableTypeTableAttr local_variable_type_table_attr
+    cdef ExceptionInfo exception_info
+    cdef BootstrapMethodInfo bootstrap_method_info
+    cdef InnerClassInfo inner_class_info
+    cdef LineNumberInfo line_number_info
+    cdef LocalVariableInfo local_variable_info
+    cdef LocalVariableTypeInfo local_variable_type_info
+    cdef MethodParameterInfo method_parameter_info
+    cdef RecordComponentInfo record_component_info
+
+    if t is CodeAttr:
+        code_attr = attr
         code_writer = BytesWriter()
-        for insn in attr.code:
+        for insn in code_attr.code:
             _write_instruction(code_writer, insn)
         code_bytes = code_writer.to_bytes()
 
-        writer.write_u2(attr.max_stacks)
-        writer.write_u2(attr.max_locals)
+        writer.write_u2(code_attr.max_stacks)
+        writer.write_u2(code_attr.max_locals)
         writer.write_u4(len(code_bytes))
         writer.write_bytes(code_bytes)
-        writer.write_u2(len(attr.exception_table))
-        for exception in attr.exception_table:
-            writer.write_u2(exception.start_pc)
-            writer.write_u2(exception.end_pc)
-            writer.write_u2(exception.handler_pc)
-            writer.write_u2(exception.catch_type)
-        _write_attributes(writer, attr.attributes)
+        writer.write_u2(len(code_attr.exception_table))
+        for exception in code_attr.exception_table:
+            exception_info = exception
+            writer.write_u2(exception_info.start_pc)
+            writer.write_u2(exception_info.end_pc)
+            writer.write_u2(exception_info.handler_pc)
+            writer.write_u2(exception_info.catch_type)
+        _write_attributes(writer, code_attr.attributes)
         return
 
-    if t is attributes.StackMapTableAttr:
-        writer.write_u2(len(attr.entries))
-        for entry in attr.entries:
+    if t is StackMapTableAttr:
+        stack_map_attr = attr
+        writer.write_u2(len(stack_map_attr.entries))
+        for entry in stack_map_attr.entries:
             _write_stack_map_frame_info(writer, entry)
         return
 
@@ -235,10 +295,11 @@ cdef _write_attribute_payload(object writer, object attr):
     if t is attributes.InnerClassesAttr:
         writer.write_u2(len(attr.classes))
         for entry in attr.classes:
-            writer.write_u2(entry.inner_class_info_index)
-            writer.write_u2(entry.outer_class_info_index)
-            writer.write_u2(entry.inner_name_index)
-            writer.write_u2(int(entry.inner_class_access_flags))
+            inner_class_info = entry
+            writer.write_u2(inner_class_info.inner_class_info_index)
+            writer.write_u2(inner_class_info.outer_class_info_index)
+            writer.write_u2(inner_class_info.inner_name_index)
+            writer.write_u2(int(inner_class_info.inner_class_access_flags))
         return
 
     if t is attributes.EnclosingMethodAttr:
@@ -250,31 +311,37 @@ cdef _write_attribute_payload(object writer, object attr):
         writer.write_bytes(attr.debug_extension.encode("utf-8"))
         return
 
-    if t is attributes.LineNumberTableAttr:
-        writer.write_u2(len(attr.line_number_table))
-        for entry in attr.line_number_table:
-            writer.write_u2(entry.start_pc)
-            writer.write_u2(entry.line_number)
+    if t is LineNumberTableAttr:
+        line_number_table_attr = attr
+        writer.write_u2(len(line_number_table_attr.line_number_table))
+        for entry in line_number_table_attr.line_number_table:
+            line_number_info = entry
+            writer.write_u2(line_number_info.start_pc)
+            writer.write_u2(line_number_info.line_number)
         return
 
-    if t is attributes.LocalVariableTableAttr:
-        writer.write_u2(len(attr.local_variable_table))
-        for entry in attr.local_variable_table:
-            writer.write_u2(entry.start_pc)
-            writer.write_u2(entry.length)
-            writer.write_u2(entry.name_index)
-            writer.write_u2(entry.descriptor_index)
-            writer.write_u2(entry.index)
+    if t is LocalVariableTableAttr:
+        local_variable_table_attr = attr
+        writer.write_u2(len(local_variable_table_attr.local_variable_table))
+        for entry in local_variable_table_attr.local_variable_table:
+            local_variable_info = entry
+            writer.write_u2(local_variable_info.start_pc)
+            writer.write_u2(local_variable_info.length)
+            writer.write_u2(local_variable_info.name_index)
+            writer.write_u2(local_variable_info.descriptor_index)
+            writer.write_u2(local_variable_info.index)
         return
 
-    if t is attributes.LocalVariableTypeTableAttr:
-        writer.write_u2(len(attr.local_variable_type_table))
-        for entry in attr.local_variable_type_table:
-            writer.write_u2(entry.start_pc)
-            writer.write_u2(entry.length)
-            writer.write_u2(entry.name_index)
-            writer.write_u2(entry.signature_index)
-            writer.write_u2(entry.index)
+    if t is LocalVariableTypeTableAttr:
+        local_variable_type_table_attr = attr
+        writer.write_u2(len(local_variable_type_table_attr.local_variable_type_table))
+        for entry in local_variable_type_table_attr.local_variable_type_table:
+            local_variable_type_info = entry
+            writer.write_u2(local_variable_type_info.start_pc)
+            writer.write_u2(local_variable_type_info.length)
+            writer.write_u2(local_variable_type_info.name_index)
+            writer.write_u2(local_variable_type_info.signature_index)
+            writer.write_u2(local_variable_type_info.index)
         return
 
     if t is attributes.RuntimeVisibleAnnotationsAttr or t is attributes.RuntimeInvisibleAnnotationsAttr:
@@ -304,17 +371,19 @@ cdef _write_attribute_payload(object writer, object attr):
     if t is attributes.BootstrapMethodsAttr:
         writer.write_u2(len(attr.bootstrap_methods))
         for method in attr.bootstrap_methods:
-            writer.write_u2(method.bootstrap_method_ref)
-            writer.write_u2(len(method.boostrap_arguments))
-            for argument in method.boostrap_arguments:
+            bootstrap_method_info = method
+            writer.write_u2(bootstrap_method_info.bootstrap_method_ref)
+            writer.write_u2(len(bootstrap_method_info.boostrap_arguments))
+            for argument in bootstrap_method_info.boostrap_arguments:
                 writer.write_u2(argument)
         return
 
     if t is attributes.MethodParametersAttr:
         writer.write_u1(len(attr.parameters))
         for parameter in attr.parameters:
-            writer.write_u2(parameter.name_index)
-            writer.write_u2(int(parameter.access_flags))
+            method_parameter_info = parameter
+            writer.write_u2(method_parameter_info.name_index)
+            writer.write_u2(int(method_parameter_info.access_flags))
         return
 
     if t is attributes.ModuleAttr:
@@ -371,9 +440,10 @@ cdef _write_attribute_payload(object writer, object attr):
     if t is attributes.RecordAttr:
         writer.write_u2(len(attr.components))
         for component in attr.components:
-            writer.write_u2(component.name_index)
-            writer.write_u2(component.descriptor_index)
-            _write_attributes(writer, component.attributes)
+            record_component_info = component
+            writer.write_u2(record_component_info.name_index)
+            writer.write_u2(record_component_info.descriptor_index)
+            _write_attributes(writer, record_component_info.attributes)
         return
 
     if t is attributes.PermittedSubclassesAttr:
@@ -393,27 +463,27 @@ cdef _write_stack_map_frame_info(object writer, object entry):
     cdef type t = type(entry)
     writer.write_u1(entry.frame_type)
 
-    if t is attributes.SameFrameInfo:
+    if t is SameFrameInfo:
         return
-    if t is attributes.SameLocals1StackItemFrameInfo:
+    if t is SameLocals1StackItemFrameInfo:
         _write_verification_type_info(writer, entry.stack)
         return
-    if t is attributes.SameLocals1StackItemFrameExtendedInfo:
+    if t is SameLocals1StackItemFrameExtendedInfo:
         writer.write_u2(entry.offset_delta)
         _write_verification_type_info(writer, entry.stack)
         return
-    if t is attributes.ChopFrameInfo:
+    if t is ChopFrameInfo:
         writer.write_u2(entry.offset_delta)
         return
-    if t is attributes.SameFrameExtendedInfo:
+    if t is SameFrameExtendedInfo:
         writer.write_u2(entry.offset_delta)
         return
-    if t is attributes.AppendFrameInfo:
+    if t is AppendFrameInfo:
         writer.write_u2(entry.offset_delta)
         for local in entry.locals:
             _write_verification_type_info(writer, local)
         return
-    if t is attributes.FullFrameInfo:
+    if t is FullFrameInfo:
         writer.write_u2(entry.offset_delta)
         writer.write_u2(len(entry.locals))
         for local in entry.locals:
@@ -430,9 +500,9 @@ cdef _write_verification_type_info(object writer, object entry):
     cdef type t = type(entry)
     writer.write_u1(int(entry.tag))
 
-    if t is attributes.ObjectVariableInfo:
+    if t is ObjectVariableInfo:
         writer.write_u2(entry.cpool_index)
-    elif t is attributes.UninitializedVariableInfo:
+    elif t is UninitializedVariableInfo:
         writer.write_u2(entry.offset)
 
 
@@ -557,63 +627,97 @@ cdef _write_type_path_info(object writer, object type_path):
 
 cdef _write_instruction(object writer, object insn):
     cdef type t = type(insn)
-    if t is instructions.LocalIndexW:
+    cdef InsnInfo base_insn
+    cdef LocalIndexW local_index_w
+    cdef IIncW iinc_w
+    cdef LocalIndex local_index
+    cdef ConstPoolIndex const_pool_index
+    cdef ByteValue byte_value
+    cdef ShortValue short_value
+    cdef Branch branch
+    cdef BranchW branch_w
+    cdef IInc iinc
+    cdef InvokeDynamic invoke_dynamic
+    cdef InvokeInterface invoke_interface
+    cdef MultiANewArray multi_anew_array
+    cdef NewArray new_array
+    cdef LookupSwitch lookup_switch
+    cdef MatchOffsetPair pair
+    cdef TableSwitch table_switch
+    cdef Py_ssize_t offset
+    if t is LocalIndexW:
+        local_index_w = insn
         writer.write_u1(int(instructions.InsnInfoType.WIDE))
-        writer.write_u1(int(insn.type) - int(instructions.InsnInfoType.WIDE))
-        writer.write_u2(insn.index)
+        writer.write_u1(int(local_index_w.type) - int(instructions.InsnInfoType.WIDE))
+        writer.write_u2(local_index_w.index)
         return
 
-    if t is instructions.IIncW:
+    if t is IIncW:
+        iinc_w = insn
         writer.write_u1(int(instructions.InsnInfoType.WIDE))
-        writer.write_u1(int(insn.type) - int(instructions.InsnInfoType.WIDE))
-        writer.write_u2(insn.index)
-        writer.write_i2(insn.value)
+        writer.write_u1(int(iinc_w.type) - int(instructions.InsnInfoType.WIDE))
+        writer.write_u2(iinc_w.index)
+        writer.write_i2(iinc_w.value)
         return
 
-    writer.write_u1(int(insn.type))
+    base_insn = insn
+    writer.write_u1(int(base_insn.type))
 
-    if t is instructions.LocalIndex:
-        writer.write_u1(insn.index)
-    elif t is instructions.ConstPoolIndex:
-        writer.write_u2(insn.index)
-    elif t is instructions.ByteValue:
-        writer.write_i1(insn.value)
-    elif t is instructions.ShortValue:
-        writer.write_i2(insn.value)
-    elif t is instructions.Branch:
-        writer.write_i2(insn.offset)
-    elif t is instructions.BranchW:
-        writer.write_i4(insn.offset)
-    elif t is instructions.IInc:
-        writer.write_u1(insn.index)
-        writer.write_i1(insn.value)
-    elif t is instructions.InvokeDynamic:
-        if len(insn.unused) != 2:
+    if t is LocalIndex:
+        local_index = insn
+        writer.write_u1(local_index.index)
+    elif t is ConstPoolIndex:
+        const_pool_index = insn
+        writer.write_u2(const_pool_index.index)
+    elif t is ByteValue:
+        byte_value = insn
+        writer.write_i1(byte_value.value)
+    elif t is ShortValue:
+        short_value = insn
+        writer.write_i2(short_value.value)
+    elif t is Branch:
+        branch = insn
+        writer.write_i2(branch.offset)
+    elif t is BranchW:
+        branch_w = insn
+        writer.write_i4(branch_w.offset)
+    elif t is IInc:
+        iinc = insn
+        writer.write_u1(iinc.index)
+        writer.write_i1(iinc.value)
+    elif t is InvokeDynamic:
+        invoke_dynamic = insn
+        if len(invoke_dynamic.unused) != 2:
             raise ValueError("InvokeDynamic unused bytes must be exactly 2 bytes")
-        writer.write_u2(insn.index)
-        writer.write_bytes(insn.unused)
-    elif t is instructions.InvokeInterface:
-        if len(insn.unused) != 1:
+        writer.write_u2(invoke_dynamic.index)
+        writer.write_bytes(invoke_dynamic.unused)
+    elif t is InvokeInterface:
+        invoke_interface = insn
+        if len(invoke_interface.unused) != 1:
             raise ValueError("InvokeInterface unused bytes must be exactly 1 byte")
-        writer.write_u2(insn.index)
-        writer.write_u1(insn.count)
-        writer.write_bytes(insn.unused)
-    elif t is instructions.MultiANewArray:
-        writer.write_u2(insn.index)
-        writer.write_u1(insn.dimensions)
-    elif t is instructions.NewArray:
-        writer.write_u1(int(insn.atype))
-    elif t is instructions.LookupSwitch:
+        writer.write_u2(invoke_interface.index)
+        writer.write_u1(invoke_interface.count)
+        writer.write_bytes(invoke_interface.unused)
+    elif t is MultiANewArray:
+        multi_anew_array = insn
+        writer.write_u2(multi_anew_array.index)
+        writer.write_u1(multi_anew_array.dimensions)
+    elif t is NewArray:
+        new_array = insn
+        writer.write_u1(int(new_array.atype))
+    elif t is LookupSwitch:
+        lookup_switch = insn
         writer.align(4)
-        writer.write_i4(insn.default)
-        writer.write_u4(len(insn.pairs))
-        for pair in insn.pairs:
+        writer.write_i4(lookup_switch.default)
+        writer.write_u4(len(lookup_switch.pairs))
+        for pair in lookup_switch.pairs:
             writer.write_i4(pair.match)
             writer.write_i4(pair.offset)
-    elif t is instructions.TableSwitch:
+    elif t is TableSwitch:
+        table_switch = insn
         writer.align(4)
-        writer.write_i4(insn.default)
-        writer.write_i4(insn.low)
-        writer.write_i4(insn.high)
-        for offset in insn.offsets:
+        writer.write_i4(table_switch.default)
+        writer.write_i4(table_switch.low)
+        writer.write_i4(table_switch.high)
+        for offset in table_switch.offsets:
             writer.write_i4(offset)

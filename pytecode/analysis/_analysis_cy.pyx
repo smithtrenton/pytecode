@@ -26,6 +26,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..edit._labels_cy cimport (
+    BranchInsn as CBranchInsn,
+    ExceptionHandler as CExceptionHandler,
+    Label as CLabel,
+    LookupSwitchInsn as CLookupSwitchInsn,
+    TableSwitchInsn as CTableSwitchInsn,
+)
 from ..classfile.attributes import (
     AppendFrameInfo,
     ChopFrameInfo,
@@ -864,6 +871,10 @@ def build_cfg(code: CodeModel):
     Returns:
         A ``ControlFlowGraph`` with edges for all control-flow paths.
     """
+    cdef CBranchInsn branch_insn
+    cdef CLookupSwitchInsn lookup_switch_insn
+    cdef CTableSwitchInsn table_switch_insn
+    cdef CExceptionHandler exception_handler
     items = code.instructions
     if not items:
         empty_block = BasicBlock(id=0, label=None, instructions=[], successor_ids=[], exception_handler_ids=[])
@@ -885,21 +896,25 @@ def build_cfg(code: CodeModel):
     # Labels used as branch targets
     for item in items:
         if isinstance(item, BranchInsn):
-            target_labels.add(id(item.target))
+            branch_insn = item
+            target_labels.add(id(branch_insn.target))
         elif isinstance(item, LookupSwitchInsn):
-            target_labels.add(id(item.default_target))
-            for _, lbl in item.pairs:
+            lookup_switch_insn = item
+            target_labels.add(id(lookup_switch_insn.default_target))
+            for _, lbl in lookup_switch_insn.pairs:
                 target_labels.add(id(lbl))
         elif isinstance(item, TableSwitchInsn):
-            target_labels.add(id(item.default_target))
-            for lbl in item.targets:
+            table_switch_insn = item
+            target_labels.add(id(table_switch_insn.default_target))
+            for lbl in table_switch_insn.targets:
                 target_labels.add(id(lbl))
 
     # Labels used in exception handlers
     for eh in code.exception_handlers:
-        target_labels.add(id(eh.start))
-        target_labels.add(id(eh.end))
-        target_labels.add(id(eh.handler))
+        exception_handler = eh
+        target_labels.add(id(exception_handler.start))
+        target_labels.add(id(exception_handler.end))
+        target_labels.add(id(exception_handler.handler))
 
     # First real instruction is always a leader.
     first_insn_idx = _find_first_insn(items)
@@ -1025,22 +1040,25 @@ def build_cfg(code: CodeModel):
 
         # Branch targets
         if isinstance(last_insn, BranchInsn):
-            target_block = label_to_block_map.get(last_insn.target)
+            branch_insn = last_insn
+            target_block = label_to_block_map.get(branch_insn.target)
             if target_block is not None:
                 block.successor_ids.append(target_block.id)
         elif isinstance(last_insn, LookupSwitchInsn):
-            default_block = label_to_block_map.get(last_insn.default_target)
+            lookup_switch_insn = last_insn
+            default_block = label_to_block_map.get(lookup_switch_insn.default_target)
             if default_block is not None:
                 block.successor_ids.append(default_block.id)
-            for _, lbl in last_insn.pairs:
+            for _, lbl in lookup_switch_insn.pairs:
                 target_block = label_to_block_map.get(lbl)
                 if target_block is not None and target_block.id not in block.successor_ids:
                     block.successor_ids.append(target_block.id)
         elif isinstance(last_insn, TableSwitchInsn):
-            default_block = label_to_block_map.get(last_insn.default_target)
+            table_switch_insn = last_insn
+            default_block = label_to_block_map.get(table_switch_insn.default_target)
             if default_block is not None:
                 block.successor_ids.append(default_block.id)
-            for lbl in last_insn.targets:
+            for lbl in table_switch_insn.targets:
                 target_block = label_to_block_map.get(lbl)
                 if target_block is not None and target_block.id not in block.successor_ids:
                     block.successor_ids.append(target_block.id)
@@ -1687,7 +1705,7 @@ cdef object _simulate_ldc_insn(insn: LdcInsn, state: FrameState):
         return state.push(vt)
 
 
-cdef object _simulate_branch_insn(insn: BranchInsn, state: FrameState):
+cdef object _simulate_branch_insn(CBranchInsn insn, state: FrameState):
     """Simulate the stack effect of a branch instruction (pop condition operands)."""
     effect = OPCODE_EFFECTS.get(insn.type)
     if effect is not None and effect.pops > 0:

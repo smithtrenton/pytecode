@@ -1,17 +1,33 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True
 """Mutable editing models for JVM class files.
 
-Provides dataclass-based wrappers (``ClassModel``, ``MethodModel``,
+Provides Cython extension-type wrappers (``ClassModel``, ``MethodModel``,
 ``FieldModel``, ``CodeModel``) that resolve raw constant-pool indexes
 into symbolic string references, making class-file content easy to
 inspect and transform programmatically.
 """
 
-from dataclasses import dataclass, field
+import copy
 from typing import TYPE_CHECKING
 
 __all__ = ["ClassModel", "CodeModel", "FieldModel", "MethodModel"]
 
+from ..classfile._instructions_cy cimport (
+    Branch as CBranch,
+    BranchW as CBranchW,
+    ConstPoolIndex as CConstPoolIndex,
+    IInc as CIInc,
+    IIncW as CIIncW,
+    InvokeDynamic as CInvokeDynamic,
+    InvokeInterface as CInvokeInterface,
+    LocalIndex as CLocalIndex,
+    LocalIndexW as CLocalIndexW,
+    LookupSwitch as CLookupSwitch,
+    MatchOffsetPair as CMatchOffsetPair,
+    MultiANewArray as CMultiANewArray,
+    TableSwitch as CTableSwitch,
+)
+from ._labels_cy cimport Label as CLabel
 from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
@@ -124,10 +140,48 @@ _trusted_multi_anew_array_insn = MultiANewArrayInsn._trusted
 _trusted_type_insn = TypeInsn._trusted
 _trusted_var_insn = VarInsn._trusted
 _trusted_iinc_insn = IIncInsn._trusted
+_MISSING = object()
 
 
-@dataclass
-class CodeModel:
+def _repr_fields(str class_name, tuple fields):
+    return f"{class_name}(" + ", ".join(f"{name}={value!r}" for name, value in fields) + ")"
+
+
+cdef class _ModelBase:
+    def _init_values(self):
+        raise NotImplementedError
+
+    def _compare_values(self):
+        return self._init_values()
+
+    def _repr_items(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._repr_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._compare_values() == other._compare_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._init_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._init_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._init_values()
+
+
+cdef class CodeModel(_ModelBase):
     """Mutable wrapper around a method's Code attribute (JVMS §4.7.3).
 
     Carries a mixed instruction stream of raw opcodes and ``Label``
@@ -147,20 +201,83 @@ class CodeModel:
         debug_info_state: Tracks whether debug tables are fresh or stale.
     """
 
-    max_stack: int
-    max_locals: int
-    instructions: list = field(default_factory=list)
-    exception_handlers: list = field(default_factory=list)
-    line_numbers: list = field(default_factory=list)
-    local_variables: list = field(default_factory=list)
-    local_variable_types: list = field(default_factory=list)
-    attributes: list = field(default_factory=list)
-    _nested_attribute_layout: tuple = field(default_factory=tuple, repr=False, compare=False)
-    debug_info_state: object = DebugInfoState.FRESH
+    cdef public Py_ssize_t max_stack
+    cdef public Py_ssize_t max_locals
+    cdef public list instructions
+    cdef public list exception_handlers
+    cdef public list line_numbers
+    cdef public list local_variables
+    cdef public list local_variable_types
+    cdef public list attributes
+    cdef public object _nested_attribute_layout
+    cdef public object debug_info_state
+
+    def __init__(
+        self,
+        Py_ssize_t max_stack,
+        Py_ssize_t max_locals,
+        object instructions=_MISSING,
+        object exception_handlers=_MISSING,
+        object line_numbers=_MISSING,
+        object local_variables=_MISSING,
+        object local_variable_types=_MISSING,
+        object attributes=_MISSING,
+        object _nested_attribute_layout=(),
+        object debug_info_state=DebugInfoState.FRESH,
+    ):
+        self.max_stack = max_stack
+        self.max_locals = max_locals
+        self.instructions = [] if instructions is _MISSING else instructions
+        self.exception_handlers = [] if exception_handlers is _MISSING else exception_handlers
+        self.line_numbers = [] if line_numbers is _MISSING else line_numbers
+        self.local_variables = [] if local_variables is _MISSING else local_variables
+        self.local_variable_types = [] if local_variable_types is _MISSING else local_variable_types
+        self.attributes = [] if attributes is _MISSING else attributes
+        self._nested_attribute_layout = _nested_attribute_layout
+        self.debug_info_state = debug_info_state
+
+    def _init_values(self):
+        return (
+            self.max_stack,
+            self.max_locals,
+            self.instructions,
+            self.exception_handlers,
+            self.line_numbers,
+            self.local_variables,
+            self.local_variable_types,
+            self.attributes,
+            self._nested_attribute_layout,
+            self.debug_info_state,
+        )
+
+    def _compare_values(self):
+        return (
+            self.max_stack,
+            self.max_locals,
+            self.instructions,
+            self.exception_handlers,
+            self.line_numbers,
+            self.local_variables,
+            self.local_variable_types,
+            self.attributes,
+            self.debug_info_state,
+        )
+
+    def _repr_items(self):
+        return (
+            ("max_stack", self.max_stack),
+            ("max_locals", self.max_locals),
+            ("instructions", self.instructions),
+            ("exception_handlers", self.exception_handlers),
+            ("line_numbers", self.line_numbers),
+            ("local_variables", self.local_variables),
+            ("local_variable_types", self.local_variable_types),
+            ("attributes", self.attributes),
+            ("debug_info_state", self.debug_info_state),
+        )
 
 
-@dataclass
-class FieldModel:
+cdef class FieldModel(_ModelBase):
     """Mutable wrapper around a class field (JVMS §4.5).
 
     Attributes:
@@ -170,14 +287,30 @@ class FieldModel:
         attributes: Raw field-level attributes (e.g. ConstantValue).
     """
 
-    access_flags: object
-    name: str
-    descriptor: str
-    attributes: list
+    cdef public object access_flags
+    cdef public object name
+    cdef public object descriptor
+    cdef public list attributes
+
+    def __init__(self, object access_flags, object name, object descriptor, object attributes):
+        self.access_flags = access_flags
+        self.name = name
+        self.descriptor = descriptor
+        self.attributes = attributes
+
+    def _init_values(self):
+        return (self.access_flags, self.name, self.descriptor, self.attributes)
+
+    def _repr_items(self):
+        return (
+            ("access_flags", self.access_flags),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+            ("attributes", self.attributes),
+        )
 
 
-@dataclass
-class MethodModel:
+cdef class MethodModel(_ModelBase):
     """Mutable wrapper around a class method (JVMS §4.6).
 
     The ``code`` field is ``None`` for abstract and native methods.
@@ -192,15 +325,33 @@ class MethodModel:
         attributes: Non-Code method-level attributes (e.g. Exceptions).
     """
 
-    access_flags: object
-    name: str
-    descriptor: str
-    code: object
-    attributes: list
+    cdef public object access_flags
+    cdef public object name
+    cdef public object descriptor
+    cdef public object code
+    cdef public list attributes
+
+    def __init__(self, object access_flags, object name, object descriptor, object code, object attributes):
+        self.access_flags = access_flags
+        self.name = name
+        self.descriptor = descriptor
+        self.code = code
+        self.attributes = attributes
+
+    def _init_values(self):
+        return (self.access_flags, self.name, self.descriptor, self.code, self.attributes)
+
+    def _repr_items(self):
+        return (
+            ("access_flags", self.access_flags),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+            ("code", self.code),
+            ("attributes", self.attributes),
+        )
 
 
-@dataclass
-class ClassModel:
+cdef class ClassModel(_ModelBase):
     """Mutable editing model for a JVM class file (JVMS §4.1).
 
     Fields use symbolic (resolved) references — plain strings for class
@@ -226,16 +377,68 @@ class ClassModel:
         debug_info_state: Tracks whether debug metadata is fresh or stale.
     """
 
-    version: tuple
-    access_flags: object
-    name: str
-    super_name: object
-    interfaces: list
-    fields: list
-    methods: list
-    attributes: list
-    constant_pool: object = field(default_factory=ConstantPoolBuilder)
-    debug_info_state: object = DebugInfoState.FRESH
+    cdef public object version
+    cdef public object access_flags
+    cdef public object name
+    cdef public object super_name
+    cdef public list interfaces
+    cdef public list fields
+    cdef public list methods
+    cdef public list attributes
+    cdef public object constant_pool
+    cdef public object debug_info_state
+
+    def __init__(
+        self,
+        object version,
+        object access_flags,
+        object name,
+        object super_name,
+        object interfaces,
+        object fields,
+        object methods,
+        object attributes,
+        object constant_pool=_MISSING,
+        object debug_info_state=DebugInfoState.FRESH,
+    ):
+        self.version = version
+        self.access_flags = access_flags
+        self.name = name
+        self.super_name = super_name
+        self.interfaces = interfaces
+        self.fields = fields
+        self.methods = methods
+        self.attributes = attributes
+        self.constant_pool = ConstantPoolBuilder() if constant_pool is _MISSING else constant_pool
+        self.debug_info_state = debug_info_state
+
+    def _init_values(self):
+        return (
+            self.version,
+            self.access_flags,
+            self.name,
+            self.super_name,
+            self.interfaces,
+            self.fields,
+            self.methods,
+            self.attributes,
+            self.constant_pool,
+            self.debug_info_state,
+        )
+
+    def _repr_items(self):
+        return (
+            ("version", self.version),
+            ("access_flags", self.access_flags),
+            ("name", self.name),
+            ("super_name", self.super_name),
+            ("interfaces", self.interfaces),
+            ("fields", self.fields),
+            ("methods", self.methods),
+            ("attributes", self.attributes),
+            ("constant_pool", self.constant_pool),
+            ("debug_info_state", self.debug_info_state),
+        )
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -532,7 +735,7 @@ cdef inline int _validate_code_offset(int offset, int code_length, str context):
     return offset
 
 
-cdef inline object _label_for_offset(dict labels_by_offset, int offset):
+cdef inline CLabel _label_for_offset(dict labels_by_offset, int offset):
     return labels_by_offset[offset]
 
 
@@ -630,12 +833,32 @@ cdef object _lift_instruction(
     dict labels_by_offset,
     object cp,
 ):
+    cdef CBranch branch_insn
+    cdef CBranchW branch_w_insn
+    cdef CLookupSwitch lookup_switch
+    cdef CTableSwitch table_switch
+    cdef CIInc iinc_insn
+    cdef CIIncW iinc_w_insn
+    cdef CInvokeDynamic invoke_dynamic
+    cdef CInvokeInterface invoke_interface
+    cdef CMultiANewArray multi_anew_array
+    cdef CConstPoolIndex const_pool_insn
+    cdef CLocalIndexW local_index_w
+    cdef CLocalIndex local_index
+    cdef CMatchOffsetPair pair
+    cdef Py_ssize_t relative
     insn_type = type(insn)
-    if insn_type is Branch or insn_type is BranchW:
+    if insn_type is Branch:
         branch_insn = insn
         return _trusted_branch_insn(
             branch_insn.type,
             _label_for_offset(labels_by_offset, branch_insn.bytecode_offset + branch_insn.offset),
+        )
+    if insn_type is BranchW:
+        branch_w_insn = insn
+        return _trusted_branch_insn(
+            branch_w_insn.type,
+            _label_for_offset(labels_by_offset, branch_w_insn.bytecode_offset + branch_w_insn.offset),
         )
     if insn_type is LookupSwitch:
         lookup_switch = insn
@@ -672,9 +895,12 @@ cdef object _lift_instruction(
                 for relative in table_switch.offsets
             ],
         )
-    if insn_type is IInc or insn_type is IIncW:
+    if insn_type is IInc:
         iinc_insn = insn
         return _trusted_iinc_insn(iinc_insn.index, iinc_insn.value)
+    if insn_type is IIncW:
+        iinc_w_insn = insn
+        return _trusted_iinc_insn(iinc_w_insn.index, iinc_w_insn.value)
     if insn_type is InvokeDynamic:
         invoke_dynamic = insn
         return _lift_invoke_dynamic(invoke_dynamic, cp)

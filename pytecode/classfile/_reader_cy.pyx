@@ -10,6 +10,56 @@ import os
 
 from pytecode._internal._bytes_utils_cy import BytesReader
 from pytecode._internal._bytes_utils_cy cimport BytesReader, _cu1, _ci1, _cu2, _ci2, _cu4, _ci4
+from ._attributes_cy cimport (
+    AppendFrameInfo,
+    AttributeInfo,
+    BootstrapMethodInfo,
+    ChopFrameInfo,
+    CodeAttr,
+    ExceptionInfo,
+    FloatVariableInfo,
+    FullFrameInfo,
+    IntegerVariableInfo,
+    InnerClassInfo,
+    LineNumberInfo,
+    LineNumberTableAttr,
+    LocalVariableInfo,
+    LocalVariableTableAttr,
+    LocalVariableTypeInfo,
+    LocalVariableTypeTableAttr,
+    LongVariableInfo,
+    MethodParameterInfo,
+    NullVariableInfo,
+    ObjectVariableInfo,
+    RecordComponentInfo,
+    SameFrameExtendedInfo,
+    SameFrameInfo,
+    SameLocals1StackItemFrameExtendedInfo,
+    SameLocals1StackItemFrameInfo,
+    StackMapTableAttr,
+    TopVariableInfo,
+    UninitializedThisVariableInfo,
+    UninitializedVariableInfo,
+)
+from ._instructions_cy cimport (
+    Branch,
+    BranchW,
+    ByteValue,
+    ConstPoolIndex,
+    IInc,
+    IIncW,
+    InsnInfo,
+    InvokeDynamic,
+    InvokeInterface,
+    LocalIndex,
+    LocalIndexW,
+    LookupSwitch,
+    MatchOffsetPair,
+    MultiANewArray,
+    NewArray,
+    ShortValue,
+    TableSwitch,
+)
 from . import attributes, constant_pool, constants, info, instructions
 from .modified_utf8 import decode_modified_utf8
 
@@ -250,6 +300,7 @@ cdef class ClassReader(BytesReader):
         """
         cdef int opcode, wide_opcode
         cdef object instinfo, wide_inst_type, atype
+        cdef Py_ssize_t index, value, count, dimensions, default, npairs, low, high
         opcode = _fast_u1(self)
         inst_type = _INSTRUCTION_TYPES[opcode]
         if inst_type is None:
@@ -257,43 +308,43 @@ cdef class ClassReader(BytesReader):
             instinfo = inst_type.instinfo
         else:
             instinfo = _INSTRUCTION_INFOS[opcode]
-        if instinfo is instructions.LocalIndex:
-            return instructions.LocalIndex(inst_type, current_method_offset, _fast_u1(self))
-        elif instinfo is instructions.ConstPoolIndex:
-            return instructions.ConstPoolIndex(inst_type, current_method_offset, _fast_u2(self))
-        elif instinfo is instructions.ByteValue:
-            return instructions.ByteValue(inst_type, current_method_offset, _fast_i1(self))
-        elif instinfo is instructions.ShortValue:
-            return instructions.ShortValue(inst_type, current_method_offset, _fast_i2(self))
-        elif instinfo is instructions.Branch:
-            return instructions.Branch(inst_type, current_method_offset, _fast_i2(self))
-        elif instinfo is instructions.BranchW:
-            return instructions.BranchW(inst_type, current_method_offset, _fast_i4(self))
-        elif instinfo is instructions.IInc:
+        if instinfo is LocalIndex:
+            return LocalIndex(inst_type, current_method_offset, _fast_u1(self))
+        elif instinfo is ConstPoolIndex:
+            return ConstPoolIndex(inst_type, current_method_offset, _fast_u2(self))
+        elif instinfo is ByteValue:
+            return ByteValue(inst_type, current_method_offset, _fast_i1(self))
+        elif instinfo is ShortValue:
+            return ShortValue(inst_type, current_method_offset, _fast_i2(self))
+        elif instinfo is Branch:
+            return Branch(inst_type, current_method_offset, _fast_i2(self))
+        elif instinfo is BranchW:
+            return BranchW(inst_type, current_method_offset, _fast_i4(self))
+        elif instinfo is IInc:
             index, value = _fast_u1(self), _fast_i1(self)
-            return instructions.IInc(inst_type, current_method_offset, index, value)
-        elif instinfo is instructions.InvokeDynamic:
+            return IInc(inst_type, current_method_offset, index, value)
+        elif instinfo is InvokeDynamic:
             index, unused = _fast_u2(self), self.read_bytes(2)
-            return instructions.InvokeDynamic(inst_type, current_method_offset, index, unused)
-        elif instinfo is instructions.InvokeInterface:
+            return InvokeDynamic(inst_type, current_method_offset, index, unused)
+        elif instinfo is InvokeInterface:
             index, count, unused = _fast_u2(self), _fast_u1(self), self.read_bytes(1)
-            return instructions.InvokeInterface(inst_type, current_method_offset, index, count, unused)
-        elif instinfo is instructions.MultiANewArray:
+            return InvokeInterface(inst_type, current_method_offset, index, count, unused)
+        elif instinfo is MultiANewArray:
             index, dimensions = _fast_u2(self), _fast_u1(self)
-            return instructions.MultiANewArray(inst_type, current_method_offset, index, dimensions)
-        elif instinfo is instructions.NewArray:
+            return MultiANewArray(inst_type, current_method_offset, index, dimensions)
+        elif instinfo is NewArray:
             atype = _array_type(_fast_u1(self))
-            return instructions.NewArray(inst_type, current_method_offset, atype)
-        elif instinfo is instructions.LookupSwitch:
+            return NewArray(inst_type, current_method_offset, atype)
+        elif instinfo is LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, npairs = _fast_i4(self), _fast_u4(self)
-            pairs = [instructions.MatchOffsetPair(_fast_i4(self), _fast_i4(self)) for _ in range(npairs)]
-            return instructions.LookupSwitch(inst_type, current_method_offset, default, npairs, pairs)
-        elif instinfo is instructions.TableSwitch:
+            pairs = [MatchOffsetPair(_fast_i4(self), _fast_i4(self)) for _ in range(npairs)]
+            return LookupSwitch(inst_type, current_method_offset, default, npairs, pairs)
+        elif instinfo is TableSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, low, high = _fast_i4(self), _fast_i4(self), _fast_i4(self)
             offsets = [_fast_i4(self) for _ in range(high - low + 1)]
-            return instructions.TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
+            return TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = _fast_u1(self)
             wide_inst_type = _INSTRUCTION_TYPES[opcode + wide_opcode]
@@ -302,13 +353,13 @@ cdef class ClassReader(BytesReader):
                 instinfo = wide_inst_type.instinfo
             else:
                 instinfo = _INSTRUCTION_INFOS[opcode + wide_opcode]
-            if instinfo is instructions.LocalIndexW:
-                return instructions.LocalIndexW(wide_inst_type, current_method_offset, _fast_u2(self))
-            elif instinfo is instructions.IIncW:
+            if instinfo is LocalIndexW:
+                return LocalIndexW(wide_inst_type, current_method_offset, _fast_u2(self))
+            elif instinfo is IIncW:
                 index, value = _fast_u2(self), _fast_i2(self)
-                return instructions.IIncW(wide_inst_type, current_method_offset, index, value)
-        elif instinfo is instructions.InsnInfo:
-            return instructions.InsnInfo(inst_type, current_method_offset)
+                return IIncW(wide_inst_type, current_method_offset, index, value)
+        elif instinfo is InsnInfo:
+            return InsnInfo(inst_type, current_method_offset)
 
         raise Exception(f"Invalid InstInfoType: {inst_type.name} {inst_type.instinfo}")
 
@@ -343,23 +394,23 @@ cdef class ClassReader(BytesReader):
         cdef int tag
         tag = _fast_u1(self)
         if tag == constants.VerificationType.TOP:
-            return attributes.TopVariableInfo(tag)
+            return TopVariableInfo(tag)
         elif tag == constants.VerificationType.INTEGER:
-            return attributes.IntegerVariableInfo(tag)
+            return IntegerVariableInfo(tag)
         elif tag == constants.VerificationType.FLOAT:
-            return attributes.FloatVariableInfo(tag)
+            return FloatVariableInfo(tag)
         elif tag == constants.VerificationType.DOUBLE:
             return attributes.DoubleVariableInfo(tag)
         elif tag == constants.VerificationType.LONG:
-            return attributes.LongVariableInfo(tag)
+            return LongVariableInfo(tag)
         elif tag == constants.VerificationType.NULL:
-            return attributes.NullVariableInfo(tag)
+            return NullVariableInfo(tag)
         elif tag == constants.VerificationType.UNINITIALIZED_THIS:
-            return attributes.UninitializedThisVariableInfo(tag)
+            return UninitializedThisVariableInfo(tag)
         elif tag == constants.VerificationType.OBJECT:
-            return attributes.ObjectVariableInfo(tag, _fast_u2(self))
+            return ObjectVariableInfo(tag, _fast_u2(self))
         elif tag == constants.VerificationType.UNINITIALIZED:
-            return attributes.UninitializedVariableInfo(tag, _fast_u2(self))
+            return UninitializedVariableInfo(tag, _fast_u2(self))
         else:
             raise ValueError(f"Unknown verification type tag: {tag}")
 
@@ -547,12 +598,12 @@ cdef class ClassReader(BytesReader):
             code = self.read_code_bytes(code_length)
             exception_table_length = _fast_u2(self)
             exception_table = [
-                attributes.ExceptionInfo(_fast_u2(self), _fast_u2(self), _fast_u2(self), _fast_u2(self))
+                ExceptionInfo(_fast_u2(self), _fast_u2(self), _fast_u2(self), _fast_u2(self))
                 for _ in range(exception_table_length)
             ]
             attributes_count = _fast_u2(self)
             attributes_list = [self.read_attribute() for _ in range(attributes_count)]
-            return attributes.CodeAttr(
+            return CodeAttr(
                 name_index,
                 length,
                 max_stack,
@@ -572,27 +623,25 @@ cdef class ClassReader(BytesReader):
                 frame_type = _fast_u1(self)
 
                 if 0 <= frame_type < 64:
-                    entries.append(attributes.SameFrameInfo(frame_type))
+                    entries.append(SameFrameInfo(frame_type))
                 elif 64 <= frame_type < 128:
-                    entries.append(
-                        attributes.SameLocals1StackItemFrameInfo(frame_type, self.read_verification_type_info())
-                    )
+                    entries.append(SameLocals1StackItemFrameInfo(frame_type, self.read_verification_type_info()))
                 elif frame_type == 247:
                     entries.append(
-                        attributes.SameLocals1StackItemFrameExtendedInfo(
+                        SameLocals1StackItemFrameExtendedInfo(
                             frame_type,
                             _fast_u2(self),
                             self.read_verification_type_info(),
                         )
                     )
                 elif 248 <= frame_type <= 250:
-                    entries.append(attributes.ChopFrameInfo(frame_type, _fast_u2(self)))
+                    entries.append(ChopFrameInfo(frame_type, _fast_u2(self)))
                 elif frame_type == 251:
-                    entries.append(attributes.SameFrameExtendedInfo(frame_type, _fast_u2(self)))
+                    entries.append(SameFrameExtendedInfo(frame_type, _fast_u2(self)))
                 elif 252 <= frame_type <= 254:
                     offset_delta = _fast_u2(self)
                     verification_type_infos = [self.read_verification_type_info() for __ in range(frame_type - 251)]
-                    entries.append(attributes.AppendFrameInfo(frame_type, offset_delta, verification_type_infos))
+                    entries.append(AppendFrameInfo(frame_type, offset_delta, verification_type_infos))
                 elif frame_type == 255:
                     offset_delta = _fast_u2(self)
                     number_of_locals = _fast_u2(self)
@@ -600,7 +649,7 @@ cdef class ClassReader(BytesReader):
                     number_of_stack_items = _fast_u2(self)
                     stack = [self.read_verification_type_info() for __ in range(number_of_stack_items)]
                     entries.append(
-                        attributes.FullFrameInfo(
+                        FullFrameInfo(
                             frame_type,
                             offset_delta,
                             number_of_locals,
@@ -612,7 +661,7 @@ cdef class ClassReader(BytesReader):
                 else:
                     raise ValueError(f"Unknown stack map frame type: {frame_type}")
 
-            return attributes.StackMapTableAttr(name_index, length, number_of_entries, entries)
+            return StackMapTableAttr(name_index, length, number_of_entries, entries)
 
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
             number_of_exceptions = _fast_u2(self)
@@ -622,7 +671,7 @@ cdef class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.INNER_CLASSES:
             number_of_classes = _fast_u2(self)
             classes = [
-                attributes.InnerClassInfo(
+                InnerClassInfo(
                     _fast_u2(self),
                     _fast_u2(self),
                     _fast_u2(self),
@@ -641,14 +690,14 @@ cdef class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.LINE_NUMBER_TABLE:
             line_number_table_length = _fast_u2(self)
             line_number_table = [
-                attributes.LineNumberInfo(_fast_u2(self), _fast_u2(self)) for _ in range(line_number_table_length)
+                LineNumberInfo(_fast_u2(self), _fast_u2(self)) for _ in range(line_number_table_length)
             ]
-            return attributes.LineNumberTableAttr(name_index, length, line_number_table_length, line_number_table)
+            return LineNumberTableAttr(name_index, length, line_number_table_length, line_number_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TABLE:
             local_variable_table_length = _fast_u2(self)
             local_variable_table = [
-                attributes.LocalVariableInfo(
+                LocalVariableInfo(
                     _fast_u2(self),
                     _fast_u2(self),
                     _fast_u2(self),
@@ -657,14 +706,12 @@ cdef class ClassReader(BytesReader):
                 )
                 for _ in range(local_variable_table_length)
             ]
-            return attributes.LocalVariableTableAttr(
-                name_index, length, local_variable_table_length, local_variable_table
-            )
+            return LocalVariableTableAttr(name_index, length, local_variable_table_length, local_variable_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TYPE_TABLE:
             local_variable_type_table_length = _fast_u2(self)
             local_variable_type_table = [
-                attributes.LocalVariableTypeInfo(
+                LocalVariableTypeInfo(
                     _fast_u2(self),
                     _fast_u2(self),
                     _fast_u2(self),
@@ -673,8 +720,11 @@ cdef class ClassReader(BytesReader):
                 )
                 for _ in range(local_variable_type_table_length)
             ]
-            return attributes.LocalVariableTypeTableAttr(
-                name_index, length, local_variable_type_table_length, local_variable_type_table
+            return LocalVariableTypeTableAttr(
+                name_index,
+                length,
+                local_variable_type_table_length,
+                local_variable_type_table,
             )
 
         elif attr_type is attributes.AttributeInfoType.RUNTIME_VISIBLE_ANNOTATIONS:
@@ -734,7 +784,7 @@ cdef class ClassReader(BytesReader):
                 num_bootstrap_arguments = _fast_u2(self)
                 bootstrap_arguments = [_fast_u2(self) for __ in range(num_bootstrap_arguments)]
                 bootstrap_methods.append(
-                    attributes.BootstrapMethodInfo(
+                    BootstrapMethodInfo(
                         bootstrap_method_ref,
                         num_bootstrap_arguments,
                         bootstrap_arguments,
@@ -745,7 +795,7 @@ cdef class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.METHOD_PARAMETERS:
             parameters_count = _fast_u1(self)
             parameters = [
-                attributes.MethodParameterInfo(
+                MethodParameterInfo(
                     _fast_u2(self),
                     _enum_member(constants.MethodParameterAccessFlag, _fast_u2(self)),
                 )
@@ -834,7 +884,7 @@ cdef class ClassReader(BytesReader):
                 attributes_count = _fast_u2(self)
                 _attributes = [self.read_attribute() for _ in range(attributes_count)]
                 components.append(
-                    attributes.RecordComponentInfo(comp_name_index, descriptor_index, attributes_count, _attributes)
+                    RecordComponentInfo(comp_name_index, descriptor_index, attributes_count, _attributes)
                 )
             return attributes.RecordAttr(name_index, length, components_count, components)
 

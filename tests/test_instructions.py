@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from pytecode.classfile.instructions import (
     ArrayType,
     Branch,
@@ -15,6 +17,7 @@ from pytecode.classfile.instructions import (
     LocalIndex,
     LocalIndexW,
     LookupSwitch,
+    MatchOffsetPair,
     MultiANewArray,
     NewArray,
     ShortValue,
@@ -722,3 +725,43 @@ def test_read_code_bytes_tracks_offsets():
     assert result[0].bytecode_offset == 0
     assert result[1].bytecode_offset == 2
     assert result[2].bytecode_offset == 4
+
+
+def test_instruction_objects_compare_by_type_and_fields():
+    left = LocalIndex(InsnInfoType.ILOAD, 4, 2)
+    same = LocalIndex(InsnInfoType.ILOAD, 4, 2)
+    different_value = LocalIndex(InsnInfoType.ILOAD, 4, 3)
+    different_type = InsnInfo(InsnInfoType.ILOAD, 4)
+
+    assert left == same
+    assert left != different_value
+    assert left != different_type
+
+
+def test_instruction_objects_repr_matches_dataclass_style():
+    insn = ByteValue(InsnInfoType.BIPUSH, 3, 7)
+
+    assert repr(insn) == "ByteValue(type=<InsnInfoType.BIPUSH: 16>, bytecode_offset=3, value=7)"
+
+
+def test_instruction_objects_support_copy_and_deepcopy():
+    original = LookupSwitch(
+        InsnInfoType.LOOKUPSWITCH,
+        5,
+        10,
+        2,
+        [MatchOffsetPair(1, 20), MatchOffsetPair(2, 30)],
+    )
+
+    shallow = copy.copy(original)
+    deep = copy.deepcopy(original)
+
+    assert shallow == original
+    assert shallow is not original
+    assert shallow.pairs is original.pairs
+
+    assert deep == original
+    assert deep is not original
+    assert deep.pairs == original.pairs
+    assert deep.pairs is not original.pairs
+    assert deep.pairs[0] is not original.pairs[0]

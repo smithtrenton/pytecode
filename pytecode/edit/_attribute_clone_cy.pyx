@@ -9,6 +9,25 @@ dispatch functions for reduced Python call overhead and faster
 from dataclasses import fields
 from functools import cache
 
+from ..classfile._attributes_cy cimport (
+    BootstrapMethodInfo as CBootstrapMethodInfo,
+    CodeAttr as CCodeAttr,
+    ExportInfo as CExportInfo,
+    ExceptionInfo as CExceptionInfo,
+    InnerClassInfo as CInnerClassInfo,
+    LineNumberInfo as CLineNumberInfo,
+    LineNumberTableAttr as CLineNumberTableAttr,
+    LocalVariableInfo as CLocalVariableInfo,
+    LocalVariableTableAttr as CLocalVariableTableAttr,
+    LocalVariableTypeInfo as CLocalVariableTypeInfo,
+    LocalVariableTypeTableAttr as CLocalVariableTypeTableAttr,
+    MethodParameterInfo as CMethodParameterInfo,
+    ModuleAttr as CModuleAttr,
+    OpensInfo as COpensInfo,
+    ProvidesInfo as CProvidesInfo,
+    RecordComponentInfo as CRecordComponentInfo,
+    RequiresInfo as CRequiresInfo,
+)
 from ..classfile.attributes import (
     AnnotationInfo,
     AppendFrameInfo,
@@ -21,12 +40,15 @@ from ..classfile.attributes import (
     ClassInfoValueInfo,
     ConstantValueAttr,
     ConstValueInfo,
+    CodeAttr,
     DeprecatedAttr,
     ElementValueInfo,
     ElementValuePairInfo,
     EmptyTargetInfo,
     EnclosingMethodAttr,
     EnumConstantValueInfo,
+    ExportInfo,
+    ExceptionInfo,
     ExceptionsAttr,
     FloatVariableInfo,
     FormalParameterTargetInfo,
@@ -44,6 +66,7 @@ from ..classfile.attributes import (
     LongVariableInfo,
     MethodParameterInfo,
     MethodParametersAttr,
+    ModuleAttr,
     ModuleMainClassAttr,
     ModulePackagesAttr,
     NestHostAttr,
@@ -51,8 +74,13 @@ from ..classfile.attributes import (
     NullVariableInfo,
     ObjectVariableInfo,
     OffsetTargetInfo,
+    OpensInfo,
     ParameterAnnotationInfo,
     PermittedSubclassesAttr,
+    ProvidesInfo,
+    RecordAttr,
+    RecordComponentInfo,
+    RequiresInfo,
     RuntimeInvisibleAnnotationsAttr,
     RuntimeInvisibleParameterAnnotationsAttr,
     RuntimeInvisibleTypeAnnotationsAttr,
@@ -106,6 +134,142 @@ cdef inline list _clone_stack_map_frame_list(list entries):
     cloned = [None] * count
     for index in range(count):
         cloned[index] = _clone_stack_map_frame(entries[index])
+    return cloned
+
+
+cdef inline list _clone_exception_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CExceptionInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = ExceptionInfo(entry.start_pc, entry.end_pc, entry.handler_pc, entry.catch_type)
+    return cloned
+
+
+cdef inline list _clone_bootstrap_method_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CBootstrapMethodInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = BootstrapMethodInfo(
+            entry.bootstrap_method_ref,
+            entry.num_boostrap_arguments,
+            list(entry.boostrap_arguments),
+        )
+    return cloned
+
+
+cdef inline list _clone_inner_class_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CInnerClassInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = InnerClassInfo(
+            entry.inner_class_info_index,
+            entry.outer_class_info_index,
+            entry.inner_name_index,
+            entry.inner_class_access_flags,
+        )
+    return cloned
+
+
+cdef inline list _clone_method_parameter_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CMethodParameterInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = MethodParameterInfo(entry.name_index, entry.access_flags)
+    return cloned
+
+
+cdef inline list _clone_requires_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CRequiresInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = RequiresInfo(entry.requires_index, entry.requires_flag, entry.requires_version_index)
+    return cloned
+
+
+cdef inline list _clone_export_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CExportInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = ExportInfo(
+            entry.exports_index,
+            entry.exports_flags,
+            entry.exports_to_count,
+            list(entry.exports_to_index),
+        )
+    return cloned
+
+
+cdef inline list _clone_opens_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef COpensInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = OpensInfo(
+            entry.opens_index,
+            entry.opens_flags,
+            entry.opens_to_count,
+            list(entry.opens_to_index),
+        )
+    return cloned
+
+
+cdef inline list _clone_provides_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CProvidesInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = ProvidesInfo(
+            entry.provides_index,
+            entry.provides_with_count,
+            list(entry.provides_with_index),
+        )
+    return cloned
+
+
+cdef inline list _clone_record_component_info_list(list entries):
+    cdef Py_ssize_t index, count
+    cdef list cloned
+    cdef CRecordComponentInfo entry
+    count = len(entries)
+    cloned = [None] * count
+    for index in range(count):
+        entry = entries[index]
+        cloned[index] = RecordComponentInfo(
+            entry.name_index,
+            entry.descriptor_index,
+            entry.attributes_count,
+            _clone_value(entry.attributes),
+        )
     return cloned
 
 
@@ -295,41 +459,81 @@ cdef object _clone_runtime_annotations_attr(object attribute):
 
 
 cdef inline object _clone_line_number_table_attr(object attribute):
+    cdef CLineNumberTableAttr line_number_table_attr = attribute
+    cdef list entries = line_number_table_attr.line_number_table
+    cdef list cloned_entries = [None] * len(entries)
+    cdef Py_ssize_t index
+    cdef CLineNumberInfo entry
+    for index in range(len(entries)):
+        entry = entries[index]
+        cloned_entries[index] = LineNumberInfo(entry.start_pc, entry.line_number)
     return LineNumberTableAttr(
-        attribute.attribute_name_index,
-        attribute.attribute_length,
-        attribute.line_number_table_length,
-        [LineNumberInfo(entry.start_pc, entry.line_number) for entry in attribute.line_number_table],
+        line_number_table_attr.attribute_name_index,
+        line_number_table_attr.attribute_length,
+        line_number_table_attr.line_number_table_length,
+        cloned_entries,
     )
 
 
 cdef inline object _clone_local_variable_table_attr(object attribute):
+    cdef CLocalVariableTableAttr local_variable_table_attr = attribute
+    cdef list entries = local_variable_table_attr.local_variable_table
+    cdef list cloned_entries = [None] * len(entries)
+    cdef Py_ssize_t index
+    cdef CLocalVariableInfo entry
+    for index in range(len(entries)):
+        entry = entries[index]
+        cloned_entries[index] = LocalVariableInfo(
+            entry.start_pc,
+            entry.length,
+            entry.name_index,
+            entry.descriptor_index,
+            entry.index,
+        )
     return LocalVariableTableAttr(
-        attribute.attribute_name_index,
-        attribute.attribute_length,
-        attribute.local_variable_table_length,
-        [
-            LocalVariableInfo(entry.start_pc, entry.length, entry.name_index, entry.descriptor_index, entry.index)
-            for entry in attribute.local_variable_table
-        ],
+        local_variable_table_attr.attribute_name_index,
+        local_variable_table_attr.attribute_length,
+        local_variable_table_attr.local_variable_table_length,
+        cloned_entries,
     )
 
 
 cdef inline object _clone_local_variable_type_table_attr(object attribute):
+    cdef CLocalVariableTypeTableAttr local_variable_type_table_attr = attribute
+    cdef list entries = local_variable_type_table_attr.local_variable_type_table
+    cdef list cloned_entries = [None] * len(entries)
+    cdef Py_ssize_t index
+    cdef CLocalVariableTypeInfo entry
+    for index in range(len(entries)):
+        entry = entries[index]
+        cloned_entries[index] = LocalVariableTypeInfo(
+            entry.start_pc,
+            entry.length,
+            entry.name_index,
+            entry.signature_index,
+            entry.index,
+        )
     return LocalVariableTypeTableAttr(
-        attribute.attribute_name_index,
-        attribute.attribute_length,
-        attribute.local_variable_type_table_length,
-        [
-            LocalVariableTypeInfo(
-                entry.start_pc,
-                entry.length,
-                entry.name_index,
-                entry.signature_index,
-                entry.index,
-            )
-            for entry in attribute.local_variable_type_table
-        ],
+        local_variable_type_table_attr.attribute_name_index,
+        local_variable_type_table_attr.attribute_length,
+        local_variable_type_table_attr.local_variable_type_table_length,
+        cloned_entries,
+    )
+
+
+cdef inline object _clone_code_attr(object attribute):
+    cdef CCodeAttr code_attr = attribute
+    return CodeAttr(
+        code_attr.attribute_name_index,
+        code_attr.attribute_length,
+        code_attr.max_stacks,
+        code_attr.max_locals,
+        code_attr.code_length,
+        _clone_value(code_attr.code),
+        code_attr.exception_table_length,
+        _clone_exception_info_list(code_attr.exception_table),
+        code_attr.attributes_count,
+        _clone_value(code_attr.attributes),
     )
 
 
@@ -338,14 +542,7 @@ cdef inline object _clone_bootstrap_methods_attr(object attribute):
         attribute.attribute_name_index,
         attribute.attribute_length,
         attribute.num_bootstrap_methods,
-        [
-            BootstrapMethodInfo(
-                entry.bootstrap_method_ref,
-                entry.num_boostrap_arguments,
-                list(entry.boostrap_arguments),
-            )
-            for entry in attribute.bootstrap_methods
-        ],
+        _clone_bootstrap_method_info_list(attribute.bootstrap_methods),
     )
 
 
@@ -354,15 +551,7 @@ cdef inline object _clone_inner_classes_attr(object attribute):
         attribute.attribute_name_index,
         attribute.attribute_length,
         attribute.number_of_classes,
-        [
-            InnerClassInfo(
-                entry.inner_class_info_index,
-                entry.outer_class_info_index,
-                entry.inner_name_index,
-                entry.inner_class_access_flags,
-            )
-            for entry in attribute.classes
-        ],
+        _clone_inner_class_info_list(attribute.classes),
     )
 
 
@@ -371,7 +560,16 @@ cdef inline object _clone_method_parameters_attr(object attribute):
         attribute.attribute_name_index,
         attribute.attribute_length,
         attribute.parameters_count,
-        [MethodParameterInfo(entry.name_index, entry.access_flags) for entry in attribute.parameters],
+        _clone_method_parameter_info_list(attribute.parameters),
+    )
+
+
+cdef inline object _clone_record_attr(object attribute):
+    return RecordAttr(
+        attribute.attribute_name_index,
+        attribute.attribute_length,
+        attribute.components_count,
+        _clone_record_component_info_list(attribute.components),
     )
 
 
@@ -431,6 +629,27 @@ cdef inline object _clone_module_packages_attr(object attribute):
         attribute.attribute_length,
         attribute.package_count,
         list(attribute.package_index),
+    )
+
+
+cdef inline object _clone_module_attr(object attribute):
+    cdef CModuleAttr module_attr = attribute
+    return ModuleAttr(
+        module_attr.attribute_name_index,
+        module_attr.attribute_length,
+        module_attr.module_name_index,
+        module_attr.module_flags,
+        module_attr.module_version_index,
+        module_attr.requires_count,
+        _clone_requires_info_list(module_attr.requires),
+        module_attr.exports_count,
+        _clone_export_info_list(module_attr.exports),
+        module_attr.opens_count,
+        _clone_opens_info_list(module_attr.opens),
+        module_attr.uses_count,
+        list(module_attr.uses_index),
+        module_attr.provides_count,
+        _clone_provides_info_list(module_attr.provides),
     )
 
 
@@ -496,6 +715,8 @@ cdef object _clone_simple_attribute(object attribute):
         return _clone_inner_classes_attr(attribute)
     if t is MethodParametersAttr:
         return _clone_method_parameters_attr(attribute)
+    if t is RecordAttr:
+        return _clone_record_attr(attribute)
     if t is ConstantValueAttr:
         return _clone_constant_value_attr(attribute)
     if t is ExceptionsAttr:
@@ -508,6 +729,8 @@ cdef object _clone_simple_attribute(object attribute):
         return _clone_source_file_attr(attribute)
     if t is SourceDebugExtensionAttr:
         return _clone_source_debug_extension_attr(attribute)
+    if t is ModuleAttr:
+        return _clone_module_attr(attribute)
     if t is ModulePackagesAttr:
         return _clone_module_packages_attr(attribute)
     if t is ModuleMainClassAttr:
@@ -526,6 +749,8 @@ cdef object _clone_simple_attribute(object attribute):
 
 
 cdef object _clone_fast_attribute(object attribute):
+    if type(attribute) is CodeAttr:
+        return _clone_code_attr(attribute)
     if type(attribute) is StackMapTableAttr:
         return StackMapTableAttr(
             attribute.attribute_name_index,
@@ -541,6 +766,7 @@ cdef object _clone_fast_attribute(object attribute):
 
 cdef object _clone_value(object value):
     cdef type cls
+    cdef object reducer, reduced, factory, args
     cls = type(value)
     if cls is list:
         return [_clone_value(item) for item in <list>value]
@@ -550,6 +776,17 @@ cdef object _clone_value(object value):
         fast = _clone_fast_attribute(value)
         if fast is not None:
             return fast
+    if cls is not type and hasattr(value, "_field_values"):
+        reducer = getattr(value, "__reduce__", None)
+        if reducer is not None:
+            try:
+                reduced = reducer()
+            except TypeError:
+                reduced = None
+            if type(reduced) is tuple and len(reduced) == 2:
+                factory, args = reduced
+                if factory is cls and type(args) is tuple:
+                    return factory(*tuple(_clone_value(arg) for arg in args))
     if cls is not type and getattr(cls, "__dataclass_fields__", None) is not None:
         cloned = {name: _clone_value(getattr(value, name)) for name in _clone_field_names(cls)}
         return cls(**cloned)

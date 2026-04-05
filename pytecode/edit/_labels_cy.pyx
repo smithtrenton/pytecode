@@ -9,9 +9,27 @@ serialisation, and ``resolve_labels`` computes the offset mapping.
 """
 
 import copy
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..classfile._instructions_cy cimport (
+    Branch as CBranch,
+    BranchW as CBranchW,
+    ByteValue as CByteValue,
+    ConstPoolIndex as CConstPoolIndex,
+    IInc as CIInc,
+    IIncW as CIIncW,
+    InsnInfo as CInsnInfo,
+    InvokeDynamic as CInvokeDynamic,
+    InvokeInterface as CInvokeInterface,
+    LocalIndex as CLocalIndex,
+    LocalIndexW as CLocalIndexW,
+    LookupSwitch as CLookupSwitch,
+    MatchOffsetPair as CMatchOffsetPair,
+    MultiANewArray as CMultiANewArray,
+    NewArray as CNewArray,
+    ShortValue as CShortValue,
+    TableSwitch as CTableSwitch,
+)
 from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
@@ -87,6 +105,23 @@ _BRANCH_TARGET_CONTEXTS = {
 
 
 cdef object _clone_raw_instruction(object insn, object bytecode_offset):
+    cdef CLookupSwitch lookup_switch
+    cdef CTableSwitch table_switch
+    cdef CInsnInfo no_operand_insn
+    cdef CLocalIndex local_index
+    cdef CLocalIndexW local_index_w
+    cdef CConstPoolIndex const_pool_index
+    cdef CByteValue byte_value
+    cdef CShortValue short_value
+    cdef CBranch branch
+    cdef CBranchW branch_w
+    cdef CIInc iinc
+    cdef CIIncW iinc_w
+    cdef CInvokeDynamic invoke_dynamic
+    cdef CInvokeInterface invoke_interface
+    cdef CNewArray new_array
+    cdef CMultiANewArray multi_anew_array
+    cdef CMatchOffsetPair pair
     offset = insn.bytecode_offset if bytecode_offset is None else bytecode_offset
 
     insn_type = type(insn)
@@ -110,7 +145,8 @@ cdef object _clone_raw_instruction(object insn, object bytecode_offset):
             list(table_switch.offsets),
         )
     if insn_type is InsnInfo:
-        return InsnInfo(insn.type, offset)
+        no_operand_insn = insn
+        return InsnInfo(no_operand_insn.type, offset)
     if insn_type is LocalIndex:
         local_index = insn
         return LocalIndex(local_index.type, offset, local_index.index)
@@ -217,8 +253,76 @@ _INVERTED_CONDITIONAL_BRANCHES: dict = {
 }
 
 
-@dataclass(eq=False)
-class Label:
+def _repr_fields(str class_name, tuple fields):
+    return f"{class_name}(" + ", ".join(f"{name}={value!r}" for name, value in fields) + ")"
+
+
+cdef class _ValueBase:
+    def _field_values(self):
+        raise NotImplementedError
+
+    def _field_items(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._field_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._field_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._field_values()
+
+
+cdef class _SymbolicInsnBase(CInsnInfo):
+    def _init_values(self):
+        raise NotImplementedError
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset)
+
+    def _field_items(self):
+        return (("type", self.type), ("bytecode_offset", self.bytecode_offset))
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._init_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._init_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._init_values()
+
+
+cdef class Label:
     """Identity-based marker for a bytecode position.
 
     Labels use identity equality so that distinct instances targeting the same
@@ -228,16 +332,25 @@ class Label:
         name: Optional human-readable name for debugging output.
     """
 
-    name: str = None
+    def __init__(self, object name=None):
+        self.name = name
 
     def __repr__(self):
         if self.name is not None:
             return f"Label({self.name!r})"
         return f"Label(id=0x{id(self):x})"
 
+    def __copy__(self):
+        return type(self)(self.name)
 
-@dataclass
-class ExceptionHandler:
+    def __deepcopy__(self, memo):
+        return type(self)(copy.deepcopy(self.name, memo))
+
+    def __reduce__(self):
+        return type(self), (self.name,)
+
+
+cdef class ExceptionHandler(_ValueBase):
     """An exception handler entry that uses labels for range and target.
 
     Attributes:
@@ -248,14 +361,25 @@ class ExceptionHandler:
             for a catch-all (``finally``) handler.
     """
 
-    start: Label
-    end: Label
-    handler: Label
-    catch_type: str = None
+    def __init__(self, object start, object end, object handler, object catch_type=None):
+        self.start = start
+        self.end = end
+        self.handler = handler
+        self.catch_type = catch_type
+
+    def _field_values(self):
+        return (self.start, self.end, self.handler, self.catch_type)
+
+    def _field_items(self):
+        return (
+            ("start", self.start),
+            ("end", self.end),
+            ("handler", self.handler),
+            ("catch_type", self.catch_type),
+        )
 
 
-@dataclass
-class LineNumberEntry:
+cdef class LineNumberEntry(_ValueBase):
     """Maps a label position to a source line number.
 
     Attributes:
@@ -263,12 +387,18 @@ class LineNumberEntry:
         line_number: Corresponding source-file line number.
     """
 
-    label: Label
-    line_number: int
+    def __init__(self, object label, Py_ssize_t line_number):
+        self.label = label
+        self.line_number = line_number
+
+    def _field_values(self):
+        return (self.label, self.line_number)
+
+    def _field_items(self):
+        return (("label", self.label), ("line_number", self.line_number))
 
 
-@dataclass
-class LocalVariableEntry:
+cdef class LocalVariableEntry(_ValueBase):
     """A local variable debug entry using labels for the live range.
 
     Attributes:
@@ -279,15 +409,27 @@ class LocalVariableEntry:
         slot: Local variable table slot index.
     """
 
-    start: Label
-    end: Label
-    name: str
-    descriptor: str
-    slot: int
+    def __init__(self, object start, object end, object name, object descriptor, Py_ssize_t slot):
+        self.start = start
+        self.end = end
+        self.name = name
+        self.descriptor = descriptor
+        self.slot = slot
+
+    def _field_values(self):
+        return (self.start, self.end, self.name, self.descriptor, self.slot)
+
+    def _field_items(self):
+        return (
+            ("start", self.start),
+            ("end", self.end),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+            ("slot", self.slot),
+        )
 
 
-@dataclass
-class LocalVariableTypeEntry:
+cdef class LocalVariableTypeEntry(_ValueBase):
     """A local variable type debug entry using labels for the live range.
 
     Similar to ``LocalVariableEntry`` but carries a generic signature instead
@@ -301,15 +443,27 @@ class LocalVariableTypeEntry:
         slot: Local variable table slot index.
     """
 
-    start: Label
-    end: Label
-    name: str
-    signature: str
-    slot: int
+    def __init__(self, object start, object end, object name, object signature, Py_ssize_t slot):
+        self.start = start
+        self.end = end
+        self.name = name
+        self.signature = signature
+        self.slot = slot
+
+    def _field_values(self):
+        return (self.start, self.end, self.name, self.signature, self.slot)
+
+    def _field_items(self):
+        return (
+            ("start", self.start),
+            ("end", self.end),
+            ("name", self.name),
+            ("signature", self.signature),
+            ("slot", self.slot),
+        )
 
 
-@dataclass(init=False)
-class BranchInsn(InsnInfo):
+cdef class BranchInsn(_SymbolicInsnBase):
     """A branch instruction that targets a label instead of a raw offset.
 
     Supports both narrow (2-byte offset) and wide (4-byte offset) branch
@@ -320,24 +474,30 @@ class BranchInsn(InsnInfo):
         target: The ``Label`` this branch jumps to.
     """
 
-    target: Label
-
-    def __init__(self, insn_type, target, bytecode_offset=-1):
+    def __init__(self, object insn_type, object target, Py_ssize_t bytecode_offset=-1):
         if insn_type.instinfo not in {Branch, BranchW}:
             raise ValueError(f"{insn_type.name} is not a branch opcode")
-        super().__init__(insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.target = target
 
     @classmethod
-    def _trusted(cls, insn_type, target, bytecode_offset=-1):
+    def _trusted(cls, object insn_type, object target, Py_ssize_t bytecode_offset=-1):
         self = cls.__new__(cls)
-        InsnInfo.__init__(self, insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.target = target
         return self
 
+    def _init_values(self):
+        return (self.type, self.target, self.bytecode_offset)
 
-@dataclass(init=False)
-class LookupSwitchInsn(InsnInfo):
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.target)
+
+    def _field_items(self):
+        return _SymbolicInsnBase._field_items(self) + (("target", self.target),)
+
+
+cdef class LookupSwitchInsn(_SymbolicInsnBase):
     """A ``lookupswitch`` instruction that uses labels for jump targets.
 
     Attributes:
@@ -345,25 +505,40 @@ class LookupSwitchInsn(InsnInfo):
         pairs: Match-value / label pairs for each case.
     """
 
-    default_target: Label
-    pairs: list
-
-    def __init__(self, default_target, pairs, bytecode_offset=-1):
-        super().__init__(InsnInfoType.LOOKUPSWITCH, bytecode_offset)
+    def __init__(self, object default_target, object pairs, Py_ssize_t bytecode_offset=-1):
+        CInsnInfo.__init__(self, InsnInfoType.LOOKUPSWITCH, bytecode_offset)
         self.default_target = default_target
         self.pairs = list(pairs)
 
     @classmethod
-    def _trusted(cls, default_target, pairs, bytecode_offset=-1):
+    def _trusted(cls, object default_target, object pairs, Py_ssize_t bytecode_offset=-1):
         self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.LOOKUPSWITCH, bytecode_offset)
+        CInsnInfo.__init__(self, InsnInfoType.LOOKUPSWITCH, bytecode_offset)
         self.default_target = default_target
         self.pairs = list(pairs)
         return self
 
+    def _init_values(self):
+        return (self.default_target, self.pairs, self.bytecode_offset)
 
-@dataclass(init=False)
-class TableSwitchInsn(InsnInfo):
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.default_target, self.pairs)
+
+    def _field_items(self):
+        return _SymbolicInsnBase._field_items(self) + (
+            ("default_target", self.default_target),
+            ("pairs", self.pairs),
+        )
+
+    def __copy__(self):
+        copied = type(self).__new__(type(self))
+        CInsnInfo.__init__(copied, InsnInfoType.LOOKUPSWITCH, self.bytecode_offset)
+        copied.default_target = self.default_target
+        copied.pairs = self.pairs
+        return copied
+
+
+cdef class TableSwitchInsn(_SymbolicInsnBase):
     """A ``tableswitch`` instruction that uses labels for jump targets.
 
     Attributes:
@@ -373,36 +548,67 @@ class TableSwitchInsn(InsnInfo):
         targets: Labels for each case in the ``low..high`` range.
     """
 
-    default_target: Label
-    low: int
-    high: int
-    targets: list
-
-    def __init__(self, default_target, low, high, targets, bytecode_offset=-1):
+    def __init__(
+        self,
+        object default_target,
+        Py_ssize_t low,
+        Py_ssize_t high,
+        object targets,
+        Py_ssize_t bytecode_offset=-1,
+    ):
         if high < low:
             raise ValueError("tableswitch high must be >= low")
         expected_targets = high - low + 1
         if len(targets) != expected_targets:
             raise ValueError(f"tableswitch range {low}..{high} requires {expected_targets} targets, got {len(targets)}")
-        super().__init__(InsnInfoType.TABLESWITCH, bytecode_offset)
+        CInsnInfo.__init__(self, InsnInfoType.TABLESWITCH, bytecode_offset)
         self.default_target = default_target
         self.low = low
         self.high = high
         self.targets = list(targets)
 
     @classmethod
-    def _trusted(cls, default_target, low, high, targets, bytecode_offset=-1):
+    def _trusted(
+        cls,
+        object default_target,
+        Py_ssize_t low,
+        Py_ssize_t high,
+        object targets,
+        Py_ssize_t bytecode_offset=-1,
+    ):
         self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.TABLESWITCH, bytecode_offset)
+        CInsnInfo.__init__(self, InsnInfoType.TABLESWITCH, bytecode_offset)
         self.default_target = default_target
         self.low = low
         self.high = high
         self.targets = list(targets)
         return self
 
+    def _init_values(self):
+        return (self.default_target, self.low, self.high, self.targets, self.bytecode_offset)
 
-@dataclass
-class LabelResolution:
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.default_target, self.low, self.high, self.targets)
+
+    def _field_items(self):
+        return _SymbolicInsnBase._field_items(self) + (
+            ("default_target", self.default_target),
+            ("low", self.low),
+            ("high", self.high),
+            ("targets", self.targets),
+        )
+
+    def __copy__(self):
+        copied = type(self).__new__(type(self))
+        CInsnInfo.__init__(copied, InsnInfoType.TABLESWITCH, self.bytecode_offset)
+        copied.default_target = self.default_target
+        copied.low = self.low
+        copied.high = self.high
+        copied.targets = self.targets
+        return copied
+
+
+cdef class LabelResolution(_ValueBase):
     """Result of resolving labels to bytecode offsets.
 
     Attributes:
@@ -411,9 +617,20 @@ class LabelResolution:
         total_code_length: Total byte length of the lowered bytecode.
     """
 
-    label_offsets: dict
-    instruction_offsets: list
-    total_code_length: int
+    def __init__(self, dict label_offsets, list instruction_offsets, Py_ssize_t total_code_length):
+        self.label_offsets = label_offsets
+        self.instruction_offsets = instruction_offsets
+        self.total_code_length = total_code_length
+
+    def _field_values(self):
+        return (self.label_offsets, self.instruction_offsets, self.total_code_length)
+
+    def _field_items(self):
+        return (
+            ("label_offsets", self.label_offsets),
+            ("instruction_offsets", self.instruction_offsets),
+            ("total_code_length", self.total_code_length),
+        )
 
 
 cdef int _switch_padding(int offset):
@@ -584,10 +801,20 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
 
 cdef int _instruction_byte_size(object insn, type insn_type, int offset, dict ldc_index_cache):
     cdef int slot, increment
+    cdef CLookupSwitch lookup_switch
+    cdef CTableSwitch table_switch
     if insn_type is Label:
         return 0
     if insn_type is InsnInfo:
         return 1
+    if insn_type is VarInsn:
+        var_insn = insn
+        slot = _require_u2(var_insn.slot, context="local variable slot")
+        if _VAR_SHORTCUTS.get((var_insn.type, slot)) is not None:
+            return 1  # implicit form (e.g. ILOAD_0)
+        if slot <= 255:
+            return 2  # opcode(1) + u1 slot
+        return 4  # WIDE(1) + opcode(1) + u2 slot
     if insn_type is BranchInsn:
         branch_insn = insn
         return 5 if branch_insn.type.instinfo is BranchW else 3
@@ -617,14 +844,6 @@ cdef int _instruction_byte_size(object insn, type insn_type, int offset, dict ld
         if idx is None:
             raise ValueError("LdcInsn is missing from the LDC index cache")
         return 2 if idx <= 255 else 3  # LDC: 2, LDC_W: 3
-    if insn_type is VarInsn:
-        var_insn = insn
-        slot = _require_u2(var_insn.slot, context="local variable slot")
-        if _VAR_SHORTCUTS.get((var_insn.type, slot)) is not None:
-            return 1  # implicit form (e.g. ILOAD_0)
-        if slot <= 255:
-            return 2  # opcode(1) + u1 slot
-        return 4  # WIDE(1) + opcode(1) + u2 slot
     if insn_type is IIncInsn:
         iinc_insn = insn
         slot = _require_u2(iinc_insn.slot, context="local variable slot")
@@ -751,11 +970,23 @@ cdef bint _promote_overflow_branches(list items, object resolution):
 cdef object _lower_instruction(object item, int offset, dict label_offsets, object cp):
     cdef int cp_index, slot, increment, count, dimensions, bootstrap_method_attr_index, relative
     cdef object lowered
+    cdef CInsnInfo no_operand_insn
     item_type = type(item)
     if item_type is Label:
         return None
     if item_type is InsnInfo:
-        return InsnInfo(item.type, offset)
+        no_operand_insn = item
+        return InsnInfo(no_operand_insn.type, offset)
+    if item_type is VarInsn:
+        var_item = item
+        slot = _require_u2(var_item.slot, context="local variable slot")
+        shortcut = _VAR_SHORTCUTS.get((var_item.type, slot))
+        if shortcut is not None:
+            return InsnInfo(shortcut, offset)
+        if slot > 255:
+            wide_type = _BASE_TO_WIDE[var_item.type]
+            return LocalIndexW(wide_type, offset, slot)
+        return LocalIndex(var_item.type, offset, slot)
 
     if item_type is BranchInsn:
         branch_item = item
@@ -849,17 +1080,6 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
         if cp_index <= 255:
             return LocalIndex(InsnInfoType.LDC, offset, cp_index)
         return ConstPoolIndex(InsnInfoType.LDC_W, offset, cp_index)
-
-    if item_type is VarInsn:
-        var_item = item
-        slot = _require_u2(var_item.slot, context="local variable slot")
-        shortcut = _VAR_SHORTCUTS.get((var_item.type, slot))
-        if shortcut is not None:
-            return InsnInfo(shortcut, offset)
-        if slot > 255:
-            wide_type = _BASE_TO_WIDE[var_item.type]
-            return LocalIndexW(wide_type, offset, slot)
-        return LocalIndex(var_item.type, offset, slot)
 
     if item_type is IIncInsn:
         iinc_item = item

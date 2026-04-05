@@ -1,12 +1,12 @@
 """Data types representing JVM bytecode instruction operands.
 
-Provides dataclasses and enums that model the operand formats for each JVM
-instruction as defined in the JVM specification (JVMS §6.5). Each opcode is
-mapped to an ``InsnInfoType`` member whose associated ``InsnInfo`` subclass
-describes the shape of its operands.
+Provides instruction operand classes and enums that model the operand formats
+for each JVM instruction as defined in the JVM specification (JVMS §6.5). Each
+opcode is mapped to an ``InsnInfoType`` member whose associated ``InsnInfo``
+subclass describes the shape of its operands.
 """
 
-from dataclasses import dataclass
+import copy
 from enum import IntEnum
 
 __all__ = [
@@ -31,9 +31,11 @@ __all__ = [
     "TableSwitch",
 ]
 
+def _repr_fields(str class_name, tuple fields):
+    return f"{class_name}(" + ", ".join(f"{name}={value!r}" for name, value in fields) + ")"
 
-@dataclass
-class InsnInfo:
+
+cdef class InsnInfo:
     """Base operand info for a JVM bytecode instruction.
 
     Attributes:
@@ -42,89 +44,167 @@ class InsnInfo:
             attribute.
     """
 
-    type: InsnInfoType
-    bytecode_offset: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset):
+        self.type = type
+        self.bytecode_offset = bytecode_offset
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset)
+
+    def _field_items(self):
+        return (("type", self.type), ("bytecode_offset", self.bytecode_offset))
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._field_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._field_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._field_values()
 
 
-@dataclass
-class LocalIndex(InsnInfo):
+cdef class LocalIndex(InsnInfo):
     """Operand carrying a single-byte local variable index (§6.5).
 
     Attributes:
         index: Local variable slot index (0–255).
     """
 
-    index: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index),)
 
 
-@dataclass
-class LocalIndexW(InsnInfo):
+cdef class LocalIndexW(InsnInfo):
     """Operand carrying a wide (two-byte) local variable index (§6.5.wide).
 
     Attributes:
         index: Local variable slot index (0–65535).
     """
 
-    index: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index),)
 
 
-@dataclass
-class ConstPoolIndex(InsnInfo):
+cdef class ConstPoolIndex(InsnInfo):
     """Operand carrying a two-byte constant pool index.
 
     Attributes:
         index: Index into the class file constant pool.
     """
 
-    index: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index),)
 
 
-@dataclass
-class ByteValue(InsnInfo):
+cdef class ByteValue(InsnInfo):
     """Operand carrying a signed byte immediate value (e.g. ``bipush``).
 
     Attributes:
         value: Signed byte value (−128–127).
     """
 
-    value: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.value = value
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.value)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("value", self.value),)
 
 
-@dataclass
-class ShortValue(InsnInfo):
+cdef class ShortValue(InsnInfo):
     """Operand carrying a signed short immediate value (e.g. ``sipush``).
 
     Attributes:
         value: Signed short value (−32768–32767).
     """
 
-    value: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.value = value
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.value)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("value", self.value),)
 
 
-@dataclass
-class Branch(InsnInfo):
+cdef class Branch(InsnInfo):
     """Operand for a branch instruction with a two-byte signed offset.
 
     Attributes:
         offset: Signed branch offset relative to this instruction.
     """
 
-    offset: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.offset = offset
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.offset)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("offset", self.offset),)
 
 
-@dataclass
-class BranchW(InsnInfo):
+cdef class BranchW(InsnInfo):
     """Operand for a wide branch instruction with a four-byte signed offset.
 
     Attributes:
         offset: Signed branch offset relative to this instruction.
     """
 
-    offset: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.offset = offset
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.offset)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("offset", self.offset),)
 
 
-@dataclass
-class IInc(InsnInfo):
+cdef class IInc(InsnInfo):
     """Operand for the ``iinc`` instruction (§6.5.iinc).
 
     Attributes:
@@ -132,12 +212,19 @@ class IInc(InsnInfo):
         value: Signed byte increment constant.
     """
 
-    index: int
-    value: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+        self.value = value
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index, self.value)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index), ("value", self.value))
 
 
-@dataclass
-class IIncW(InsnInfo):
+cdef class IIncW(InsnInfo):
     """Operand for the wide form of ``iinc`` (§6.5.wide).
 
     Attributes:
@@ -145,12 +232,19 @@ class IIncW(InsnInfo):
         value: Signed short increment constant.
     """
 
-    index: int
-    value: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+        self.value = value
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index, self.value)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index), ("value", self.value))
 
 
-@dataclass
-class InvokeDynamic(InsnInfo):
+cdef class InvokeDynamic(InsnInfo):
     """Operand for the ``invokedynamic`` instruction (§6.5.invokedynamic).
 
     Attributes:
@@ -158,12 +252,19 @@ class InvokeDynamic(InsnInfo):
         unused: Two reserved zero bytes following the index.
     """
 
-    index: int
-    unused: bytes
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, object unused):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+        self.unused = unused
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index, self.unused)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index), ("unused", self.unused))
 
 
-@dataclass
-class InvokeInterface(InsnInfo):
+cdef class InvokeInterface(InsnInfo):
     """Operand for the ``invokeinterface`` instruction (§6.5.invokeinterface).
 
     Attributes:
@@ -172,24 +273,42 @@ class InvokeInterface(InsnInfo):
         unused: One reserved zero byte following count.
     """
 
-    index: int
-    count: int
-    unused: bytes
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t count, object unused):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+        self.count = count
+        self.unused = unused
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index, self.count, self.unused)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (
+            ("index", self.index),
+            ("count", self.count),
+            ("unused", self.unused),
+        )
 
 
-@dataclass
-class NewArray(InsnInfo):
+cdef class NewArray(InsnInfo):
     """Operand for the ``newarray`` instruction (§6.5.newarray).
 
     Attributes:
         atype: ``ArrayType`` enum member identifying the primitive element type.
     """
 
-    atype: ArrayType
+    def __init__(self, object type, Py_ssize_t bytecode_offset, object atype):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.atype = atype
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.atype)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("atype", self.atype),)
 
 
-@dataclass
-class MultiANewArray(InsnInfo):
+cdef class MultiANewArray(InsnInfo):
     """Operand for the ``multianewarray`` instruction (§6.5.multianewarray).
 
     Attributes:
@@ -197,12 +316,19 @@ class MultiANewArray(InsnInfo):
         dimensions: Number of dimensions to allocate (≥ 1).
     """
 
-    index: int
-    dimensions: int
+    def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t dimensions):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.index = index
+        self.dimensions = dimensions
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.index, self.dimensions)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (("index", self.index), ("dimensions", self.dimensions))
 
 
-@dataclass
-class MatchOffsetPair:
+cdef class MatchOffsetPair:
     """A single match-offset entry used in a ``lookupswitch`` table.
 
     Attributes:
@@ -210,12 +336,41 @@ class MatchOffsetPair:
         offset: Branch offset relative to the ``lookupswitch`` instruction.
     """
 
-    match: int
-    offset: int
+    def __init__(self, Py_ssize_t match, Py_ssize_t offset):
+        self.match = match
+        self.offset = offset
+
+    def _field_values(self):
+        return (self.match, self.offset)
+
+    def _field_items(self):
+        return (("match", self.match), ("offset", self.offset))
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._field_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._field_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._field_values()
 
 
-@dataclass
-class LookupSwitch(InsnInfo):
+cdef class LookupSwitch(InsnInfo):
     """Operand for the ``lookupswitch`` instruction (§6.5.lookupswitch).
 
     Attributes:
@@ -224,13 +379,31 @@ class LookupSwitch(InsnInfo):
         pairs: Sorted list of ``MatchOffsetPair`` entries.
     """
 
-    default: int
-    npairs: int
-    pairs: list[MatchOffsetPair]
+    def __init__(
+        self,
+        object type,
+        Py_ssize_t bytecode_offset,
+        Py_ssize_t default,
+        Py_ssize_t npairs,
+        list pairs,
+    ):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.default = default
+        self.npairs = npairs
+        self.pairs = pairs
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.default, self.npairs, self.pairs)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (
+            ("default", self.default),
+            ("npairs", self.npairs),
+            ("pairs", self.pairs),
+        )
 
 
-@dataclass
-class TableSwitch(InsnInfo):
+cdef class TableSwitch(InsnInfo):
     """Operand for the ``tableswitch`` instruction (§6.5.tableswitch).
 
     Attributes:
@@ -240,10 +413,31 @@ class TableSwitch(InsnInfo):
         offsets: Branch offsets for each case from *low* to *high* inclusive.
     """
 
-    default: int
-    low: int
-    high: int
-    offsets: list[int]
+    def __init__(
+        self,
+        object type,
+        Py_ssize_t bytecode_offset,
+        Py_ssize_t default,
+        Py_ssize_t low,
+        Py_ssize_t high,
+        list offsets,
+    ):
+        InsnInfo.__init__(self, type, bytecode_offset)
+        self.default = default
+        self.low = low
+        self.high = high
+        self.offsets = offsets
+
+    def _field_values(self):
+        return (self.type, self.bytecode_offset, self.default, self.low, self.high, self.offsets)
+
+    def _field_items(self):
+        return InsnInfo._field_items(self) + (
+            ("default", self.default),
+            ("low", self.low),
+            ("high", self.high),
+            ("offsets", self.offsets),
+        )
 
 
 class InsnInfoType(IntEnum):
