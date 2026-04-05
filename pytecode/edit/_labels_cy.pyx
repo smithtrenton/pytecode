@@ -696,6 +696,9 @@ cdef object _ordered_nested_code_attributes(
     cdef object attribute, token, debug_attr
     cdef type attr_type
     cdef int other_index
+    cdef object pending_line_numbers = line_number_attr
+    cdef object pending_local_variables = local_variable_attr
+    cdef object pending_local_variable_types = local_variable_type_attr
 
     other_attrs = []
     for attribute in code.attributes:
@@ -716,12 +719,6 @@ cdef object _ordered_nested_code_attributes(
 
     attrs = []
     other_index = 0
-    debug_attrs = {
-        "line_numbers": line_number_attr,
-        "local_variables": local_variable_attr,
-        "local_variable_types": local_variable_type_attr,
-    }
-
     for token in code._nested_attribute_layout:
         if token == "other":
             if other_index < len(other_attrs):
@@ -729,22 +726,43 @@ cdef object _ordered_nested_code_attributes(
                 other_index += 1
             continue
 
-        debug_attr = debug_attrs.get(token)
-        if debug_attr is not None:
-            attrs.append(debug_attr)
-            debug_attrs[token] = None
+        if token == "line_numbers":
+            if pending_line_numbers is not None:
+                attrs.append(pending_line_numbers)
+                pending_line_numbers = None
+            continue
+        if token == "local_variables":
+            if pending_local_variables is not None:
+                attrs.append(pending_local_variables)
+                pending_local_variables = None
+            continue
+        if token == "local_variable_types":
+            if pending_local_variable_types is not None:
+                attrs.append(pending_local_variable_types)
+                pending_local_variable_types = None
 
     attrs.extend(other_attrs[other_index:])
-    for token in ("line_numbers", "local_variables", "local_variable_types"):
-        debug_attr = debug_attrs[token]
-        if debug_attr is not None:
-            attrs.append(debug_attr)
+    if pending_line_numbers is not None:
+        attrs.append(pending_line_numbers)
+    if pending_local_variables is not None:
+        attrs.append(pending_local_variables)
+    if pending_local_variable_types is not None:
+        attrs.append(pending_local_variable_types)
 
     return attrs
 
 
 cdef bint _needs_ldc_index_cache(list items):
-    return any(type(item) is LdcInsn and type(item.value) is not LdcLong and type(item.value) is not LdcDouble for item in items)
+    cdef object item, value
+    cdef type value_type
+    for item in items:
+        if type(item) is not LdcInsn:
+            continue
+        value = item.value
+        value_type = type(value)
+        if value_type is not LdcLong and value_type is not LdcDouble:
+            return True
+    return False
 
 
 def _build_ldc_index_cache(items, cp):
@@ -774,6 +792,7 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
     cdef int offset
     cdef Py_ssize_t index, item_count
     cdef type item_type
+    cdef object item, label
     cdef dict label_offsets = {}
     cdef list instruction_offsets
     offset = 0
@@ -789,6 +808,9 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
             if label in label_offsets:
                 raise ValueError(f"label {label!r} appears multiple times in CodeModel.instructions")
             label_offsets[label] = offset
+            continue
+        if item_type is InsnInfo:
+            offset += 1
             continue
         offset += _instruction_byte_size(item, item_type, offset, ldc_index_cache)
 
@@ -1223,6 +1245,9 @@ def _lower_resolved_code(code, list items, object resolution, object cp, bint ke
     cdef list instruction_offsets = resolution.instruction_offsets
     cdef dict label_offsets = resolution.label_offsets
     cdef int offset
+    cdef object item, lowered
+    cdef type item_type
+    cdef CInsnInfo no_operand_insn
 
     item_count = len(items)
     lowered_code = [None] * item_count
@@ -1230,6 +1255,14 @@ def _lower_resolved_code(code, list items, object resolution, object cp, bint ke
     for index in range(item_count):
         item = items[index]
         offset = instruction_offsets[index]
+        item_type = type(item)
+        if item_type is Label:
+            continue
+        if item_type is InsnInfo:
+            no_operand_insn = item
+            lowered_code[lowered_count] = InsnInfo(no_operand_insn.type, offset)
+            lowered_count += 1
+            continue
         lowered = _lower_instruction(item, offset, label_offsets, cp)
         if lowered is not None:
             lowered_code[lowered_count] = lowered

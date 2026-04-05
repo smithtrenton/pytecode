@@ -13,6 +13,7 @@ from pytecode.classfile.attributes import (
     LineNumberTableAttr,
     LocalVariableTableAttr,
     LocalVariableTypeTableAttr,
+    SyntheticAttr,
 )
 from pytecode.classfile.instructions import (
     ArrayType,
@@ -486,6 +487,36 @@ def test_lower_code_rebuilds_exception_handlers_and_debug_attrs() -> None:
     assert local_variable_types.local_variable_type_table[0].start_pc == 0
     assert local_variable_types.local_variable_type_table[0].length == 1
     assert local_variable_types.local_variable_type_table[0].index == 1
+
+
+def test_lower_code_respects_nested_attribute_layout_and_deduplicates_debug_tokens() -> None:
+    start = Label("start")
+    end = Label("end")
+    marker = SyntheticAttr(7, 0)
+    code = CodeModel(
+        max_stack=1,
+        max_locals=2,
+        instructions=[
+            start,
+            InsnInfo(InsnInfoType.NOP, -1),
+            end,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+        line_numbers=[LineNumberEntry(start, 10)],
+        local_variables=[LocalVariableEntry(start, end, "value", "I", 1)],
+        local_variable_types=[LocalVariableTypeEntry(start, end, "value", "TT;", 1)],
+        attributes=[marker],
+        _nested_attribute_layout=("line_numbers", "line_numbers", "other", "local_variables"),
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert [type(attr) for attr in lowered.attributes] == [
+        LineNumberTableAttr,
+        SyntheticAttr,
+        LocalVariableTableAttr,
+        LocalVariableTypeTableAttr,
+    ]
 
 
 def test_lower_code_rejects_empty_exception_handler_range() -> None:
