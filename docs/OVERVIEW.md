@@ -25,6 +25,8 @@ The original implementation roadmap is complete, so the docs are organized aroun
 
 | Topic | Location |
 |------|----------|
+| Current public surface, behavioral contracts, and cross-language reimplementation guidance | [design/pytecode-design.md](design/pytecode-design.md) |
+| Rust-first reimplementation architecture, phased roadmap, and Python-backend strategy | [design/pytecode-rust-design.md](design/pytecode-rust-design.md) |
 | Editing-model evaluation, alternatives considered, and extension strategy | [design/editing-model.md](design/editing-model.md) |
 | Bytecode validation framework, tier breakdown, and external-tool strategy | [design/validation-framework.md](design/validation-framework.md) |
 | CFG oracle research and the reasoning behind the ASM-based differential suite | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
