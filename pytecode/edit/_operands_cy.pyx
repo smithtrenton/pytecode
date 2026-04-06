@@ -26,12 +26,11 @@ Out of scope (remain raw ``InsnInfo`` records):
     instructions — already symbolic via ``labels.py``.
 """
 
-from dataclasses import dataclass
+import copy
+from dataclasses import FrozenInstanceError
 
-from ..classfile.instructions import (
-    InsnInfo,
-    InsnInfoType,
-)
+from ..classfile._instructions_cy cimport InsnInfo as CInsnInfo
+from ..classfile.instructions import InsnInfoType
 
 __all__ = [
     "FieldInsn",
@@ -211,24 +210,116 @@ def _require_u1(value: int, *, context: str, minimum: int = 0) -> int:
     return value
 
 
+def _repr_fields(str class_name, tuple fields):
+    return f"{class_name}(" + ", ".join(f"{name}={value!r}" for name, value in fields) + ")"
+
+
+cdef class _FrozenValueBase:
+    def _init_values(self):
+        raise NotImplementedError
+
+    def _field_values(self):
+        raise NotImplementedError
+
+    def _field_items(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self._field_values())
+
+    def __copy__(self):
+        return type(self)(*self._init_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._init_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._init_values()
+
+    def __setattr__(self, str name, object value):
+        raise FrozenInstanceError(f"cannot assign to field '{name}'")
+
+    def __delattr__(self, str name):
+        raise FrozenInstanceError(f"cannot delete field '{name}'")
+
+
+cdef class _OperandInsnBase(CInsnInfo):
+    def _init_values(self):
+        raise NotImplementedError
+
+    def _base_field_values(self):
+        return (self.type, self.bytecode_offset)
+
+    def _base_field_items(self):
+        return (("type", self.type), ("bytecode_offset", self.bytecode_offset))
+
+    def _field_values(self):
+        raise NotImplementedError
+
+    def _field_items(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        return _repr_fields(type(self).__name__, self._field_items())
+
+    def __richcmp__(self, other, int op):
+        equal = type(self) is type(other) and self._field_values() == other._field_values()
+        if op == 2:
+            return equal
+        if op == 3:
+            return not equal
+        return NotImplemented
+
+    def __hash__(self):
+        raise TypeError(f"unhashable type: '{type(self).__name__}'")
+
+    def __copy__(self):
+        return type(self)(*self._init_values())
+
+    def __deepcopy__(self, memo):
+        return type(self)(*copy.deepcopy(self._init_values(), memo))
+
+    def __reduce__(self):
+        return type(self), self._init_values()
+
+
 # ---------------------------------------------------------------------------
-# LDC value types (frozen dataclasses)
+# LDC value types (frozen extension types)
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class LdcInt:
+cdef class LdcInt(_FrozenValueBase):
     """Integer constant for ``ldc`` / ``ldc_w`` (CONSTANT_Integer, §4.4.4).
 
     Attributes:
         value: The signed 32-bit integer constant.
     """
 
-    value: int
+    def __init__(self, object value):
+        self.value = value
+
+    def _init_values(self):
+        return (self.value,)
+
+    def _field_values(self):
+        return (self.value,)
+
+    def _field_items(self):
+        return (("value", self.value),)
 
 
-@dataclass(frozen=True)
-class LdcFloat:
+cdef class LdcFloat(_FrozenValueBase):
     """Float constant for ``ldc`` / ``ldc_w`` (CONSTANT_Float, §4.4.4).
 
     Stored as a raw IEEE 754 bit pattern rather than a Python ``float`` to
@@ -239,22 +330,40 @@ class LdcFloat:
             32-bit integer.
     """
 
-    raw_bits: int
+    def __init__(self, object raw_bits):
+        self.raw_bits = raw_bits
+
+    def _init_values(self):
+        return (self.raw_bits,)
+
+    def _field_values(self):
+        return (self.raw_bits,)
+
+    def _field_items(self):
+        return (("raw_bits", self.raw_bits),)
 
 
-@dataclass(frozen=True)
-class LdcLong:
+cdef class LdcLong(_FrozenValueBase):
     """Long constant for ``ldc2_w`` (CONSTANT_Long, §4.4.5).
 
     Attributes:
         value: The signed 64-bit integer constant.
     """
 
-    value: int
+    def __init__(self, object value):
+        self.value = value
+
+    def _init_values(self):
+        return (self.value,)
+
+    def _field_values(self):
+        return (self.value,)
+
+    def _field_items(self):
+        return (("value", self.value),)
 
 
-@dataclass(frozen=True)
-class LdcDouble:
+cdef class LdcDouble(_FrozenValueBase):
     """Double constant for ``ldc2_w`` (CONSTANT_Double, §4.4.5).
 
     Stored as split high/low 32-bit words to preserve exact bit patterns.
@@ -266,45 +375,84 @@ class LdcDouble:
             pattern.
     """
 
-    high_bytes: int
-    low_bytes: int
+    def __init__(self, object high_bytes, object low_bytes):
+        self.high_bytes = high_bytes
+        self.low_bytes = low_bytes
+
+    def _init_values(self):
+        return (self.high_bytes, self.low_bytes)
+
+    def _field_values(self):
+        return (self.high_bytes, self.low_bytes)
+
+    def _field_items(self):
+        return (
+            ("high_bytes", self.high_bytes),
+            ("low_bytes", self.low_bytes),
+        )
 
 
-@dataclass(frozen=True)
-class LdcString:
+cdef class LdcString(_FrozenValueBase):
     """String constant for ``ldc`` / ``ldc_w`` (CONSTANT_String, §4.4.3).
 
     Attributes:
         value: The string constant value.
     """
 
-    value: str
+    def __init__(self, object value):
+        self.value = value
+
+    def _init_values(self):
+        return (self.value,)
+
+    def _field_values(self):
+        return (self.value,)
+
+    def _field_items(self):
+        return (("value", self.value),)
 
 
-@dataclass(frozen=True)
-class LdcClass:
+cdef class LdcClass(_FrozenValueBase):
     """Class literal for ``ldc`` / ``ldc_w`` (CONSTANT_Class, §4.4.1).
 
     Attributes:
         name: JVM internal class name (e.g. ``java/lang/Object``).
     """
 
-    name: str
+    def __init__(self, object name):
+        self.name = name
+
+    def _init_values(self):
+        return (self.name,)
+
+    def _field_values(self):
+        return (self.name,)
+
+    def _field_items(self):
+        return (("name", self.name),)
 
 
-@dataclass(frozen=True)
-class LdcMethodType:
+cdef class LdcMethodType(_FrozenValueBase):
     """MethodType constant for ``ldc`` / ``ldc_w`` (CONSTANT_MethodType, §4.4.9).
 
     Attributes:
         descriptor: JVM method descriptor (e.g. ``(II)V``).
     """
 
-    descriptor: str
+    def __init__(self, object descriptor):
+        self.descriptor = descriptor
+
+    def _init_values(self):
+        return (self.descriptor,)
+
+    def _field_values(self):
+        return (self.descriptor,)
+
+    def _field_items(self):
+        return (("descriptor", self.descriptor),)
 
 
-@dataclass(frozen=True)
-class LdcMethodHandle:
+cdef class LdcMethodHandle(_FrozenValueBase):
     """MethodHandle constant for ``ldc`` / ``ldc_w`` (CONSTANT_MethodHandle, §4.4.8).
 
     Attributes:
@@ -322,19 +470,39 @@ class LdcMethodHandle:
         ValueError: If ``reference_kind`` is outside the [1, 9] range.
     """
 
-    reference_kind: int
-    owner: str
-    name: str
-    descriptor: str
-    is_interface: bool = False
+    def __init__(
+        self,
+        Py_ssize_t reference_kind,
+        object owner,
+        object name,
+        object descriptor,
+        bint is_interface=False,
+    ):
+        if not 1 <= reference_kind <= 9:
+            raise ValueError(f"reference_kind must be in range [1, 9], got {reference_kind}")
+        self.reference_kind = reference_kind
+        self.owner = owner
+        self.name = name
+        self.descriptor = descriptor
+        self.is_interface = is_interface
 
-    def __post_init__(self) -> None:
-        if not 1 <= self.reference_kind <= 9:
-            raise ValueError(f"reference_kind must be in range [1, 9], got {self.reference_kind}")
+    def _init_values(self):
+        return (self.reference_kind, self.owner, self.name, self.descriptor, self.is_interface)
+
+    def _field_values(self):
+        return (self.reference_kind, self.owner, self.name, self.descriptor, self.is_interface)
+
+    def _field_items(self):
+        return (
+            ("reference_kind", self.reference_kind),
+            ("owner", self.owner),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+            ("is_interface", self.is_interface),
+        )
 
 
-@dataclass(frozen=True)
-class LdcDynamic:
+cdef class LdcDynamic(_FrozenValueBase):
     """Dynamic constant for ``ldc`` / ``ldc_w`` (CONSTANT_Dynamic / condy, §4.4.10).
 
     Attributes:
@@ -348,14 +516,25 @@ class LdcDynamic:
             range.
     """
 
-    bootstrap_method_attr_index: int
-    name: str
-    descriptor: str
-
-    def __post_init__(self) -> None:
-        _require_u2(
-            self.bootstrap_method_attr_index,
+    def __init__(self, Py_ssize_t bootstrap_method_attr_index, object name, object descriptor):
+        self.bootstrap_method_attr_index = _require_u2(
+            bootstrap_method_attr_index,
             context="bootstrap_method_attr_index",
+        )
+        self.name = name
+        self.descriptor = descriptor
+
+    def _init_values(self):
+        return (self.bootstrap_method_attr_index, self.name, self.descriptor)
+
+    def _field_values(self):
+        return (self.bootstrap_method_attr_index, self.name, self.descriptor)
+
+    def _field_items(self):
+        return (
+            ("bootstrap_method_attr_index", self.bootstrap_method_attr_index),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
         )
 
 
@@ -368,8 +547,7 @@ LdcValue = (
 # ---------------------------------------------------------------------------
 
 
-@dataclass(init=False)
-class FieldInsn(InsnInfo):
+cdef class FieldInsn(_OperandInsnBase):
     """Symbolic instruction for field access (§6.5.getfield, §6.5.putfield, etc.).
 
     Wraps GETFIELD, PUTFIELD, GETSTATIC, and PUTSTATIC with resolved
@@ -386,37 +564,40 @@ class FieldInsn(InsnInfo):
         ValueError: If ``insn_type`` is not a field access opcode.
     """
 
-    owner: str
-    name: str
-    descriptor: str
-
     def __init__(
         self,
-        insn_type: InsnInfoType,
-        owner: str,
-        name: str,
-        descriptor: str,
-        bytecode_offset: int = -1,
-    ) -> None:
+        object insn_type,
+        object owner,
+        object name,
+        object descriptor,
+        Py_ssize_t bytecode_offset=-1,
+    ):
         if insn_type not in _FIELD_OPCODES:
             raise ValueError(f"{insn_type.name} is not a field access opcode")
-        super().__init__(insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.owner = owner
         self.name = name
         self.descriptor = descriptor
 
     @classmethod
-    def _trusted(cls, insn_type, owner, name, descriptor, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, insn_type, bytecode_offset)
-        self.owner = owner
-        self.name = name
-        self.descriptor = descriptor
-        return self
+    def _trusted(cls, object insn_type, object owner, object name, object descriptor, Py_ssize_t bytecode_offset=-1):
+        return _trusted_field_insn(insn_type, owner, name, descriptor, bytecode_offset)
+
+    def _init_values(self):
+        return (self.type, self.owner, self.name, self.descriptor, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.owner, self.name, self.descriptor)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("owner", self.owner),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+        )
 
 
-@dataclass(init=False)
-class MethodInsn(InsnInfo):
+cdef class MethodInsn(_OperandInsnBase):
     """Symbolic instruction for method invocation (§6.5.invokevirtual, etc.).
 
     Wraps INVOKEVIRTUAL, INVOKESPECIAL, and INVOKESTATIC with resolved
@@ -437,43 +618,53 @@ class MethodInsn(InsnInfo):
             opcode.
     """
 
-    owner: str
-    name: str
-    descriptor: str
-    is_interface: bool
-
     def __init__(
         self,
-        insn_type: InsnInfoType,
-        owner: str,
-        name: str,
-        descriptor: str,
-        is_interface: bool = False,
-        bytecode_offset: int = -1,
-    ) -> None:
+        object insn_type,
+        object owner,
+        object name,
+        object descriptor,
+        bint is_interface=False,
+        Py_ssize_t bytecode_offset=-1,
+    ):
         if insn_type not in _METHOD_OPCODES:
             raise ValueError(
                 f"{insn_type.name} is not a method invocation opcode (use InterfaceMethodInsn for INVOKEINTERFACE)"
             )
-        super().__init__(insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.owner = owner
         self.name = name
         self.descriptor = descriptor
         self.is_interface = is_interface
 
     @classmethod
-    def _trusted(cls, insn_type, owner, name, descriptor, is_interface=False, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, insn_type, bytecode_offset)
-        self.owner = owner
-        self.name = name
-        self.descriptor = descriptor
-        self.is_interface = is_interface
-        return self
+    def _trusted(
+        cls,
+        object insn_type,
+        object owner,
+        object name,
+        object descriptor,
+        bint is_interface=False,
+        Py_ssize_t bytecode_offset=-1,
+    ):
+        return _trusted_method_insn(insn_type, owner, name, descriptor, is_interface, bytecode_offset)
+
+    def _init_values(self):
+        return (self.type, self.owner, self.name, self.descriptor, self.is_interface, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.owner, self.name, self.descriptor, self.is_interface)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("owner", self.owner),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+            ("is_interface", self.is_interface),
+        )
 
 
-@dataclass(init=False)
-class InterfaceMethodInsn(InsnInfo):
+cdef class InterfaceMethodInsn(_OperandInsnBase):
     """Symbolic instruction for INVOKEINTERFACE (§6.5.invokeinterface).
 
     The ``count`` operand (argument word count) is computed automatically
@@ -485,34 +676,37 @@ class InterfaceMethodInsn(InsnInfo):
         descriptor: JVM method descriptor.
     """
 
-    owner: str
-    name: str
-    descriptor: str
-
     def __init__(
         self,
-        owner: str,
-        name: str,
-        descriptor: str,
-        bytecode_offset: int = -1,
-    ) -> None:
-        super().__init__(InsnInfoType.INVOKEINTERFACE, bytecode_offset)
+        object owner,
+        object name,
+        object descriptor,
+        Py_ssize_t bytecode_offset=-1,
+    ):
+        CInsnInfo.__init__(self, InsnInfoType.INVOKEINTERFACE, bytecode_offset)
         self.owner = owner
         self.name = name
         self.descriptor = descriptor
 
     @classmethod
-    def _trusted(cls, owner, name, descriptor, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.INVOKEINTERFACE, bytecode_offset)
-        self.owner = owner
-        self.name = name
-        self.descriptor = descriptor
-        return self
+    def _trusted(cls, object owner, object name, object descriptor, Py_ssize_t bytecode_offset=-1):
+        return _trusted_interface_method_insn(owner, name, descriptor, bytecode_offset)
+
+    def _init_values(self):
+        return (self.owner, self.name, self.descriptor, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.owner, self.name, self.descriptor)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("owner", self.owner),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+        )
 
 
-@dataclass(init=False)
-class TypeInsn(InsnInfo):
+cdef class TypeInsn(_OperandInsnBase):
     """Symbolic instruction for type operations (§6.5.new, §6.5.checkcast, etc.).
 
     Wraps NEW, CHECKCAST, INSTANCEOF, and ANEWARRAY with resolved symbolic
@@ -527,29 +721,27 @@ class TypeInsn(InsnInfo):
         ValueError: If ``insn_type`` is not a type instruction opcode.
     """
 
-    class_name: str
-
-    def __init__(
-        self,
-        insn_type: InsnInfoType,
-        class_name: str,
-        bytecode_offset: int = -1,
-    ) -> None:
+    def __init__(self, object insn_type, object class_name, Py_ssize_t bytecode_offset=-1):
         if insn_type not in _TYPE_OPCODES:
             raise ValueError(f"{insn_type.name} is not a type instruction opcode")
-        super().__init__(insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.class_name = class_name
 
     @classmethod
-    def _trusted(cls, insn_type, class_name, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, insn_type, bytecode_offset)
-        self.class_name = class_name
-        return self
+    def _trusted(cls, object insn_type, object class_name, Py_ssize_t bytecode_offset=-1):
+        return _trusted_type_insn(insn_type, class_name, bytecode_offset)
+
+    def _init_values(self):
+        return (self.type, self.class_name, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.class_name,)
+
+    def _field_items(self):
+        return self._base_field_items() + (("class_name", self.class_name),)
 
 
-@dataclass(init=False)
-class VarInsn(InsnInfo):
+cdef class VarInsn(_OperandInsnBase):
     """Symbolic instruction for local variable access (§6.5.iload, §6.5.astore, etc.).
 
     Normalises all implicit slot-encoded opcodes (``ILOAD_0``–``ASTORE_3``),
@@ -575,29 +767,27 @@ class VarInsn(InsnInfo):
             ``slot`` exceeds the ``u2`` range.
     """
 
-    slot: int
-
-    def __init__(
-        self,
-        insn_type: InsnInfoType,
-        slot: int,
-        bytecode_offset: int = -1,
-    ) -> None:
+    def __init__(self, object insn_type, Py_ssize_t slot, Py_ssize_t bytecode_offset=-1):
         if insn_type not in _VAR_BASE_OPCODES:
             raise ValueError(f"{insn_type.name} is not a local variable instruction opcode")
-        super().__init__(insn_type, bytecode_offset)
+        CInsnInfo.__init__(self, insn_type, bytecode_offset)
         self.slot = _require_u2(slot, context="local variable slot")
 
     @classmethod
-    def _trusted(cls, insn_type, slot, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, insn_type, bytecode_offset)
-        self.slot = slot
-        return self
+    def _trusted(cls, object insn_type, Py_ssize_t slot, Py_ssize_t bytecode_offset=-1):
+        return _trusted_var_insn(insn_type, slot, bytecode_offset)
+
+    def _init_values(self):
+        return (self.type, self.slot, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.slot,)
+
+    def _field_items(self):
+        return self._base_field_items() + (("slot", self.slot),)
 
 
-@dataclass(init=False)
-class IIncInsn(InsnInfo):
+cdef class IIncInsn(_OperandInsnBase):
     """Symbolic instruction for IINC / IINCW (§6.5.iinc).
 
     Normalises both the standard and WIDE forms.  Lowering selects the
@@ -615,30 +805,29 @@ class IIncInsn(InsnInfo):
             exceeds the ``i2`` range.
     """
 
-    slot: int
-    increment: int
-
-    def __init__(
-        self,
-        slot: int,
-        increment: int,
-        bytecode_offset: int = -1,
-    ) -> None:
-        super().__init__(InsnInfoType.IINC, bytecode_offset)
+    def __init__(self, Py_ssize_t slot, Py_ssize_t increment, Py_ssize_t bytecode_offset=-1):
+        CInsnInfo.__init__(self, InsnInfoType.IINC, bytecode_offset)
         self.slot = _require_u2(slot, context="local variable slot")
         self.increment = _require_i2(increment, context="iinc increment")
 
     @classmethod
-    def _trusted(cls, slot, increment, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.IINC, bytecode_offset)
-        self.slot = slot
-        self.increment = increment
-        return self
+    def _trusted(cls, Py_ssize_t slot, Py_ssize_t increment, Py_ssize_t bytecode_offset=-1):
+        return _trusted_iinc_insn(slot, increment, bytecode_offset)
+
+    def _init_values(self):
+        return (self.slot, self.increment, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.slot, self.increment)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("slot", self.slot),
+            ("increment", self.increment),
+        )
 
 
-@dataclass(init=False)
-class LdcInsn(InsnInfo):
+cdef class LdcInsn(_OperandInsnBase):
     """Symbolic instruction for constant loading (§6.5.ldc, §6.5.ldc_w, §6.5.ldc2_w).
 
     Lowering selects the minimal encoding: ``ldc`` (2 bytes) when the
@@ -651,26 +840,25 @@ class LdcInsn(InsnInfo):
         value: Tagged constant determining the constant-pool entry type.
     """
 
-    value: LdcValue
-
-    def __init__(
-        self,
-        value: LdcValue,
-        bytecode_offset: int = -1,
-    ) -> None:
-        super().__init__(InsnInfoType.LDC_W, bytecode_offset)
+    def __init__(self, object value, Py_ssize_t bytecode_offset=-1):
+        CInsnInfo.__init__(self, InsnInfoType.LDC_W, bytecode_offset)
         self.value = value
 
     @classmethod
-    def _trusted(cls, value, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.LDC_W, bytecode_offset)
-        self.value = value
-        return self
+    def _trusted(cls, object value, Py_ssize_t bytecode_offset=-1):
+        return _trusted_ldc_insn(value, bytecode_offset)
+
+    def _init_values(self):
+        return (self.value, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.value,)
+
+    def _field_items(self):
+        return self._base_field_items() + (("value", self.value),)
 
 
-@dataclass(init=False)
-class InvokeDynamicInsn(InsnInfo):
+cdef class InvokeDynamicInsn(_OperandInsnBase):
     """Symbolic instruction for INVOKEDYNAMIC (§6.5.invokedynamic).
 
     Attributes:
@@ -684,18 +872,14 @@ class InvokeDynamicInsn(InsnInfo):
             range.
     """
 
-    bootstrap_method_attr_index: int
-    name: str
-    descriptor: str
-
     def __init__(
         self,
-        bootstrap_method_attr_index: int,
-        name: str,
-        descriptor: str,
-        bytecode_offset: int = -1,
-    ) -> None:
-        super().__init__(InsnInfoType.INVOKEDYNAMIC, bytecode_offset)
+        Py_ssize_t bootstrap_method_attr_index,
+        object name,
+        object descriptor,
+        Py_ssize_t bytecode_offset=-1,
+    ):
+        CInsnInfo.__init__(self, InsnInfoType.INVOKEDYNAMIC, bytecode_offset)
         self.bootstrap_method_attr_index = _require_u2(
             bootstrap_method_attr_index,
             context="bootstrap_method_attr_index",
@@ -704,17 +888,35 @@ class InvokeDynamicInsn(InsnInfo):
         self.descriptor = descriptor
 
     @classmethod
-    def _trusted(cls, bootstrap_method_attr_index, name, descriptor, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.INVOKEDYNAMIC, bytecode_offset)
-        self.bootstrap_method_attr_index = bootstrap_method_attr_index
-        self.name = name
-        self.descriptor = descriptor
-        return self
+    def _trusted(
+        cls,
+        Py_ssize_t bootstrap_method_attr_index,
+        object name,
+        object descriptor,
+        Py_ssize_t bytecode_offset=-1,
+    ):
+        return _trusted_invoke_dynamic_insn(
+            bootstrap_method_attr_index,
+            name,
+            descriptor,
+            bytecode_offset,
+        )
+
+    def _init_values(self):
+        return (self.bootstrap_method_attr_index, self.name, self.descriptor, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.bootstrap_method_attr_index, self.name, self.descriptor)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("bootstrap_method_attr_index", self.bootstrap_method_attr_index),
+            ("name", self.name),
+            ("descriptor", self.descriptor),
+        )
 
 
-@dataclass(init=False)
-class MultiANewArrayInsn(InsnInfo):
+cdef class MultiANewArrayInsn(_OperandInsnBase):
     """Symbolic instruction for MULTIANEWARRAY (§6.5.multianewarray).
 
     Attributes:
@@ -726,16 +928,8 @@ class MultiANewArrayInsn(InsnInfo):
         ValueError: If ``dimensions`` is outside the [1, 255] range.
     """
 
-    class_name: str
-    dimensions: int
-
-    def __init__(
-        self,
-        class_name: str,
-        dimensions: int,
-        bytecode_offset: int = -1,
-    ) -> None:
-        super().__init__(InsnInfoType.MULTIANEWARRAY, bytecode_offset)
+    def __init__(self, object class_name, Py_ssize_t dimensions, Py_ssize_t bytecode_offset=-1):
+        CInsnInfo.__init__(self, InsnInfoType.MULTIANEWARRAY, bytecode_offset)
         self.class_name = class_name
         self.dimensions = _require_u1(
             dimensions,
@@ -744,9 +938,142 @@ class MultiANewArrayInsn(InsnInfo):
         )
 
     @classmethod
-    def _trusted(cls, class_name, dimensions, bytecode_offset=-1):
-        self = cls.__new__(cls)
-        InsnInfo.__init__(self, InsnInfoType.MULTIANEWARRAY, bytecode_offset)
-        self.class_name = class_name
-        self.dimensions = dimensions
-        return self
+    def _trusted(cls, object class_name, Py_ssize_t dimensions, Py_ssize_t bytecode_offset=-1):
+        return _trusted_multi_anew_array_insn(class_name, dimensions, bytecode_offset)
+
+    def _init_values(self):
+        return (self.class_name, self.dimensions, self.bytecode_offset)
+
+    def _field_values(self):
+        return self._base_field_values() + (self.class_name, self.dimensions)
+
+    def _field_items(self):
+        return self._base_field_items() + (
+            ("class_name", self.class_name),
+            ("dimensions", self.dimensions),
+        )
+
+
+cdef inline FieldInsn _trusted_field_insn(
+    object insn_type,
+    object owner,
+    object name,
+    object descriptor,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef FieldInsn self = FieldInsn.__new__(FieldInsn)
+    self.type = insn_type
+    self.bytecode_offset = bytecode_offset
+    self.owner = owner
+    self.name = name
+    self.descriptor = descriptor
+    return self
+
+
+cdef inline MethodInsn _trusted_method_insn(
+    object insn_type,
+    object owner,
+    object name,
+    object descriptor,
+    bint is_interface=False,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef MethodInsn self = MethodInsn.__new__(MethodInsn)
+    self.type = insn_type
+    self.bytecode_offset = bytecode_offset
+    self.owner = owner
+    self.name = name
+    self.descriptor = descriptor
+    self.is_interface = is_interface
+    return self
+
+
+cdef inline InterfaceMethodInsn _trusted_interface_method_insn(
+    object owner,
+    object name,
+    object descriptor,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef InterfaceMethodInsn self = InterfaceMethodInsn.__new__(InterfaceMethodInsn)
+    self.type = InsnInfoType.INVOKEINTERFACE
+    self.bytecode_offset = bytecode_offset
+    self.owner = owner
+    self.name = name
+    self.descriptor = descriptor
+    return self
+
+
+cdef inline TypeInsn _trusted_type_insn(
+    object insn_type,
+    object class_name,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef TypeInsn self = TypeInsn.__new__(TypeInsn)
+    self.type = insn_type
+    self.bytecode_offset = bytecode_offset
+    self.class_name = class_name
+    return self
+
+
+cdef inline VarInsn _trusted_var_insn(
+    object insn_type,
+    Py_ssize_t slot,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef VarInsn self = VarInsn.__new__(VarInsn)
+    self.type = insn_type
+    self.bytecode_offset = bytecode_offset
+    self.slot = slot
+    return self
+
+
+cdef inline IIncInsn _trusted_iinc_insn(
+    Py_ssize_t slot,
+    Py_ssize_t increment,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef IIncInsn self = IIncInsn.__new__(IIncInsn)
+    self.type = InsnInfoType.IINC
+    self.bytecode_offset = bytecode_offset
+    self.slot = slot
+    self.increment = increment
+    return self
+
+
+cdef inline LdcInsn _trusted_ldc_insn(
+    object value,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef LdcInsn self = LdcInsn.__new__(LdcInsn)
+    self.type = InsnInfoType.LDC_W
+    self.bytecode_offset = bytecode_offset
+    self.value = value
+    return self
+
+
+cdef inline InvokeDynamicInsn _trusted_invoke_dynamic_insn(
+    Py_ssize_t bootstrap_method_attr_index,
+    object name,
+    object descriptor,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef InvokeDynamicInsn self = InvokeDynamicInsn.__new__(InvokeDynamicInsn)
+    self.type = InsnInfoType.INVOKEDYNAMIC
+    self.bytecode_offset = bytecode_offset
+    self.bootstrap_method_attr_index = bootstrap_method_attr_index
+    self.name = name
+    self.descriptor = descriptor
+    return self
+
+
+cdef inline MultiANewArrayInsn _trusted_multi_anew_array_insn(
+    object class_name,
+    Py_ssize_t dimensions,
+    Py_ssize_t bytecode_offset=-1,
+):
+    cdef MultiANewArrayInsn self = MultiANewArrayInsn.__new__(MultiANewArrayInsn)
+    self.type = InsnInfoType.MULTIANEWARRAY
+    self.bytecode_offset = bytecode_offset
+    self.class_name = class_name
+    self.dimensions = dimensions
+    return self

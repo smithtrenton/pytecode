@@ -27,7 +27,32 @@ from ..classfile._instructions_cy cimport (
     MultiANewArray as CMultiANewArray,
     TableSwitch as CTableSwitch,
 )
+from ..classfile._attributes_cy cimport (
+    CodeAttr as CCodeAttr,
+    ExceptionInfo as CExceptionInfo,
+    LineNumberInfo as CLineNumberInfo,
+    LineNumberTableAttr as CLineNumberTableAttr,
+    LocalVariableInfo as CLocalVariableInfo,
+    LocalVariableTableAttr as CLocalVariableTableAttr,
+    LocalVariableTypeInfo as CLocalVariableTypeInfo,
+    LocalVariableTypeTableAttr as CLocalVariableTypeTableAttr,
+)
 from ._labels_cy cimport Label as CLabel
+from ._operands_cy cimport (
+    FieldInsn as CFieldInsn,
+    LdcInsn as CLdcInsn,
+    MethodInsn as CMethodInsn,
+    TypeInsn as CTypeInsn,
+    _trusted_field_insn,
+    _trusted_iinc_insn,
+    _trusted_interface_method_insn,
+    _trusted_invoke_dynamic_insn,
+    _trusted_ldc_insn,
+    _trusted_method_insn,
+    _trusted_multi_anew_array_insn,
+    _trusted_type_insn,
+    _trusted_var_insn,
+)
 from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
@@ -131,17 +156,7 @@ _BRANCH_TARGET_CONTEXTS = {
 _trusted_branch_insn = BranchInsn._trusted
 _trusted_lookup_switch_insn = LookupSwitchInsn._trusted
 _trusted_table_switch_insn = TableSwitchInsn._trusted
-_trusted_field_insn = FieldInsn._trusted
-_trusted_method_insn = MethodInsn._trusted
-_trusted_interface_method_insn = InterfaceMethodInsn._trusted
-_trusted_invoke_dynamic_insn = InvokeDynamicInsn._trusted
-_trusted_ldc_insn = LdcInsn._trusted
-_trusted_multi_anew_array_insn = MultiANewArrayInsn._trusted
-_trusted_type_insn = TypeInsn._trusted
-_trusted_var_insn = VarInsn._trusted
-_trusted_iinc_insn = IIncInsn._trusted
 _MISSING = object()
-
 
 def _repr_fields(str class_name, tuple fields):
     return f"{class_name}(" + ", ".join(f"{name}={value!r}" for name, value in fields) + ")"
@@ -739,97 +754,147 @@ cdef inline CLabel _label_for_offset(dict labels_by_offset, int offset):
     return labels_by_offset[offset]
 
 
-def _collect_labels(object code_attr, *, bint skip_debug=False):
-    cdef int code_length = code_attr.code_length
-    cdef set label_offsets = set()
-    add_label_offset = label_offsets.add
+cdef inline void _ensure_label_at_offset(dict labels_by_offset, int offset):
+    if labels_by_offset.get(offset) is None:
+        labels_by_offset[offset] = Label(f"L{offset}")
 
-    for insn in code_attr.code:
+
+def _collect_labels(object code_attr, *, bint skip_debug=False):
+    cdef CCodeAttr code_attr_info = code_attr
+    cdef int code_length = code_attr_info.code_length
+    cdef dict labels_by_offset = {}
+    cdef object insn
+    cdef object attribute
+    cdef type insn_type
+    cdef type attr_type
+    cdef CBranch branch_insn
+    cdef CBranchW branch_w_insn
+    cdef CLookupSwitch lookup_switch
+    cdef CTableSwitch table_switch
+    cdef CMatchOffsetPair pair
+    cdef CExceptionInfo exception
+    cdef CLineNumberTableAttr line_number_table_attr
+    cdef CLineNumberInfo line_number_entry
+    cdef CLocalVariableTableAttr local_variable_table_attr
+    cdef CLocalVariableInfo local_variable_entry
+    cdef CLocalVariableTypeTableAttr local_variable_type_table_attr
+    cdef CLocalVariableTypeInfo local_variable_type_entry
+    cdef int offset
+
+    for insn in code_attr_info.code:
         insn_type = type(insn)
         if insn_type is Branch or insn_type is BranchW:
-            add_label_offset(
-                _validate_code_offset(
-                    insn.bytecode_offset + insn.offset,
+            if insn_type is Branch:
+                branch_insn = insn
+                offset = _validate_code_offset(
+                    branch_insn.bytecode_offset + branch_insn.offset,
                     code_length,
-                    _BRANCH_TARGET_CONTEXTS[insn.type],
+                    _BRANCH_TARGET_CONTEXTS[branch_insn.type],
                 )
-            )
+            else:
+                branch_w_insn = insn
+                offset = _validate_code_offset(
+                    branch_w_insn.bytecode_offset + branch_w_insn.offset,
+                    code_length,
+                    _BRANCH_TARGET_CONTEXTS[branch_w_insn.type],
+                )
+            _ensure_label_at_offset(labels_by_offset, offset)
         elif insn_type is LookupSwitch:
-            add_label_offset(
-                _validate_code_offset(
-                    insn.bytecode_offset + insn.default,
-                    code_length,
-                    "lookupswitch default target",
-                )
+            lookup_switch = insn
+            offset = _validate_code_offset(
+                lookup_switch.bytecode_offset + lookup_switch.default,
+                code_length,
+                "lookupswitch default target",
             )
-            for pair in insn.pairs:
-                add_label_offset(
-                    _validate_code_offset(
-                        insn.bytecode_offset + pair.offset,
-                        code_length,
-                        "lookupswitch case target",
-                    )
+            _ensure_label_at_offset(labels_by_offset, offset)
+            for pair in lookup_switch.pairs:
+                offset = _validate_code_offset(
+                    lookup_switch.bytecode_offset + pair.offset,
+                    code_length,
+                    "lookupswitch case target",
                 )
+                _ensure_label_at_offset(labels_by_offset, offset)
         elif insn_type is TableSwitch:
-            add_label_offset(
-                _validate_code_offset(
-                    insn.bytecode_offset + insn.default,
-                    code_length,
-                    "tableswitch default target",
-                )
+            table_switch = insn
+            offset = _validate_code_offset(
+                table_switch.bytecode_offset + table_switch.default,
+                code_length,
+                "tableswitch default target",
             )
-            for relative in insn.offsets:
-                add_label_offset(
+            _ensure_label_at_offset(labels_by_offset, offset)
+            for offset in table_switch.offsets:
+                _ensure_label_at_offset(
+                    labels_by_offset,
                     _validate_code_offset(
-                        insn.bytecode_offset + relative,
+                        table_switch.bytecode_offset + offset,
                         code_length,
                         "tableswitch case target",
-                    )
+                    ),
                 )
 
-    for exception in code_attr.exception_table:
-        add_label_offset(_validate_code_offset(exception.start_pc, code_length, "exception handler start"))
-        add_label_offset(_validate_code_offset(exception.end_pc, code_length, "exception handler end"))
-        add_label_offset(_validate_code_offset(exception.handler_pc, code_length, "exception handler target"))
+    for exception in code_attr_info.exception_table:
+        _ensure_label_at_offset(
+            labels_by_offset,
+            _validate_code_offset(exception.start_pc, code_length, "exception handler start"),
+        )
+        _ensure_label_at_offset(
+            labels_by_offset,
+            _validate_code_offset(exception.end_pc, code_length, "exception handler end"),
+        )
+        _ensure_label_at_offset(
+            labels_by_offset,
+            _validate_code_offset(exception.handler_pc, code_length, "exception handler target"),
+        )
 
     if skip_debug:
-        labels_by_offset = {}
-        for offset in label_offsets:
-            labels_by_offset[offset] = Label(f"L{offset}")
         return labels_by_offset
 
-    for attribute in code_attr.attributes:
+    for attribute in code_attr_info.attributes:
         attr_type = type(attribute)
         if attr_type is LineNumberTableAttr:
-            for entry in attribute.line_number_table:
-                add_label_offset(_validate_code_offset(entry.start_pc, code_length, "line number entry"))
+            line_number_table_attr = attribute
+            for line_number_entry in line_number_table_attr.line_number_table:
+                _ensure_label_at_offset(
+                    labels_by_offset,
+                    _validate_code_offset(line_number_entry.start_pc, code_length, "line number entry"),
+                )
         elif attr_type is LocalVariableTableAttr:
-            for entry in attribute.local_variable_table:
-                add_label_offset(_validate_code_offset(entry.start_pc, code_length, "local variable start"))
-                add_label_offset(
-                    _validate_code_offset(entry.start_pc + entry.length, code_length, "local variable end")
+            local_variable_table_attr = attribute
+            for local_variable_entry in local_variable_table_attr.local_variable_table:
+                _ensure_label_at_offset(
+                    labels_by_offset,
+                    _validate_code_offset(local_variable_entry.start_pc, code_length, "local variable start"),
+                )
+                _ensure_label_at_offset(
+                    labels_by_offset,
+                    _validate_code_offset(
+                        local_variable_entry.start_pc + local_variable_entry.length,
+                        code_length,
+                        "local variable end",
+                    ),
                 )
         elif attr_type is LocalVariableTypeTableAttr:
-            for entry in attribute.local_variable_type_table:
-                add_label_offset(
-                    _validate_code_offset(entry.start_pc, code_length, "local variable type start")
+            local_variable_type_table_attr = attribute
+            for local_variable_type_entry in local_variable_type_table_attr.local_variable_type_table:
+                _ensure_label_at_offset(
+                    labels_by_offset,
+                    _validate_code_offset(local_variable_type_entry.start_pc, code_length, "local variable type start"),
                 )
-                add_label_offset(
+                _ensure_label_at_offset(
+                    labels_by_offset,
                     _validate_code_offset(
-                        entry.start_pc + entry.length,
+                        local_variable_type_entry.start_pc + local_variable_type_entry.length,
                         code_length,
                         "local variable type end",
-                    )
+                    ),
                 )
 
-    labels_by_offset = {}
-    for offset in label_offsets:
-        labels_by_offset[offset] = Label(f"L{offset}")
     return labels_by_offset
 
 
 cdef object _lift_instruction(
     object insn,
+    type insn_type,
     dict labels_by_offset,
     object cp,
 ):
@@ -847,7 +912,6 @@ cdef object _lift_instruction(
     cdef CLocalIndex local_index
     cdef CMatchOffsetPair pair
     cdef Py_ssize_t relative
-    insn_type = type(insn)
     if insn_type is Branch:
         branch_insn = insn
         return _trusted_branch_insn(
@@ -941,21 +1005,30 @@ def _lift_instructions(
     object cp,
     dict const_pool_item_cache=None,
 ):
+    cdef CCodeAttr code_attr_info = code_attr
     cdef list instructions = []
-    cdef set inserted_offsets = set()
+    cdef set remaining_offsets = set(labels_by_offset)
+    cdef object insn
+    cdef object label
+    cdef object cached
+    cdef object cache_key
+    cdef type insn_type
+    cdef CConstPoolIndex const_pool_insn
+    cdef int code_length
     if const_pool_item_cache is None:
         const_pool_item_cache = {}
     append = instructions.append
-    inserted_add = inserted_offsets.add
+    remaining_discard = remaining_offsets.discard
     labels_get = labels_by_offset.get
 
-    for insn in code_attr.code:
+    for insn in code_attr_info.code:
+        insn_type = type(insn)
         label = labels_get(insn.bytecode_offset)
-        if label is not None and insn.bytecode_offset not in inserted_offsets:
+        if label is not None:
             append(label)
-            inserted_add(insn.bytecode_offset)
+            remaining_discard(insn.bytecode_offset)
 
-        if type(insn) is ConstPoolIndex:
+        if insn_type is ConstPoolIndex:
             const_pool_insn = insn
             cache_key = (const_pool_insn.type, const_pool_insn.index)
             cached = const_pool_item_cache.get(cache_key)
@@ -965,15 +1038,15 @@ def _lift_instructions(
             append(_clone_lifted_code_item(cached))
             continue
 
-        append(_lift_instruction(insn, labels_by_offset, cp))
+        append(_lift_instruction(insn, insn_type, labels_by_offset, cp))
 
-    cdef int code_length = code_attr.code_length
+    code_length = code_attr_info.code_length
     end_label = labels_get(code_length)
-    if end_label is not None and code_length not in inserted_offsets:
+    if end_label is not None:
         append(end_label)
-        inserted_add(code_length)
+        remaining_discard(code_length)
 
-    missing_offsets = sorted(set(labels_by_offset) - inserted_offsets)
+    missing_offsets = sorted(remaining_offsets)
     if missing_offsets:
         raise ValueError(
             "labels refer to offsets that are not instruction boundaries: "
@@ -984,6 +1057,10 @@ def _lift_instructions(
 
 
 cdef object _clone_lifted_code_item(object item):
+    cdef CFieldInsn field_item
+    cdef CMethodInsn method_item
+    cdef CTypeInsn type_item
+    cdef CLdcInsn ldc_item
     item_type = type(item)
     if item_type is FieldInsn:
         field_item = item

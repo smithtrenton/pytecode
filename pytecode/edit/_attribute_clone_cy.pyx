@@ -10,8 +10,12 @@ from dataclasses import fields
 from functools import cache
 
 from ..classfile._attributes_cy cimport (
+    AppendFrameInfo as CAppendFrameInfo,
     BootstrapMethodInfo as CBootstrapMethodInfo,
+    ChopFrameInfo as CChopFrameInfo,
     CodeAttr as CCodeAttr,
+    FullFrameInfo as CFullFrameInfo,
+    ObjectVariableInfo as CObjectVariableInfo,
     ExportInfo as CExportInfo,
     ExceptionInfo as CExceptionInfo,
     InnerClassInfo as CInnerClassInfo,
@@ -27,6 +31,13 @@ from ..classfile._attributes_cy cimport (
     ProvidesInfo as CProvidesInfo,
     RecordComponentInfo as CRecordComponentInfo,
     RequiresInfo as CRequiresInfo,
+    SameFrameExtendedInfo as CSameFrameExtendedInfo,
+    SameLocals1StackItemFrameExtendedInfo as CSameLocals1StackItemFrameExtendedInfo,
+    SameLocals1StackItemFrameInfo as CSameLocals1StackItemFrameInfo,
+    StackMapFrameInfo as CStackMapFrameInfo,
+    StackMapTableAttr as CStackMapTableAttr,
+    UninitializedVariableInfo as CUninitializedVariableInfo,
+    VerificationTypeInfo as CVerificationTypeInfo,
 )
 from ..classfile.attributes import (
     AnnotationInfo,
@@ -42,6 +53,7 @@ from ..classfile.attributes import (
     ConstValueInfo,
     CodeAttr,
     DeprecatedAttr,
+    DoubleVariableInfo,
     ElementValueInfo,
     ElementValuePairInfo,
     EmptyTargetInfo,
@@ -275,55 +287,86 @@ cdef inline list _clone_record_component_info_list(list entries):
 
 cdef inline object _clone_verification_type(object value):
     cdef type t = type(value)
+    cdef CVerificationTypeInfo base_value
+    cdef CObjectVariableInfo object_value
+    cdef CUninitializedVariableInfo uninitialized_value
     if t is TopVariableInfo:
-        return TopVariableInfo(value.tag)
+        base_value = value
+        return TopVariableInfo(base_value.tag)
     if t is IntegerVariableInfo:
-        return IntegerVariableInfo(value.tag)
+        base_value = value
+        return IntegerVariableInfo(base_value.tag)
     if t is FloatVariableInfo:
-        return FloatVariableInfo(value.tag)
+        base_value = value
+        return FloatVariableInfo(base_value.tag)
+    if t is DoubleVariableInfo:
+        base_value = value
+        return DoubleVariableInfo(base_value.tag)
     if t is LongVariableInfo:
-        return LongVariableInfo(value.tag)
+        base_value = value
+        return LongVariableInfo(base_value.tag)
     if t is NullVariableInfo:
-        return NullVariableInfo(value.tag)
+        base_value = value
+        return NullVariableInfo(base_value.tag)
     if t is UninitializedThisVariableInfo:
-        return UninitializedThisVariableInfo(value.tag)
+        base_value = value
+        return UninitializedThisVariableInfo(base_value.tag)
     if t is ObjectVariableInfo:
-        return ObjectVariableInfo(value.tag, value.cpool_index)
+        object_value = value
+        return ObjectVariableInfo(object_value.tag, object_value.cpool_index)
     if t is UninitializedVariableInfo:
-        return UninitializedVariableInfo(value.tag, value.offset)
+        uninitialized_value = value
+        return UninitializedVariableInfo(uninitialized_value.tag, uninitialized_value.offset)
     return _clone_value(value)
 
 
 cdef inline object _clone_stack_map_frame(object frame):
     cdef type t = type(frame)
+    cdef CStackMapFrameInfo base_frame
+    cdef CSameLocals1StackItemFrameInfo same_locals1_frame
+    cdef CSameLocals1StackItemFrameExtendedInfo same_locals1_frame_extended
+    cdef CChopFrameInfo chop_frame
+    cdef CSameFrameExtendedInfo same_frame_extended
+    cdef CAppendFrameInfo append_frame
+    cdef CFullFrameInfo full_frame
     if t is SameFrameInfo:
-        return SameFrameInfo(frame.frame_type)
+        base_frame = frame
+        return SameFrameInfo(base_frame.frame_type)
     if t is SameLocals1StackItemFrameInfo:
-        return SameLocals1StackItemFrameInfo(frame.frame_type, _clone_verification_type(frame.stack))
+        same_locals1_frame = frame
+        return SameLocals1StackItemFrameInfo(
+            same_locals1_frame.frame_type,
+            _clone_verification_type(same_locals1_frame.stack),
+        )
     if t is SameLocals1StackItemFrameExtendedInfo:
+        same_locals1_frame_extended = frame
         return SameLocals1StackItemFrameExtendedInfo(
-            frame.frame_type,
-            frame.offset_delta,
-            _clone_verification_type(frame.stack),
+            same_locals1_frame_extended.frame_type,
+            same_locals1_frame_extended.offset_delta,
+            _clone_verification_type(same_locals1_frame_extended.stack),
         )
     if t is ChopFrameInfo:
-        return ChopFrameInfo(frame.frame_type, frame.offset_delta)
+        chop_frame = frame
+        return ChopFrameInfo(chop_frame.frame_type, chop_frame.offset_delta)
     if t is SameFrameExtendedInfo:
-        return SameFrameExtendedInfo(frame.frame_type, frame.offset_delta)
+        same_frame_extended = frame
+        return SameFrameExtendedInfo(same_frame_extended.frame_type, same_frame_extended.offset_delta)
     if t is AppendFrameInfo:
+        append_frame = frame
         return AppendFrameInfo(
-            frame.frame_type,
-            frame.offset_delta,
-            _clone_verification_type_list(frame.locals),
+            append_frame.frame_type,
+            append_frame.offset_delta,
+            _clone_verification_type_list(append_frame.locals),
         )
     if t is FullFrameInfo:
+        full_frame = frame
         return FullFrameInfo(
-            frame.frame_type,
-            frame.offset_delta,
-            frame.number_of_locals,
-            _clone_verification_type_list(frame.locals),
-            frame.number_of_stack_items,
-            _clone_verification_type_list(frame.stack),
+            full_frame.frame_type,
+            full_frame.offset_delta,
+            full_frame.number_of_locals,
+            _clone_verification_type_list(full_frame.locals),
+            full_frame.number_of_stack_items,
+            _clone_verification_type_list(full_frame.stack),
         )
     return _clone_value(frame)
 
@@ -749,14 +792,16 @@ cdef object _clone_simple_attribute(object attribute):
 
 
 cdef object _clone_fast_attribute(object attribute):
+    cdef CStackMapTableAttr stack_map_table_attr
     if type(attribute) is CodeAttr:
         return _clone_code_attr(attribute)
     if type(attribute) is StackMapTableAttr:
+        stack_map_table_attr = attribute
         return StackMapTableAttr(
-            attribute.attribute_name_index,
-            attribute.attribute_length,
-            attribute.number_of_entries,
-            _clone_stack_map_frame_list(attribute.entries),
+            stack_map_table_attr.attribute_name_index,
+            stack_map_table_attr.attribute_length,
+            stack_map_table_attr.number_of_entries,
+            _clone_stack_map_frame_list(stack_map_table_attr.entries),
         )
     cdef object runtime_attr = _clone_runtime_annotations_attr(attribute)
     if runtime_attr is not attribute:

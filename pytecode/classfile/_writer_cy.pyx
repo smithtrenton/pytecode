@@ -209,7 +209,132 @@ def _write_attributes(object writer, list attrs):
         _write_attribute(writer, attr)
 
 
+cdef inline int _begin_attribute_write(object writer, int attribute_name_index):
+    writer.write_u2(attribute_name_index)
+    return writer.reserve_u4()
+
+
+cdef inline void _finish_attribute_write(object writer, int payload_length_position, int payload_start):
+    writer.patch_u4(payload_length_position, len(writer) - payload_start)
+
+
+cdef _write_code_attr_payload(object writer, CodeAttr code_attr):
+    cdef ExceptionInfo exception_info
+    cdef int code_length_position
+    cdef int code_start
+
+    writer.write_u2(code_attr.max_stacks)
+    writer.write_u2(code_attr.max_locals)
+    code_length_position = writer.reserve_u4()
+    code_start = len(writer)
+    for insn in code_attr.code:
+        _write_instruction(writer, insn, code_start)
+    writer.patch_u4(code_length_position, len(writer) - code_start)
+    writer.write_u2(len(code_attr.exception_table))
+    for exception in code_attr.exception_table:
+        exception_info = exception
+        writer.write_u2(exception_info.start_pc)
+        writer.write_u2(exception_info.end_pc)
+        writer.write_u2(exception_info.handler_pc)
+        writer.write_u2(exception_info.catch_type)
+    _write_attributes(writer, code_attr.attributes)
+
+
+cdef _write_stack_map_table_attr_payload(object writer, StackMapTableAttr stack_map_attr):
+    writer.write_u2(len(stack_map_attr.entries))
+    for entry in stack_map_attr.entries:
+        _write_stack_map_frame_info(writer, entry)
+
+
+cdef _write_line_number_table_attr_payload(object writer, LineNumberTableAttr line_number_table_attr):
+    cdef LineNumberInfo line_number_info
+
+    writer.write_u2(len(line_number_table_attr.line_number_table))
+    for entry in line_number_table_attr.line_number_table:
+        line_number_info = entry
+        writer.write_u2(line_number_info.start_pc)
+        writer.write_u2(line_number_info.line_number)
+
+
+cdef _write_local_variable_table_attr_payload(object writer, LocalVariableTableAttr local_variable_table_attr):
+    cdef LocalVariableInfo local_variable_info
+
+    writer.write_u2(len(local_variable_table_attr.local_variable_table))
+    for entry in local_variable_table_attr.local_variable_table:
+        local_variable_info = entry
+        writer.write_u2(local_variable_info.start_pc)
+        writer.write_u2(local_variable_info.length)
+        writer.write_u2(local_variable_info.name_index)
+        writer.write_u2(local_variable_info.descriptor_index)
+        writer.write_u2(local_variable_info.index)
+
+
+cdef _write_local_variable_type_table_attr_payload(
+    object writer,
+    LocalVariableTypeTableAttr local_variable_type_table_attr,
+):
+    cdef LocalVariableTypeInfo local_variable_type_info
+
+    writer.write_u2(len(local_variable_type_table_attr.local_variable_type_table))
+    for entry in local_variable_type_table_attr.local_variable_type_table:
+        local_variable_type_info = entry
+        writer.write_u2(local_variable_type_info.start_pc)
+        writer.write_u2(local_variable_type_info.length)
+        writer.write_u2(local_variable_type_info.name_index)
+        writer.write_u2(local_variable_type_info.signature_index)
+        writer.write_u2(local_variable_type_info.index)
+
+
 def _write_attribute(object writer, object attr):
+    cdef type t = type(attr)
+    cdef int payload_length_position
+    cdef int payload_start
+    cdef CodeAttr code_attr
+    cdef StackMapTableAttr stack_map_attr
+    cdef LineNumberTableAttr line_number_table_attr
+    cdef LocalVariableTableAttr local_variable_table_attr
+    cdef LocalVariableTypeTableAttr local_variable_type_table_attr
+
+    if t is CodeAttr:
+        code_attr = attr
+        payload_length_position = _begin_attribute_write(writer, code_attr.attribute_name_index)
+        payload_start = len(writer)
+        _write_code_attr_payload(writer, code_attr)
+        _finish_attribute_write(writer, payload_length_position, payload_start)
+        return
+
+    if t is StackMapTableAttr:
+        stack_map_attr = attr
+        payload_length_position = _begin_attribute_write(writer, stack_map_attr.attribute_name_index)
+        payload_start = len(writer)
+        _write_stack_map_table_attr_payload(writer, stack_map_attr)
+        _finish_attribute_write(writer, payload_length_position, payload_start)
+        return
+
+    if t is LineNumberTableAttr:
+        line_number_table_attr = attr
+        payload_length_position = _begin_attribute_write(writer, line_number_table_attr.attribute_name_index)
+        payload_start = len(writer)
+        _write_line_number_table_attr_payload(writer, line_number_table_attr)
+        _finish_attribute_write(writer, payload_length_position, payload_start)
+        return
+
+    if t is LocalVariableTableAttr:
+        local_variable_table_attr = attr
+        payload_length_position = _begin_attribute_write(writer, local_variable_table_attr.attribute_name_index)
+        payload_start = len(writer)
+        _write_local_variable_table_attr_payload(writer, local_variable_table_attr)
+        _finish_attribute_write(writer, payload_length_position, payload_start)
+        return
+
+    if t is LocalVariableTypeTableAttr:
+        local_variable_type_table_attr = attr
+        payload_length_position = _begin_attribute_write(writer, local_variable_type_table_attr.attribute_name_index)
+        payload_start = len(writer)
+        _write_local_variable_type_table_attr_payload(writer, local_variable_type_table_attr)
+        _finish_attribute_write(writer, payload_length_position, payload_start)
+        return
+
     payload_writer = BytesWriter()
     _write_attribute_payload(payload_writer, attr)
     payload = payload_writer.to_bytes()
@@ -244,46 +369,17 @@ cdef _write_attribute_payload(object writer, object attr):
         writer.write_u2(attr.host_class_index)
         return
 
-    cdef CodeAttr code_attr
-    cdef StackMapTableAttr stack_map_attr
-    cdef LineNumberTableAttr line_number_table_attr
-    cdef LocalVariableTableAttr local_variable_table_attr
-    cdef LocalVariableTypeTableAttr local_variable_type_table_attr
-    cdef ExceptionInfo exception_info
     cdef BootstrapMethodInfo bootstrap_method_info
     cdef InnerClassInfo inner_class_info
-    cdef LineNumberInfo line_number_info
-    cdef LocalVariableInfo local_variable_info
-    cdef LocalVariableTypeInfo local_variable_type_info
     cdef MethodParameterInfo method_parameter_info
     cdef RecordComponentInfo record_component_info
 
     if t is CodeAttr:
-        code_attr = attr
-        code_writer = BytesWriter()
-        for insn in code_attr.code:
-            _write_instruction(code_writer, insn)
-        code_bytes = code_writer.to_bytes()
-
-        writer.write_u2(code_attr.max_stacks)
-        writer.write_u2(code_attr.max_locals)
-        writer.write_u4(len(code_bytes))
-        writer.write_bytes(code_bytes)
-        writer.write_u2(len(code_attr.exception_table))
-        for exception in code_attr.exception_table:
-            exception_info = exception
-            writer.write_u2(exception_info.start_pc)
-            writer.write_u2(exception_info.end_pc)
-            writer.write_u2(exception_info.handler_pc)
-            writer.write_u2(exception_info.catch_type)
-        _write_attributes(writer, code_attr.attributes)
+        _write_code_attr_payload(writer, attr)
         return
 
     if t is StackMapTableAttr:
-        stack_map_attr = attr
-        writer.write_u2(len(stack_map_attr.entries))
-        for entry in stack_map_attr.entries:
-            _write_stack_map_frame_info(writer, entry)
+        _write_stack_map_table_attr_payload(writer, attr)
         return
 
     if t is attributes.ExceptionsAttr:
@@ -312,36 +408,15 @@ cdef _write_attribute_payload(object writer, object attr):
         return
 
     if t is LineNumberTableAttr:
-        line_number_table_attr = attr
-        writer.write_u2(len(line_number_table_attr.line_number_table))
-        for entry in line_number_table_attr.line_number_table:
-            line_number_info = entry
-            writer.write_u2(line_number_info.start_pc)
-            writer.write_u2(line_number_info.line_number)
+        _write_line_number_table_attr_payload(writer, attr)
         return
 
     if t is LocalVariableTableAttr:
-        local_variable_table_attr = attr
-        writer.write_u2(len(local_variable_table_attr.local_variable_table))
-        for entry in local_variable_table_attr.local_variable_table:
-            local_variable_info = entry
-            writer.write_u2(local_variable_info.start_pc)
-            writer.write_u2(local_variable_info.length)
-            writer.write_u2(local_variable_info.name_index)
-            writer.write_u2(local_variable_info.descriptor_index)
-            writer.write_u2(local_variable_info.index)
+        _write_local_variable_table_attr_payload(writer, attr)
         return
 
     if t is LocalVariableTypeTableAttr:
-        local_variable_type_table_attr = attr
-        writer.write_u2(len(local_variable_type_table_attr.local_variable_type_table))
-        for entry in local_variable_type_table_attr.local_variable_type_table:
-            local_variable_type_info = entry
-            writer.write_u2(local_variable_type_info.start_pc)
-            writer.write_u2(local_variable_type_info.length)
-            writer.write_u2(local_variable_type_info.name_index)
-            writer.write_u2(local_variable_type_info.signature_index)
-            writer.write_u2(local_variable_type_info.index)
+        _write_local_variable_type_table_attr_payload(writer, attr)
         return
 
     if t is attributes.RuntimeVisibleAnnotationsAttr or t is attributes.RuntimeInvisibleAnnotationsAttr:
@@ -625,7 +700,13 @@ cdef _write_type_path_info(object writer, object type_path):
         writer.write_u1(path_item.type_argument_index)
 
 
-cdef _write_instruction(object writer, object insn):
+cdef inline void _write_code_alignment(object writer, int code_start):
+    cdef int remainder = (len(writer) - code_start) % 4
+    if remainder != 0:
+        writer.write_bytes(b"\x00" * (4 - remainder))
+
+
+cdef _write_instruction(object writer, object insn, int code_start):
     cdef type t = type(insn)
     cdef InsnInfo base_insn
     cdef LocalIndexW local_index_w
@@ -707,7 +788,7 @@ cdef _write_instruction(object writer, object insn):
         writer.write_u1(int(new_array.atype))
     elif t is LookupSwitch:
         lookup_switch = insn
-        writer.align(4)
+        _write_code_alignment(writer, code_start)
         writer.write_i4(lookup_switch.default)
         writer.write_u4(len(lookup_switch.pairs))
         for pair in lookup_switch.pairs:
@@ -715,7 +796,7 @@ cdef _write_instruction(object writer, object insn):
             writer.write_i4(pair.offset)
     elif t is TableSwitch:
         table_switch = insn
-        writer.align(4)
+        _write_code_alignment(writer, code_start)
         writer.write_i4(table_switch.default)
         writer.write_i4(table_switch.low)
         writer.write_i4(table_switch.high)

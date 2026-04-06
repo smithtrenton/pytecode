@@ -127,7 +127,7 @@ The definitive validity test: can the JVM actually load and use the class? This 
 
 **Execution testing**: For fixtures with known behavior (e.g., `HelloWorld.main()` prints "Hello, World!"), verify that roundtripped output produces the correct runtime output — not just that it loads.
 
-**StackMapTable dependency**: Tier 4 for *generated* (non-roundtrip) classes requires valid StackMapTable attributes for class files with version ≥ 50.0. This depends on Issue #10 (stack frame computation). For roundtrip classes, the original StackMapTable is preserved if code is not modified.
+**StackMapTable dependency**: Tier 4 for *generated* (non-roundtrip) classes requires valid StackMapTable attributes for class files with version ≥ 50.0. That dependency is now satisfied by the shipped stack-frame computation layer. For roundtrip classes, the original StackMapTable is preserved if code is not modified.
 
 ## Constant pool ordering strategy
 

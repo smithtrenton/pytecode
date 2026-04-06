@@ -158,6 +158,7 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+uv build
 ```
 
 Generate local API reference HTML with:
@@ -212,6 +213,7 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+uv build
 
 git commit -am "Bump version to X.Y.Z"
 git push origin master

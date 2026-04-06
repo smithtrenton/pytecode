@@ -60,9 +60,9 @@ pytecode's parsed output is a tree of `@dataclass` objects (`ClassFile`, `FieldI
 | Invariant safety | Low | High | Medium | Medium | Medium |
 | Memory efficiency | Low | Low | High | Low | Varies |
 
-## Recommendation and phased approach
+## Recommendation and implementation record
 
-Given pytecode's characteristics — Python-first audience, existing tree-based read model, interactive/scripting primary use case, small team, and a roadmap full of other features — **Design A (Mutable Dataclasses) is the strongest starting point**, with the tree model designed so that pass composition (Design D) layers on naturally. That Phase 2 composition layer has now landed via `pytecode.transforms`, including the richer matcher DSL, while a full visitor layer (Design E) was evaluated and found not yet justified (see Phase 3 below).
+Given pytecode's characteristics at the time this design was chosen — Python-first audience, existing tree-based read model, interactive/scripting primary use case, and a roadmap full of adjacent features — **Design A (Mutable Dataclasses) was the strongest starting point**, with the tree model designed so that pass composition (Design D) layers on naturally. The roadmap described below is now complete; the labels are kept as historical context for how the shipped surface evolved.
 
 - **Phase 1 (done)**: `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` as mutable dataclasses with symbolic references, `ConstantPoolBuilder`, label-based instruction editing, and symbolic operand wrappers.
 - **Phase 2 (done)**: Pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, owner-class filtering on the field/method/code lifting helpers, and a richer `Matcher` DSL with `&` / `|` / `~` composition, regex helpers, lightweight structural helpers, access-flag convenience matchers, plus the original functional combinators for callers that prefer them. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into existing lowering and `JarFile.rewrite()` flows.
@@ -76,23 +76,23 @@ A broader survey of JVM bytecode manipulation libraries identified additional de
 | Library | Core Design Pattern | Relevance to pytecode |
 |---------|-------------------|----------------------|
 | **Javassist** | Source-level abstraction + mutable tree | Mutable tree validates Design A; `insertBefore`/`insertAfter` helpers are worth adopting. Source-level compilation not portable (requires Java compiler). |
-| **Byte Buddy** | Fluent declarative DSL over ASM | Matcher-based selection (`ElementMatcher` predicates) worth borrowing for Phase 2. Fluent builder chains less Pythonic. |
+| **Byte Buddy** | Fluent declarative DSL over ASM | Matcher-based selection (`ElementMatcher` predicates) maps well onto the shipped transform layer. Fluent builder chains less Pythonic. |
 | **Soot / SootUp** | IR lifting (Jimple, Shimple, Baf, Grimp) | Out of scope (massive effort). pytecode's symbolic model is effectively "Baf-like." SootUp's `BodyInterceptor` aligns with planned pass pipelines. |
 | **WALA Shrike** | Patch-based instrumentation | Strong alternative to mutable `InstructionList` — patches reference original positions, so independent edits don't interfere. pytecode could offer both: direct mutation for simple edits, patch-based editing for complex multi-edit scenarios. |
-| **JDK Class-File API** (JEP 457/484) | Immutable elements + builders + composable transforms | Most architecturally relevant new pattern. Transform lifting (`CodeTransform` → `MethodTransform` → `ClassTransform`) validates planned Phase 2 design. In Python, structural pattern matching on elements replaces visitor hierarchies. |
-| **ProGuardCORE** | Visitor + instruction pattern matching engine | Declarative find-and-replace on bytecode sequences. Layerable on top of the tree model as a Phase 2+ addition. |
+| **JDK Class-File API** (JEP 457/484) | Immutable elements + builders + composable transforms | Most architecturally relevant new pattern. Transform lifting (`CodeTransform` → `MethodTransform` → `ClassTransform`) validates the shipped transform design. In Python, structural pattern matching on elements replaces visitor hierarchies. |
+| **ProGuardCORE** | Visitor + instruction pattern matching engine | Declarative find-and-replace on bytecode sequences. Layerable on top of the tree model if the current matcher surface needs a richer pattern engine. |
 | **Krakatau** | Text-based assembly/disassembly | Not directly applicable (different use case). |
 | **CafeDude (CAFED00D)** | Simple read/write tree (obfuscation-resilient) | Uses a mutable tree internally, further validating Design A as the universal substrate. |
 
 ## Summary of applicable patterns
 
-| Pattern | Source | Applicable? | Phase |
-|---------|--------|:-----------:|-------|
+| Pattern | Source | Applicable? | Status / follow-up |
+|---------|--------|:-----------:|-------------------|
 | Source-level abstraction | Javassist | ✗ (requires Java compiler) | — |
-| Fluent declarative DSL / matchers | Byte Buddy | Partially | Future follow-up |
+| Fluent declarative DSL / matchers | Byte Buddy | Partially | Follow-up idea layered onto the current matcher surface |
 | IR lifting | Soot/SootUp | ✗ (massive scope) | — |
-| Patch-based editing | WALA Shrike | ✓ (alternative to mutable InstructionList) | Phase 1–2 |
-| Immutable element + transform lifting | JDK Class-File API | ✓ (informs Phase 2 transform design) | Phase 2 |
-| Instruction pattern matching | ProGuardCORE | ✓ (declarative find-and-replace) | Future follow-up |
+| Patch-based editing | WALA Shrike | ✓ (alternative to mutable InstructionList) | Historical roadmap option; not part of the shipped surface |
+| Immutable element + transform lifting | JDK Class-File API | ✓ (informs transform design) | Reflected in the shipped transform layer |
+| Instruction pattern matching | ProGuardCORE | ✓ (declarative find-and-replace) | Follow-up idea if concrete use cases appear |
 
-None of the surveyed designs displace Design A as the Phase 1 choice. Every library surveyed either uses a mutable tree internally (Javassist, CafeDude, BCEL), builds on a visitor/tree substrate (Byte Buddy, ProGuardCORE), or uses an IR that is a different kind of tree (Soot). The mutable tree is the universal substrate.
+None of the surveyed designs displace Design A as the original choice. Every library surveyed either uses a mutable tree internally (Javassist, CafeDude, BCEL), builds on a visitor/tree substrate (Byte Buddy, ProGuardCORE), or uses an IR that is a different kind of tree (Soot). The mutable tree is the universal substrate.

@@ -29,6 +29,34 @@ from ..classfile._instructions_cy cimport (
     NewArray as CNewArray,
     ShortValue as CShortValue,
     TableSwitch as CTableSwitch,
+    _trusted_branch,
+    _trusted_branch_w,
+    _trusted_byte_value,
+    _trusted_const_pool_index,
+    _trusted_iinc,
+    _trusted_iinc_w,
+    _trusted_invoke_dynamic,
+    _trusted_invoke_interface,
+    _trusted_local_index,
+    _trusted_local_index_w,
+    _trusted_lookup_switch,
+    _trusted_match_offset_pair,
+    _trusted_multi_anew_array,
+    _trusted_new_array,
+    _trusted_raw_insn,
+    _trusted_short_value,
+    _trusted_table_switch,
+)
+from ..classfile._attributes_cy cimport (
+    AttributeInfo as CAttributeInfo,
+    CodeAttr as CCodeAttr,
+    ExceptionInfo as CExceptionInfo,
+    LineNumberInfo as CLineNumberInfo,
+    LineNumberTableAttr as CLineNumberTableAttr,
+    LocalVariableInfo as CLocalVariableInfo,
+    LocalVariableTableAttr as CLocalVariableTableAttr,
+    LocalVariableTypeInfo as CLocalVariableTypeInfo,
+    LocalVariableTypeTableAttr as CLocalVariableTypeTableAttr,
 )
 from ..classfile.attributes import (
     AttributeInfo,
@@ -63,7 +91,27 @@ from ..classfile.instructions import (
     ShortValue,
     TableSwitch,
 )
-from ._attribute_clone import clone_attribute
+from ._attribute_clone import clone_attribute, clone_attributes
+from ._operands_cy cimport (
+    FieldInsn as CFieldInsn,
+    IIncInsn as COperandIIncInsn,
+    InterfaceMethodInsn as CInterfaceMethodInsn,
+    InvokeDynamicInsn as COperandInvokeDynamicInsn,
+    LdcClass as CLdcClass,
+    LdcDouble as CLdcDouble,
+    LdcDynamic as CLdcDynamic,
+    LdcFloat as CLdcFloat,
+    LdcInsn as CLdcInsn,
+    LdcInt as CLdcInt,
+    LdcLong as CLdcLong,
+    LdcMethodHandle as CLdcMethodHandle,
+    LdcMethodType as CLdcMethodType,
+    LdcString as CLdcString,
+    MethodInsn as CMethodInsn,
+    MultiANewArrayInsn as COperandMultiANewArrayInsn,
+    TypeInsn as CTypeInsn,
+    VarInsn as COperandVarInsn,
+)
 from .constant_pool_builder import ConstantPoolBuilder
 from .debug_info import DebugInfoPolicy, is_code_debug_info_stale, normalize_debug_info_policy
 from .operands import (
@@ -104,6 +152,111 @@ _BRANCH_TARGET_CONTEXTS = {
 }
 
 
+cdef inline void _init_attribute_info(CAttributeInfo attr, int attribute_name_index, int attribute_length):
+    attr.attribute_name_index = attribute_name_index
+    attr.attribute_length = attribute_length
+
+
+cdef inline object _trusted_exception_info(
+    int start_pc,
+    int end_pc,
+    int handler_pc,
+    int catch_type,
+):
+    cdef CExceptionInfo info = ExceptionInfo.__new__(ExceptionInfo)
+    info.start_pc = start_pc
+    info.end_pc = end_pc
+    info.handler_pc = handler_pc
+    info.catch_type = catch_type
+    return info
+
+
+cdef inline object _trusted_line_number_info(int start_pc, int line_number):
+    cdef CLineNumberInfo info = LineNumberInfo.__new__(LineNumberInfo)
+    info.start_pc = start_pc
+    info.line_number = line_number
+    return info
+
+
+cdef inline object _trusted_line_number_table_attr(int attribute_name_index, list table):
+    cdef CLineNumberTableAttr attr = LineNumberTableAttr.__new__(LineNumberTableAttr)
+    _init_attribute_info(attr, attribute_name_index, 2 + (4 * len(table)))
+    attr.line_number_table_length = len(table)
+    attr.line_number_table = table
+    return attr
+
+
+cdef inline object _trusted_local_variable_info(
+    int start_pc,
+    int length,
+    int name_index,
+    int descriptor_index,
+    int index,
+):
+    cdef CLocalVariableInfo info = LocalVariableInfo.__new__(LocalVariableInfo)
+    info.start_pc = start_pc
+    info.length = length
+    info.name_index = name_index
+    info.descriptor_index = descriptor_index
+    info.index = index
+    return info
+
+
+cdef inline object _trusted_local_variable_table_attr(int attribute_name_index, list table):
+    cdef CLocalVariableTableAttr attr = LocalVariableTableAttr.__new__(LocalVariableTableAttr)
+    _init_attribute_info(attr, attribute_name_index, 2 + (10 * len(table)))
+    attr.local_variable_table_length = len(table)
+    attr.local_variable_table = table
+    return attr
+
+
+cdef inline object _trusted_local_variable_type_info(
+    int start_pc,
+    int length,
+    int name_index,
+    int signature_index,
+    int index,
+):
+    cdef CLocalVariableTypeInfo info = LocalVariableTypeInfo.__new__(LocalVariableTypeInfo)
+    info.start_pc = start_pc
+    info.length = length
+    info.name_index = name_index
+    info.signature_index = signature_index
+    info.index = index
+    return info
+
+
+cdef inline object _trusted_local_variable_type_table_attr(int attribute_name_index, list table):
+    cdef CLocalVariableTypeTableAttr attr = LocalVariableTypeTableAttr.__new__(LocalVariableTypeTableAttr)
+    _init_attribute_info(attr, attribute_name_index, 2 + (10 * len(table)))
+    attr.local_variable_type_table_length = len(table)
+    attr.local_variable_type_table = table
+    return attr
+
+
+cdef inline object _trusted_code_attr(
+    int attribute_name_index,
+    int attribute_length,
+    int max_stack,
+    int max_locals,
+    int code_length,
+    list code,
+    list exception_table,
+    list attributes,
+):
+    cdef CCodeAttr attr = CodeAttr.__new__(CodeAttr)
+    _init_attribute_info(attr, attribute_name_index, attribute_length)
+    attr.max_stacks = max_stack
+    attr.max_locals = max_locals
+    attr.code_length = code_length
+    attr.code = code
+    attr.exception_table_length = len(exception_table)
+    attr.exception_table = exception_table
+    attr.attributes_count = len(attributes)
+    attr.attributes = attributes
+    return attr
+
+
 cdef object _clone_raw_instruction(object insn, object bytecode_offset):
     cdef CLookupSwitch lookup_switch
     cdef CTableSwitch table_switch
@@ -127,16 +280,16 @@ cdef object _clone_raw_instruction(object insn, object bytecode_offset):
     insn_type = type(insn)
     if insn_type is LookupSwitch:
         lookup_switch = insn
-        return LookupSwitch(
+        return _trusted_lookup_switch(
             lookup_switch.type,
             offset,
             lookup_switch.default,
             lookup_switch.npairs,
-            [MatchOffsetPair(pair.match, pair.offset) for pair in lookup_switch.pairs],
+            [_trusted_match_offset_pair(pair.match, pair.offset) for pair in lookup_switch.pairs],
         )
     if insn_type is TableSwitch:
         table_switch = insn
-        return TableSwitch(
+        return _trusted_table_switch(
             table_switch.type,
             offset,
             table_switch.default,
@@ -146,40 +299,45 @@ cdef object _clone_raw_instruction(object insn, object bytecode_offset):
         )
     if insn_type is InsnInfo:
         no_operand_insn = insn
-        return InsnInfo(no_operand_insn.type, offset)
+        return _trusted_raw_insn(no_operand_insn.type, offset)
     if insn_type is LocalIndex:
         local_index = insn
-        return LocalIndex(local_index.type, offset, local_index.index)
+        return _trusted_local_index(local_index.type, offset, local_index.index)
     if insn_type is LocalIndexW:
         local_index_w = insn
-        return LocalIndexW(local_index_w.type, offset, local_index_w.index)
+        return _trusted_local_index_w(local_index_w.type, offset, local_index_w.index)
     if insn_type is ConstPoolIndex:
         const_pool_index = insn
-        return ConstPoolIndex(const_pool_index.type, offset, const_pool_index.index)
+        return _trusted_const_pool_index(const_pool_index.type, offset, const_pool_index.index)
     if insn_type is ByteValue:
         byte_value = insn
-        return ByteValue(byte_value.type, offset, byte_value.value)
+        return _trusted_byte_value(byte_value.type, offset, byte_value.value)
     if insn_type is ShortValue:
         short_value = insn
-        return ShortValue(short_value.type, offset, short_value.value)
+        return _trusted_short_value(short_value.type, offset, short_value.value)
     if insn_type is Branch:
         branch = insn
-        return Branch(branch.type, offset, branch.offset)
+        return _trusted_branch(branch.type, offset, branch.offset)
     if insn_type is BranchW:
         branch_w = insn
-        return BranchW(branch_w.type, offset, branch_w.offset)
+        return _trusted_branch_w(branch_w.type, offset, branch_w.offset)
     if insn_type is IInc:
         iinc = insn
-        return IInc(iinc.type, offset, iinc.index, iinc.value)
+        return _trusted_iinc(iinc.type, offset, iinc.index, iinc.value)
     if insn_type is IIncW:
         iinc_w = insn
-        return IIncW(iinc_w.type, offset, iinc_w.index, iinc_w.value)
+        return _trusted_iinc_w(iinc_w.type, offset, iinc_w.index, iinc_w.value)
     if insn_type is InvokeDynamic:
         invoke_dynamic = insn
-        return InvokeDynamic(invoke_dynamic.type, offset, invoke_dynamic.index, invoke_dynamic.unused)
+        return _trusted_invoke_dynamic(
+            invoke_dynamic.type,
+            offset,
+            invoke_dynamic.index,
+            invoke_dynamic.unused,
+        )
     if insn_type is InvokeInterface:
         invoke_interface = insn
-        return InvokeInterface(
+        return _trusted_invoke_interface(
             invoke_interface.type,
             offset,
             invoke_interface.index,
@@ -188,10 +346,10 @@ cdef object _clone_raw_instruction(object insn, object bytecode_offset):
         )
     if insn_type is NewArray:
         new_array = insn
-        return NewArray(new_array.type, offset, new_array.atype)
+        return _trusted_new_array(new_array.type, offset, new_array.atype)
     if insn_type is MultiANewArray:
         multi_anew_array = insn
-        return MultiANewArray(
+        return _trusted_multi_anew_array(
             multi_anew_array.type,
             offset,
             multi_anew_array.index,
@@ -696,11 +854,11 @@ cdef object _ordered_nested_code_attributes(
     cdef object attribute, token, debug_attr
     cdef type attr_type
     cdef int other_index
+    cdef bint has_debug_attrs = False
     cdef object pending_line_numbers = line_number_attr
     cdef object pending_local_variables = local_variable_attr
     cdef object pending_local_variable_types = local_variable_type_attr
 
-    other_attrs = []
     for attribute in code.attributes:
         attr_type = type(attribute)
         if (
@@ -708,8 +866,21 @@ cdef object _ordered_nested_code_attributes(
             or attr_type is LocalVariableTableAttr
             or attr_type is LocalVariableTypeTableAttr
         ):
-            continue
-        other_attrs.append(clone_attribute(attribute))
+            has_debug_attrs = True
+            break
+    if has_debug_attrs:
+        other_attrs = []
+        for attribute in code.attributes:
+            attr_type = type(attribute)
+            if (
+                attr_type is LineNumberTableAttr
+                or attr_type is LocalVariableTableAttr
+                or attr_type is LocalVariableTypeTableAttr
+            ):
+                continue
+            other_attrs.append(clone_attribute(attribute))
+    else:
+        other_attrs = clone_attributes(code.attributes)
     if not code._nested_attribute_layout:
         attrs = other_attrs
         for debug_attr in (line_number_attr, local_variable_attr, local_variable_type_attr):
@@ -754,11 +925,13 @@ cdef object _ordered_nested_code_attributes(
 
 cdef bint _needs_ldc_index_cache(list items):
     cdef object item, value
+    cdef CLdcInsn ldc_insn
     cdef type value_type
     for item in items:
         if type(item) is not LdcInsn:
             continue
-        value = item.value
+        ldc_insn = item
+        value = ldc_insn.value
         value_type = type(value)
         if value_type is not LdcLong and value_type is not LdcDouble:
             return True
@@ -792,7 +965,8 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
     cdef int offset
     cdef Py_ssize_t index, item_count
     cdef type item_type
-    cdef object item, label
+    cdef object item
+    cdef Label label
     cdef dict label_offsets = {}
     cdef list instruction_offsets
     offset = 0
@@ -823,8 +997,12 @@ def _resolve_labels_with_cache(list items, dict ldc_index_cache=None):
 
 cdef int _instruction_byte_size(object insn, type insn_type, int offset, dict ldc_index_cache):
     cdef int slot, increment
+    cdef object shortcut
     cdef CLookupSwitch lookup_switch
     cdef CTableSwitch table_switch
+    cdef COperandVarInsn var_insn
+    cdef CLdcInsn ldc_insn
+    cdef COperandIIncInsn iinc_insn
     if insn_type is Label:
         return 0
     if insn_type is InsnInfo:
@@ -832,7 +1010,8 @@ cdef int _instruction_byte_size(object insn, type insn_type, int offset, dict ld
     if insn_type is VarInsn:
         var_insn = insn
         slot = _require_u2(var_insn.slot, context="local variable slot")
-        if _VAR_SHORTCUTS.get((var_insn.type, slot)) is not None:
+        shortcut = _var_shortcut_opcode(var_insn.type, slot)
+        if shortcut is not None:
             return 1  # implicit form (e.g. ILOAD_0)
         if slot <= 255:
             return 2  # opcode(1) + u1 slot
@@ -937,9 +1116,38 @@ def resolve_labels(items, cp=None):
     return _resolve_labels_with_cache(items, ldc_index_cache)
 
 
-cdef bint _promote_overflow_branches(list items, object resolution):
+cdef inline object _var_shortcut_opcode(object insn_type, int slot):
+    if slot < 0 or slot > 3:
+        return None
+    if insn_type is InsnInfoType.ILOAD:
+        return (InsnInfoType.ILOAD_0, InsnInfoType.ILOAD_1, InsnInfoType.ILOAD_2, InsnInfoType.ILOAD_3)[slot]
+    if insn_type is InsnInfoType.ALOAD:
+        return (InsnInfoType.ALOAD_0, InsnInfoType.ALOAD_1, InsnInfoType.ALOAD_2, InsnInfoType.ALOAD_3)[slot]
+    if insn_type is InsnInfoType.ISTORE:
+        return (InsnInfoType.ISTORE_0, InsnInfoType.ISTORE_1, InsnInfoType.ISTORE_2, InsnInfoType.ISTORE_3)[slot]
+    if insn_type is InsnInfoType.ASTORE:
+        return (InsnInfoType.ASTORE_0, InsnInfoType.ASTORE_1, InsnInfoType.ASTORE_2, InsnInfoType.ASTORE_3)[slot]
+    if insn_type is InsnInfoType.LLOAD:
+        return (InsnInfoType.LLOAD_0, InsnInfoType.LLOAD_1, InsnInfoType.LLOAD_2, InsnInfoType.LLOAD_3)[slot]
+    if insn_type is InsnInfoType.FLOAD:
+        return (InsnInfoType.FLOAD_0, InsnInfoType.FLOAD_1, InsnInfoType.FLOAD_2, InsnInfoType.FLOAD_3)[slot]
+    if insn_type is InsnInfoType.LSTORE:
+        return (InsnInfoType.LSTORE_0, InsnInfoType.LSTORE_1, InsnInfoType.LSTORE_2, InsnInfoType.LSTORE_3)[slot]
+    if insn_type is InsnInfoType.FSTORE:
+        return (InsnInfoType.FSTORE_0, InsnInfoType.FSTORE_1, InsnInfoType.FSTORE_2, InsnInfoType.FSTORE_3)[slot]
+    if insn_type is InsnInfoType.DLOAD:
+        return (InsnInfoType.DLOAD_0, InsnInfoType.DLOAD_1, InsnInfoType.DLOAD_2, InsnInfoType.DLOAD_3)[slot]
+    if insn_type is InsnInfoType.DSTORE:
+        return (InsnInfoType.DSTORE_0, InsnInfoType.DSTORE_1, InsnInfoType.DSTORE_2, InsnInfoType.DSTORE_3)[slot]
+    return None
+
+
+cdef bint _promote_overflow_branches(list items, LabelResolution resolution):
     cdef int index, source_offset, relative
     cdef bint changed = False
+    cdef BranchInsn branch_item
+    cdef object item
+    cdef object widened, inverted, skip_label
     index = 0
 
     while index < len(items):
@@ -949,16 +1157,17 @@ cdef bint _promote_overflow_branches(list items, object resolution):
             continue
 
         source_offset = resolution.instruction_offsets[index]
+        branch_item = item
         relative = _relative_offset(
             source_offset,
-            item.target,
+            branch_item.target,
             resolution.label_offsets,
-            _BRANCH_TARGET_CONTEXTS[item.type],
+            _BRANCH_TARGET_CONTEXTS[branch_item.type],
         )
 
-        if item.type.instinfo is BranchW:
+        if branch_item.type.instinfo is BranchW:
             if not _fits_i4(relative):
-                raise ValueError(f"{item.type.name} branch offset {relative} exceeds JVM i4 range")
+                raise ValueError(f"{branch_item.type.name} branch offset {relative} exceeds JVM i4 range")
             index += 1
             continue
 
@@ -966,21 +1175,21 @@ cdef bint _promote_overflow_branches(list items, object resolution):
             index += 1
             continue
 
-        widened = _BRANCH_WIDENINGS.get(item.type)
+        widened = _BRANCH_WIDENINGS.get(branch_item.type)
         if widened is not None:
-            items[index] = BranchInsn(widened, item.target)
+            items[index] = BranchInsn(widened, branch_item.target)
             changed = True
             index += 1
             continue
 
-        inverted = _INVERTED_CONDITIONAL_BRANCHES.get(item.type)
+        inverted = _INVERTED_CONDITIONAL_BRANCHES.get(branch_item.type)
         if inverted is None:
-            raise ValueError(f"{item.type.name} cannot be widened automatically")
+            raise ValueError(f"{branch_item.type.name} cannot be widened automatically")
 
-        skip_label = Label(f"{item.type.name.lower()}_skip")
+        skip_label = Label(f"{branch_item.type.name.lower()}_skip")
         items[index : index + 1] = [
             BranchInsn(inverted, skip_label),
-            BranchInsn(InsnInfoType.GOTO_W, item.target),
+            BranchInsn(InsnInfoType.GOTO_W, branch_item.target),
             skip_label,
         ]
         changed = True
@@ -991,24 +1200,35 @@ cdef bint _promote_overflow_branches(list items, object resolution):
 
 cdef object _lower_instruction(object item, int offset, dict label_offsets, object cp):
     cdef int cp_index, slot, increment, count, dimensions, bootstrap_method_attr_index, relative
-    cdef object lowered
+    cdef object lowered, shortcut
     cdef CInsnInfo no_operand_insn
+    cdef BranchInsn branch_item
+    cdef LookupSwitchInsn lookup_switch_item
+    cdef TableSwitchInsn table_switch_item
+    cdef CFieldInsn field_item
+    cdef CMethodInsn method_item
+    cdef CInterfaceMethodInsn interface_method_item
+    cdef CTypeInsn type_item
+    cdef CLdcInsn ldc_item
+    cdef COperandIIncInsn iinc_item
+    cdef COperandInvokeDynamicInsn invoke_dynamic_item
+    cdef COperandMultiANewArrayInsn multi_anew_array_item
     item_type = type(item)
     if item_type is Label:
         return None
     if item_type is InsnInfo:
         no_operand_insn = item
-        return InsnInfo(no_operand_insn.type, offset)
+        return _trusted_raw_insn(no_operand_insn.type, offset)
     if item_type is VarInsn:
         var_item = item
         slot = _require_u2(var_item.slot, context="local variable slot")
-        shortcut = _VAR_SHORTCUTS.get((var_item.type, slot))
+        shortcut = _var_shortcut_opcode(var_item.type, slot)
         if shortcut is not None:
-            return InsnInfo(shortcut, offset)
+            return _trusted_raw_insn(shortcut, offset)
         if slot > 255:
             wide_type = _BASE_TO_WIDE[var_item.type]
-            return LocalIndexW(wide_type, offset, slot)
-        return LocalIndex(var_item.type, offset, slot)
+            return _trusted_local_index_w(wide_type, offset, slot)
+        return _trusted_local_index(var_item.type, offset, slot)
 
     if item_type is BranchInsn:
         branch_item = item
@@ -1021,10 +1241,10 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
         if branch_item.type.instinfo is BranchW:
             if not _fits_i4(relative):
                 raise ValueError(f"{branch_item.type.name} branch offset {relative} exceeds JVM i4 range")
-            return BranchW(branch_item.type, offset, relative)
+            return _trusted_branch_w(branch_item.type, offset, relative)
         if not _fits_i2(relative):
             raise ValueError(f"{branch_item.type.name} branch offset {relative} exceeds JVM i2 range")
-        return Branch(branch_item.type, offset, relative)
+        return _trusted_branch(branch_item.type, offset, relative)
 
     if item_type is LookupSwitchInsn:
         lookup_switch_item = item
@@ -1035,13 +1255,13 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             "lookupswitch default target",
         )
         pairs = [
-            MatchOffsetPair(
+            _trusted_match_offset_pair(
                 match,
                 _relative_offset(offset, target, label_offsets, "lookupswitch case target"),
             )
             for match, target in lookup_switch_item.pairs
         ]
-        return LookupSwitch(lookup_switch_item.type, offset, default, len(pairs), pairs)
+        return _trusted_lookup_switch(lookup_switch_item.type, offset, default, len(pairs), pairs)
 
     if item_type is TableSwitchInsn:
         table_switch_item = item
@@ -1055,7 +1275,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             _relative_offset(offset, target, label_offsets, "tableswitch case target")
             for target in table_switch_item.targets
         ]
-        return TableSwitch(
+        return _trusted_table_switch(
             table_switch_item.type,
             offset,
             default,
@@ -1068,7 +1288,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
     if item_type is FieldInsn:
         field_item = item
         cp_index = cp.add_fieldref(field_item.owner, field_item.name, field_item.descriptor)
-        return ConstPoolIndex(field_item.type, offset, cp_index)
+        return _trusted_const_pool_index(field_item.type, offset, cp_index)
 
     if item_type is MethodInsn:
         method_item = item
@@ -1076,7 +1296,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             cp_index = cp.add_interface_methodref(method_item.owner, method_item.name, method_item.descriptor)
         else:
             cp_index = cp.add_methodref(method_item.owner, method_item.name, method_item.descriptor)
-        return ConstPoolIndex(method_item.type, offset, cp_index)
+        return _trusted_const_pool_index(method_item.type, offset, cp_index)
 
     if item_type is InterfaceMethodInsn:
         interface_method_item = item
@@ -1086,30 +1306,30 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             interface_method_item.descriptor,
         )
         count = parameter_slot_count(parse_method_descriptor(interface_method_item.descriptor)) + 1
-        return InvokeInterface(InsnInfoType.INVOKEINTERFACE, offset, cp_index, count, b"\x00")
+        return _trusted_invoke_interface(InsnInfoType.INVOKEINTERFACE, offset, cp_index, count, b"\x00")
 
     if item_type is TypeInsn:
         type_item = item
         cp_index = cp.add_class(type_item.class_name)
-        return ConstPoolIndex(type_item.type, offset, cp_index)
+        return _trusted_const_pool_index(type_item.type, offset, cp_index)
 
     if item_type is LdcInsn:
         ldc_item = item
         cp_index = _lower_ldc_value(ldc_item.value, cp)
         ldc_value_type = type(ldc_item.value)
         if ldc_value_type is LdcLong or ldc_value_type is LdcDouble:
-            return ConstPoolIndex(InsnInfoType.LDC2_W, offset, cp_index)
+            return _trusted_const_pool_index(InsnInfoType.LDC2_W, offset, cp_index)
         if cp_index <= 255:
-            return LocalIndex(InsnInfoType.LDC, offset, cp_index)
-        return ConstPoolIndex(InsnInfoType.LDC_W, offset, cp_index)
+            return _trusted_local_index(InsnInfoType.LDC, offset, cp_index)
+        return _trusted_const_pool_index(InsnInfoType.LDC_W, offset, cp_index)
 
     if item_type is IIncInsn:
         iinc_item = item
         slot = _require_u2(iinc_item.slot, context="local variable slot")
         increment = _require_i2(iinc_item.increment, context="iinc increment")
         if slot <= 255 and -128 <= increment <= 127:
-            return IInc(InsnInfoType.IINC, offset, slot, increment)
-        return IIncW(InsnInfoType.IINCW, offset, slot, increment)
+            return _trusted_iinc(InsnInfoType.IINC, offset, slot, increment)
+        return _trusted_iinc_w(InsnInfoType.IINCW, offset, slot, increment)
 
     if item_type is InvokeDynamicInsn:
         invoke_dynamic_item = item
@@ -1122,7 +1342,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             invoke_dynamic_item.name,
             invoke_dynamic_item.descriptor,
         )
-        return InvokeDynamic(InsnInfoType.INVOKEDYNAMIC, offset, cp_index, b"\x00\x00")
+        return _trusted_invoke_dynamic(InsnInfoType.INVOKEDYNAMIC, offset, cp_index, b"\x00\x00")
 
     if item_type is MultiANewArrayInsn:
         multi_anew_array_item = item
@@ -1132,7 +1352,7 @@ cdef object _lower_instruction(object item, int offset, dict label_offsets, obje
             minimum=1,
         )
         cp_index = cp.add_class(multi_anew_array_item.class_name)
-        return MultiANewArray(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
+        return _trusted_multi_anew_array(InsnInfoType.MULTIANEWARRAY, offset, cp_index, dimensions)
 
     lowered = _clone_raw_instruction(item, offset)
     if type(lowered) is LookupSwitch:
@@ -1149,13 +1369,13 @@ def _lower_exception_handlers(exception_handlers, label_offsets, cp):
         if start_pc >= end_pc:
             raise ValueError("exception handler start must be strictly before end")
         catch_type = 0 if handler.catch_type is None else cp.add_class(handler.catch_type)
-        lowered.append(ExceptionInfo(start_pc, end_pc, handler_pc, catch_type))
+        lowered.append(_trusted_exception_info(start_pc, end_pc, handler_pc, catch_type))
     return lowered
 
 
 cdef object _build_line_number_attribute(object line_numbers, dict label_offsets, object cp):
     cdef list table
-    cdef object entry
+    cdef LineNumberEntry entry
     cdef int start_pc
     cdef int attribute_name_index
     if not line_numbers:
@@ -1163,14 +1383,9 @@ cdef object _build_line_number_attribute(object line_numbers, dict label_offsets
     table = []
     for entry in line_numbers:
         start_pc = _require_label_offset(label_offsets, entry.label, "line number entry")
-        table.append(LineNumberInfo(start_pc, entry.line_number))
+        table.append(_trusted_line_number_info(start_pc, entry.line_number))
     attribute_name_index = cp.add_utf8("LineNumberTable")
-    return LineNumberTableAttr(
-        attribute_name_index=attribute_name_index,
-        attribute_length=2 + (4 * len(table)),
-        line_number_table_length=len(table),
-        line_number_table=table,
-    )
+    return _trusted_line_number_table_attr(attribute_name_index, table)
 
 
 cdef inline int _local_range_length(int start, int end, str context):
@@ -1181,7 +1396,7 @@ cdef inline int _local_range_length(int start, int end, str context):
 
 cdef object _build_local_variable_attribute(object local_variables, dict label_offsets, object cp):
     cdef list table
-    cdef object entry
+    cdef LocalVariableEntry entry
     cdef int start_pc
     cdef int attribute_name_index
     if not local_variables:
@@ -1189,29 +1404,26 @@ cdef object _build_local_variable_attribute(object local_variables, dict label_o
     table = []
     for entry in local_variables:
         start_pc = _require_label_offset(label_offsets, entry.start, "local variable start")
-        table.append(LocalVariableInfo(
-            start_pc,
-            _local_range_length(
+        table.append(
+            _trusted_local_variable_info(
                 start_pc,
-                _require_label_offset(label_offsets, entry.end, "local variable end"),
-                "local variable range",
-            ),
-            cp.add_utf8(entry.name),
-            cp.add_utf8(entry.descriptor),
-            entry.slot,
-        ))
+                _local_range_length(
+                    start_pc,
+                    _require_label_offset(label_offsets, entry.end, "local variable end"),
+                    "local variable range",
+                ),
+                cp.add_utf8(entry.name),
+                cp.add_utf8(entry.descriptor),
+                entry.slot,
+            )
+        )
     attribute_name_index = cp.add_utf8("LocalVariableTable")
-    return LocalVariableTableAttr(
-        attribute_name_index=attribute_name_index,
-        attribute_length=2 + (10 * len(table)),
-        local_variable_table_length=len(table),
-        local_variable_table=table,
-    )
+    return _trusted_local_variable_table_attr(attribute_name_index, table)
 
 
 cdef object _build_local_variable_type_attribute(object local_variable_types, dict label_offsets, object cp):
     cdef list table
-    cdef object entry
+    cdef LocalVariableTypeEntry entry
     cdef int start_pc
     cdef int attribute_name_index
     if not local_variable_types:
@@ -1219,27 +1431,24 @@ cdef object _build_local_variable_type_attribute(object local_variable_types, di
     table = []
     for entry in local_variable_types:
         start_pc = _require_label_offset(label_offsets, entry.start, "local variable type start")
-        table.append(LocalVariableTypeInfo(
-            start_pc,
-            _local_range_length(
+        table.append(
+            _trusted_local_variable_type_info(
                 start_pc,
-                _require_label_offset(label_offsets, entry.end, "local variable type end"),
-                "local variable type range",
-            ),
-            cp.add_utf8(entry.name),
-            cp.add_utf8(entry.signature),
-            entry.slot,
-        ))
+                _local_range_length(
+                    start_pc,
+                    _require_label_offset(label_offsets, entry.end, "local variable type end"),
+                    "local variable type range",
+                ),
+                cp.add_utf8(entry.name),
+                cp.add_utf8(entry.signature),
+                entry.slot,
+            )
+        )
     attribute_name_index = cp.add_utf8("LocalVariableTypeTable")
-    return LocalVariableTypeTableAttr(
-        attribute_name_index=attribute_name_index,
-        attribute_length=2 + (10 * len(table)),
-        local_variable_type_table_length=len(table),
-        local_variable_type_table=table,
-    )
+    return _trusted_local_variable_type_table_attr(attribute_name_index, table)
 
 
-def _lower_resolved_code(code, list items, object resolution, object cp, bint keep_debug_info):
+def _lower_resolved_code(code, list items, LabelResolution resolution, object cp, bint keep_debug_info):
     cdef Py_ssize_t index, item_count, lowered_count
     cdef list lowered_code
     cdef list instruction_offsets = resolution.instruction_offsets
@@ -1260,7 +1469,7 @@ def _lower_resolved_code(code, list items, object resolution, object cp, bint ke
             continue
         if item_type is InsnInfo:
             no_operand_insn = item
-            lowered_code[lowered_count] = InsnInfo(no_operand_insn.type, offset)
+            lowered_code[lowered_count] = _trusted_raw_insn(no_operand_insn.type, offset)
             lowered_count += 1
             continue
         lowered = _lower_instruction(item, offset, label_offsets, cp)
@@ -1290,21 +1499,19 @@ def _lower_resolved_code(code, list items, object resolution, object cp, bint ke
         local_variable_type_attr,
     )
 
-    return CodeAttr(
-        attribute_name_index=cp.add_utf8("Code"),
-        attribute_length=_code_attribute_length(
+    return _trusted_code_attr(
+        cp.add_utf8("Code"),
+        _code_attribute_length(
             resolution.total_code_length,
             len(exception_table),
             attributes,
         ),
-        max_stacks=code.max_stack,
-        max_locals=code.max_locals,
-        code_length=resolution.total_code_length,
-        code=lowered_code,
-        exception_table_length=len(exception_table),
-        exception_table=exception_table,
-        attributes_count=len(attributes),
-        attributes=attributes,
+        code.max_stack,
+        code.max_locals,
+        resolution.total_code_length,
+        lowered_code,
+        exception_table,
+        attributes,
     )
 
 
@@ -1350,6 +1557,7 @@ def lower_code(
     if recompute_frames and (method is None or class_name is None):
         raise ValueError("method and class_name are required when recompute_frames=True")
 
+    cdef LabelResolution resolution
     debug_policy = normalize_debug_info_policy(debug_info)
     keep_debug_info = debug_policy is DebugInfoPolicy.PRESERVE and not is_code_debug_info_stale(code)
     items = list(code.instructions)
@@ -1433,53 +1641,89 @@ def resolve_catch_type(cp, catch_type_index):
 def _lower_ldc_value(value, cp):
     """Resolve an ``LdcValue`` to a CP index, adding entries as needed."""
     cdef type t = type(value)
+    cdef CLdcInt int_value
+    cdef CLdcFloat float_value
+    cdef CLdcLong long_value
+    cdef CLdcDouble double_value
+    cdef CLdcString string_value
+    cdef CLdcClass class_value
+    cdef CLdcMethodType method_type_value
+    cdef CLdcMethodHandle method_handle_value
+    cdef CLdcDynamic dynamic_value
     if t is LdcInt:
-        return cp.add_integer(value.value)
+        int_value = value
+        return cp.add_integer(int_value.value)
     if t is LdcFloat:
-        return cp.add_float(value.raw_bits)
+        float_value = value
+        return cp.add_float(float_value.raw_bits)
     if t is LdcLong:
-        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
+        long_value = value
+        unsigned = long_value.value & 0xFFFFFFFFFFFFFFFF
         high = (unsigned >> 32) & 0xFFFFFFFF
         low = unsigned & 0xFFFFFFFF
         return cp.add_long(high, low)
     if t is LdcDouble:
-        return cp.add_double(value.high_bytes, value.low_bytes)
+        double_value = value
+        return cp.add_double(double_value.high_bytes, double_value.low_bytes)
     if t is LdcString:
-        return cp.add_string(value.value)
+        string_value = value
+        return cp.add_string(string_value.value)
     if t is LdcClass:
-        return cp.add_class(value.name)
+        class_value = value
+        return cp.add_class(class_value.name)
     if t is LdcMethodType:
-        return cp.add_method_type(value.descriptor)
+        method_type_value = value
+        return cp.add_method_type(method_type_value.descriptor)
     if t is LdcMethodHandle:
-        return _lower_ldc_method_handle(value, cp)
-    return cp.add_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
+        method_handle_value = value
+        return _lower_ldc_method_handle(method_handle_value, cp)
+    dynamic_value = value
+    return cp.add_dynamic(dynamic_value.bootstrap_method_attr_index, dynamic_value.name, dynamic_value.descriptor)
 
 
 def _find_existing_ldc_index(value, cp):
     cdef type t = type(value)
+    cdef CLdcInt int_value
+    cdef CLdcFloat float_value
+    cdef CLdcLong long_value
+    cdef CLdcDouble double_value
+    cdef CLdcString string_value
+    cdef CLdcClass class_value
+    cdef CLdcMethodType method_type_value
+    cdef CLdcMethodHandle method_handle_value
+    cdef CLdcDynamic dynamic_value
     if t is LdcInt:
-        return cp.find_integer(value.value)
+        int_value = value
+        return cp.find_integer(int_value.value)
     if t is LdcFloat:
-        return cp.find_float(value.raw_bits)
+        float_value = value
+        return cp.find_float(float_value.raw_bits)
     if t is LdcLong:
-        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
+        long_value = value
+        unsigned = long_value.value & 0xFFFFFFFFFFFFFFFF
         high = (unsigned >> 32) & 0xFFFFFFFF
         low = unsigned & 0xFFFFFFFF
         return cp.find_long(high, low)
     if t is LdcDouble:
-        return cp.find_double(value.high_bytes, value.low_bytes)
+        double_value = value
+        return cp.find_double(double_value.high_bytes, double_value.low_bytes)
     if t is LdcString:
-        return cp.find_string(value.value)
+        string_value = value
+        return cp.find_string(string_value.value)
     if t is LdcClass:
-        return cp.find_class(value.name)
+        class_value = value
+        return cp.find_class(class_value.name)
     if t is LdcMethodType:
-        return cp.find_method_type(value.descriptor)
+        method_type_value = value
+        return cp.find_method_type(method_type_value.descriptor)
     if t is LdcMethodHandle:
-        return _find_existing_ldc_method_handle(value, cp)
-    return cp.find_dynamic(value.bootstrap_method_attr_index, value.name, value.descriptor)
+        method_handle_value = value
+        return _find_existing_ldc_method_handle(method_handle_value, cp)
+    dynamic_value = value
+    return cp.find_dynamic(dynamic_value.bootstrap_method_attr_index, dynamic_value.name, dynamic_value.descriptor)
 
 
-def _lower_ldc_method_handle(value, cp):
+def _lower_ldc_method_handle(CLdcMethodHandle value, cp):
     """Lower an ``LdcMethodHandle`` to a CONSTANT_MethodHandle CP index."""
     kind = value.reference_kind
     if kind in (1, 2, 3, 4):  # REF_getField, REF_getStatic, REF_putField, REF_putStatic
@@ -1498,7 +1742,7 @@ def _lower_ldc_method_handle(value, cp):
     return cp.add_method_handle(kind, ref_index)
 
 
-def _find_existing_ldc_method_handle(value, cp):
+def _find_existing_ldc_method_handle(CLdcMethodHandle value, cp):
     kind = value.reference_kind
     if kind in (1, 2, 3, 4):
         ref_index = cp.find_fieldref(value.owner, value.name, value.descriptor)

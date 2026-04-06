@@ -77,3 +77,51 @@ cdef class TableSwitch(InsnInfo):
     cdef public Py_ssize_t low
     cdef public Py_ssize_t high
     cdef public list offsets
+
+
+cdef InsnInfo _trusted_raw_insn(object type, Py_ssize_t bytecode_offset)
+cdef LocalIndex _trusted_local_index(object type, Py_ssize_t bytecode_offset, Py_ssize_t index)
+cdef LocalIndexW _trusted_local_index_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t index)
+cdef ConstPoolIndex _trusted_const_pool_index(object type, Py_ssize_t bytecode_offset, Py_ssize_t index)
+cdef ByteValue _trusted_byte_value(object type, Py_ssize_t bytecode_offset, Py_ssize_t value)
+cdef ShortValue _trusted_short_value(object type, Py_ssize_t bytecode_offset, Py_ssize_t value)
+cdef Branch _trusted_branch(object type, Py_ssize_t bytecode_offset, Py_ssize_t offset)
+cdef BranchW _trusted_branch_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t offset)
+cdef IInc _trusted_iinc(object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value)
+cdef IIncW _trusted_iinc_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value)
+cdef InvokeDynamic _trusted_invoke_dynamic(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    object unused,
+)
+cdef InvokeInterface _trusted_invoke_interface(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t count,
+    object unused,
+)
+cdef NewArray _trusted_new_array(object type, Py_ssize_t bytecode_offset, object atype)
+cdef MultiANewArray _trusted_multi_anew_array(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t dimensions,
+)
+cdef MatchOffsetPair _trusted_match_offset_pair(Py_ssize_t match, Py_ssize_t offset)
+cdef LookupSwitch _trusted_lookup_switch(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t npairs,
+    list pairs,
+)
+cdef TableSwitch _trusted_table_switch(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t low,
+    Py_ssize_t high,
+    list offsets,
+)

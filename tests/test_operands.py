@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from copy import copy, deepcopy
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from pickle import dumps, loads
 from typing import Any
 
 import pytest
@@ -90,6 +93,79 @@ def _lower_simple(instructions: list[CodeItem]) -> list[InsnInfo]:
     )
     attr = lower_code(code, cp)
     return attr.code
+
+
+# ---------------------------------------------------------------------------
+# Dataclass-like semantics
+# ---------------------------------------------------------------------------
+
+
+class TestDataclassLikeSemantics:
+    def test_frozen_ldc_values_are_hashable_and_immutable(self) -> None:
+        value = LdcMethodHandle(6, "Owner", "name", "()V", is_interface=True)
+
+        assert repr(value) == (
+            "LdcMethodHandle("
+            "reference_kind=6, owner='Owner', name='name', descriptor='()V', is_interface=True)"
+        )
+        assert value == LdcMethodHandle(6, "Owner", "name", "()V", is_interface=True)
+        assert hash(value) == hash(LdcMethodHandle(6, "Owner", "name", "()V", is_interface=True))
+
+        with pytest.raises(FrozenInstanceError, match="owner"):
+            value.owner = "Other"
+
+    def test_frozen_ldc_values_copy_deepcopy_and_pickle_roundtrip(self) -> None:
+        value = LdcDynamic(2, "name", "I")
+
+        copied = copy(value)
+        deepcopied = deepcopy(value)
+        restored = loads(dumps(value))
+
+        assert copied == value
+        assert copied is not value
+        assert deepcopied == value
+        assert deepcopied is not value
+        assert restored == value
+        assert restored is not value
+
+    def test_wrapper_repr_and_equality_include_base_insn_fields(self) -> None:
+        field_get = FieldInsn(InsnInfoType.GETFIELD, "Owner", "field", "I")
+        field_put = FieldInsn(InsnInfoType.PUTFIELD, "Owner", "field", "I")
+        field_offset = FieldInsn(InsnInfoType.GETFIELD, "Owner", "field", "I", 5)
+
+        assert repr(field_get) == (
+            "FieldInsn(type=<InsnInfoType.GETFIELD: 180>, bytecode_offset=-1, "
+            "owner='Owner', name='field', descriptor='I')"
+        )
+        assert field_get != field_put
+        assert field_get != field_offset
+        assert field_get == FieldInsn(InsnInfoType.GETFIELD, "Owner", "field", "I")
+
+        with pytest.raises(TypeError, match="FieldInsn"):
+            hash(field_get)
+
+    def test_wrapper_copy_deepcopy_and_pickle_preserve_base_insn_fields(self) -> None:
+        field = FieldInsn(InsnInfoType.PUTSTATIC, "Owner", "field", "I", 7)
+        ldc = LdcInsn(LdcInt(42), 9)
+
+        field_copies = (copy(field), deepcopy(field), loads(dumps(field)))
+        ldc_copies = (copy(ldc), deepcopy(ldc), loads(dumps(ldc)))
+
+        for clone in field_copies:
+            assert clone == field
+            assert clone is not field
+            assert clone.type == InsnInfoType.PUTSTATIC
+            assert clone.bytecode_offset == 7
+
+        assert repr(ldc) == "LdcInsn(type=<InsnInfoType.LDC_W: 19>, bytecode_offset=9, value=LdcInt(value=42))"
+        assert ldc != LdcInsn(LdcInt(42), 1)
+        assert ldc == LdcInsn(LdcInt(42), 9)
+        for clone in ldc_copies:
+            assert clone == ldc
+            assert clone is not ldc
+            assert clone.type == InsnInfoType.LDC_W
+            assert clone.bytecode_offset == 9
+            assert clone.value == LdcInt(42)
 
 
 # ---------------------------------------------------------------------------

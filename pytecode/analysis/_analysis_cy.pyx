@@ -33,6 +33,15 @@ from ..edit._labels_cy cimport (
     LookupSwitchInsn as CLookupSwitchInsn,
     TableSwitchInsn as CTableSwitchInsn,
 )
+from ..edit._operands_cy cimport (
+    FieldInsn as CFieldInsn,
+    InterfaceMethodInsn as CInterfaceMethodInsn,
+    InvokeDynamicInsn as CInvokeDynamicInsn,
+    LdcInsn as CLdcInsn,
+    MethodInsn as CMethodInsn,
+    TypeInsn as CTypeInsn,
+    VarInsn as CVarInsn,
+)
 from ..classfile.attributes import (
     AppendFrameInfo,
     ChopFrameInfo,
@@ -1550,7 +1559,7 @@ cdef object _simulate_insn(
     return _simulate_raw_insn(insn, state)
 
 
-cdef object _simulate_var_insn(insn: VarInsn, state: FrameState):
+cdef object _simulate_var_insn(CVarInsn insn, state: FrameState):
     """Simulate a VarInsn (load/store)."""
     opcode = insn.type
     slot = insn.slot
@@ -1581,7 +1590,7 @@ cdef object _simulate_var_insn(insn: VarInsn, state: FrameState):
     return state.push(vt)
 
 
-cdef object _simulate_field_insn(insn: FieldInsn, state: FrameState):
+cdef object _simulate_field_insn(CFieldInsn insn, state: FrameState):
     """Simulate a field access instruction."""
     field_type = vtype_from_field_descriptor_str(insn.descriptor)
     field_slots = 2 if is_category2(field_type) else 1
@@ -1601,7 +1610,7 @@ cdef object _simulate_field_insn(insn: FieldInsn, state: FrameState):
 
 
 cdef object _simulate_method_insn(
-    insn: MethodInsn,
+    CMethodInsn insn,
     state: FrameState,
     class_name: str,
 ):
@@ -1629,7 +1638,7 @@ cdef object _simulate_method_insn(
     return state
 
 
-cdef object _simulate_interface_method_insn(insn: InterfaceMethodInsn, state: FrameState):
+cdef object _simulate_interface_method_insn(CInterfaceMethodInsn insn, state: FrameState):
     """Simulate INVOKEINTERFACE."""
     md = parse_method_descriptor(insn.descriptor)
     arg_slots = sum(2 if is_category2(vtype_from_descriptor(p)) else 1 for p in md.parameter_types)
@@ -1642,7 +1651,7 @@ cdef object _simulate_interface_method_insn(insn: InterfaceMethodInsn, state: Fr
     return state
 
 
-cdef object _simulate_invokedynamic_insn(insn: InvokeDynamicInsn, state: FrameState):
+cdef object _simulate_invokedynamic_insn(CInvokeDynamicInsn insn, state: FrameState):
     """Simulate INVOKEDYNAMIC."""
     md = parse_method_descriptor(insn.descriptor)
     arg_slots = sum(2 if is_category2(vtype_from_descriptor(p)) else 1 for p in md.parameter_types)
@@ -1655,7 +1664,7 @@ cdef object _simulate_invokedynamic_insn(insn: InvokeDynamicInsn, state: FrameSt
 
 
 cdef object _simulate_type_insn(
-    insn: TypeInsn,
+    CTypeInsn insn,
     state: FrameState,
     code: CodeModel,
 ):
@@ -1680,7 +1689,7 @@ cdef object _simulate_type_insn(
             return state.push(VObject("[L" + insn.class_name + ";"))
 
 
-cdef object _simulate_ldc_insn(insn: LdcInsn, state: FrameState):
+cdef object _simulate_ldc_insn(CLdcInsn insn, state: FrameState):
     """Simulate LDC/LDC_W/LDC2_W."""
     val = insn.value
     if isinstance(val, LdcInt):

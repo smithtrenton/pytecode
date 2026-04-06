@@ -16,6 +16,7 @@ from ._attributes_cy cimport (
     BootstrapMethodInfo,
     ChopFrameInfo,
     CodeAttr,
+    DoubleVariableInfo,
     ExceptionInfo,
     FloatVariableInfo,
     FullFrameInfo,
@@ -36,8 +37,10 @@ from ._attributes_cy cimport (
     SameFrameInfo,
     SameLocals1StackItemFrameExtendedInfo,
     SameLocals1StackItemFrameInfo,
+    StackMapFrameInfo,
     StackMapTableAttr,
     TopVariableInfo,
+    VerificationTypeInfo,
     UninitializedThisVariableInfo,
     UninitializedVariableInfo,
 )
@@ -89,6 +92,435 @@ _ATTRIBUTE_INFO_TYPES = {
     member.value: member for member in attributes.AttributeInfoType if member.value
 }
 _ENUM_MEMBER_CACHE = {}
+
+
+cdef inline void _init_insn_base(InsnInfo insn, object insn_type, Py_ssize_t bytecode_offset):
+    insn.type = insn_type
+    insn.bytecode_offset = bytecode_offset
+
+
+cdef inline object _parsed_insn(object insn_type, Py_ssize_t bytecode_offset):
+    cdef InsnInfo insn = InsnInfo.__new__(InsnInfo)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    return insn
+
+
+cdef inline object _parsed_local_index(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef LocalIndex insn = LocalIndex.__new__(LocalIndex)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    return insn
+
+
+cdef inline object _parsed_local_index_w(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef LocalIndexW insn = LocalIndexW.__new__(LocalIndexW)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    return insn
+
+
+cdef inline object _parsed_const_pool_index(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef ConstPoolIndex insn = ConstPoolIndex.__new__(ConstPoolIndex)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    return insn
+
+
+cdef inline object _parsed_byte_value(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+    cdef ByteValue insn = ByteValue.__new__(ByteValue)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.value = value
+    return insn
+
+
+cdef inline object _parsed_short_value(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+    cdef ShortValue insn = ShortValue.__new__(ShortValue)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.value = value
+    return insn
+
+
+cdef inline object _parsed_branch(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+    cdef Branch insn = Branch.__new__(Branch)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.offset = offset
+    return insn
+
+
+cdef inline object _parsed_branch_w(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+    cdef BranchW insn = BranchW.__new__(BranchW)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.offset = offset
+    return insn
+
+
+cdef inline object _parsed_iinc(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+    cdef IInc insn = IInc.__new__(IInc)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    insn.value = value
+    return insn
+
+
+cdef inline object _parsed_iinc_w(object insn_type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+    cdef IIncW insn = IIncW.__new__(IIncW)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    insn.value = value
+    return insn
+
+
+cdef inline object _parsed_invoke_dynamic(
+    object insn_type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    object unused,
+):
+    cdef InvokeDynamic insn = InvokeDynamic.__new__(InvokeDynamic)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    insn.unused = unused
+    return insn
+
+
+cdef inline object _parsed_invoke_interface(
+    object insn_type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t count,
+    object unused,
+):
+    cdef InvokeInterface insn = InvokeInterface.__new__(InvokeInterface)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    insn.count = count
+    insn.unused = unused
+    return insn
+
+
+cdef inline object _parsed_new_array(object insn_type, Py_ssize_t bytecode_offset, object atype):
+    cdef NewArray insn = NewArray.__new__(NewArray)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.atype = atype
+    return insn
+
+
+cdef inline object _parsed_multi_anew_array(
+    object insn_type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t dimensions,
+):
+    cdef MultiANewArray insn = MultiANewArray.__new__(MultiANewArray)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.index = index
+    insn.dimensions = dimensions
+    return insn
+
+
+cdef inline object _parsed_match_offset_pair(Py_ssize_t match, Py_ssize_t offset):
+    cdef MatchOffsetPair pair = MatchOffsetPair.__new__(MatchOffsetPair)
+    pair.match = match
+    pair.offset = offset
+    return pair
+
+
+cdef inline object _parsed_lookup_switch(
+    object insn_type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t npairs,
+    list pairs,
+):
+    cdef LookupSwitch insn = LookupSwitch.__new__(LookupSwitch)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.default = default
+    insn.npairs = npairs
+    insn.pairs = pairs
+    return insn
+
+
+cdef inline object _parsed_table_switch(
+    object insn_type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t low,
+    Py_ssize_t high,
+    list offsets,
+):
+    cdef TableSwitch insn = TableSwitch.__new__(TableSwitch)
+    _init_insn_base(insn, insn_type, bytecode_offset)
+    insn.default = default
+    insn.low = low
+    insn.high = high
+    insn.offsets = offsets
+    return insn
+
+
+cdef inline void _init_attribute_base(AttributeInfo attr, Py_ssize_t attribute_name_index, Py_ssize_t attribute_length):
+    attr.attribute_name_index = attribute_name_index
+    attr.attribute_length = attribute_length
+
+
+cdef inline object _parsed_exception_info(
+    Py_ssize_t start_pc,
+    Py_ssize_t end_pc,
+    Py_ssize_t handler_pc,
+    Py_ssize_t catch_type,
+):
+    cdef ExceptionInfo info = ExceptionInfo.__new__(ExceptionInfo)
+    info.start_pc = start_pc
+    info.end_pc = end_pc
+    info.handler_pc = handler_pc
+    info.catch_type = catch_type
+    return info
+
+
+cdef inline void _init_verification_type_base(VerificationTypeInfo info, object tag):
+    info.tag = tag
+
+
+cdef inline object _parsed_top_variable_info(object tag):
+    cdef TopVariableInfo info = TopVariableInfo.__new__(TopVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_integer_variable_info(object tag):
+    cdef IntegerVariableInfo info = IntegerVariableInfo.__new__(IntegerVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_float_variable_info(object tag):
+    cdef FloatVariableInfo info = FloatVariableInfo.__new__(FloatVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_double_variable_info(object tag):
+    cdef DoubleVariableInfo info = DoubleVariableInfo.__new__(DoubleVariableInfo)
+    info.tag = tag
+    return info
+
+
+cdef inline object _parsed_long_variable_info(object tag):
+    cdef LongVariableInfo info = LongVariableInfo.__new__(LongVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_null_variable_info(object tag):
+    cdef NullVariableInfo info = NullVariableInfo.__new__(NullVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_uninitialized_this_variable_info(object tag):
+    cdef UninitializedThisVariableInfo info = UninitializedThisVariableInfo.__new__(UninitializedThisVariableInfo)
+    _init_verification_type_base(info, tag)
+    return info
+
+
+cdef inline object _parsed_object_variable_info(object tag, Py_ssize_t cpool_index):
+    cdef ObjectVariableInfo info = ObjectVariableInfo.__new__(ObjectVariableInfo)
+    _init_verification_type_base(info, tag)
+    info.cpool_index = cpool_index
+    return info
+
+
+cdef inline object _parsed_uninitialized_variable_info(object tag, Py_ssize_t offset):
+    cdef UninitializedVariableInfo info = UninitializedVariableInfo.__new__(UninitializedVariableInfo)
+    _init_verification_type_base(info, tag)
+    info.offset = offset
+    return info
+
+
+cdef inline void _init_stack_map_frame_base(StackMapFrameInfo frame, Py_ssize_t frame_type):
+    frame.frame_type = frame_type
+
+
+cdef inline object _parsed_same_frame_info(Py_ssize_t frame_type):
+    cdef SameFrameInfo info = SameFrameInfo.__new__(SameFrameInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    return info
+
+
+cdef inline object _parsed_same_locals_1_stack_item_frame_info(Py_ssize_t frame_type, object stack):
+    cdef SameLocals1StackItemFrameInfo info = SameLocals1StackItemFrameInfo.__new__(SameLocals1StackItemFrameInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    info.stack = stack
+    return info
+
+
+cdef inline object _parsed_same_locals_1_stack_item_frame_extended_info(
+    Py_ssize_t frame_type,
+    Py_ssize_t offset_delta,
+    object stack,
+):
+    cdef SameLocals1StackItemFrameExtendedInfo info = SameLocals1StackItemFrameExtendedInfo.__new__(
+        SameLocals1StackItemFrameExtendedInfo
+    )
+    _init_stack_map_frame_base(info, frame_type)
+    info.offset_delta = offset_delta
+    info.stack = stack
+    return info
+
+
+cdef inline object _parsed_chop_frame_info(Py_ssize_t frame_type, Py_ssize_t offset_delta):
+    cdef ChopFrameInfo info = ChopFrameInfo.__new__(ChopFrameInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    info.offset_delta = offset_delta
+    return info
+
+
+cdef inline object _parsed_same_frame_extended_info(Py_ssize_t frame_type, Py_ssize_t offset_delta):
+    cdef SameFrameExtendedInfo info = SameFrameExtendedInfo.__new__(SameFrameExtendedInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    info.offset_delta = offset_delta
+    return info
+
+
+cdef inline object _parsed_append_frame_info(Py_ssize_t frame_type, Py_ssize_t offset_delta, list locals):
+    cdef AppendFrameInfo info = AppendFrameInfo.__new__(AppendFrameInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    info.offset_delta = offset_delta
+    info.locals = locals
+    return info
+
+
+cdef inline object _parsed_full_frame_info(
+    Py_ssize_t frame_type,
+    Py_ssize_t offset_delta,
+    Py_ssize_t number_of_locals,
+    list locals,
+    Py_ssize_t number_of_stack_items,
+    list stack,
+):
+    cdef FullFrameInfo info = FullFrameInfo.__new__(FullFrameInfo)
+    _init_stack_map_frame_base(info, frame_type)
+    info.offset_delta = offset_delta
+    info.number_of_locals = number_of_locals
+    info.locals = locals
+    info.number_of_stack_items = number_of_stack_items
+    info.stack = stack
+    return info
+
+
+cdef inline object _parsed_code_attr(
+    Py_ssize_t attribute_name_index,
+    Py_ssize_t attribute_length,
+    Py_ssize_t max_stacks,
+    Py_ssize_t max_locals,
+    Py_ssize_t code_length,
+    list code,
+    Py_ssize_t exception_table_length,
+    list exception_table,
+    Py_ssize_t attributes_count,
+    list attributes_list,
+):
+    cdef CodeAttr attr = CodeAttr.__new__(CodeAttr)
+    _init_attribute_base(attr, attribute_name_index, attribute_length)
+    attr.max_stacks = max_stacks
+    attr.max_locals = max_locals
+    attr.code_length = code_length
+    attr.code = code
+    attr.exception_table_length = exception_table_length
+    attr.exception_table = exception_table
+    attr.attributes_count = attributes_count
+    attr.attributes = attributes_list
+    return attr
+
+
+cdef inline object _parsed_stack_map_table_attr(
+    Py_ssize_t attribute_name_index,
+    Py_ssize_t attribute_length,
+    Py_ssize_t number_of_entries,
+    list entries,
+):
+    cdef StackMapTableAttr attr = StackMapTableAttr.__new__(StackMapTableAttr)
+    _init_attribute_base(attr, attribute_name_index, attribute_length)
+    attr.number_of_entries = number_of_entries
+    attr.entries = entries
+    return attr
+
+
+cdef inline object _parsed_line_number_info(Py_ssize_t start_pc, Py_ssize_t line_number):
+    cdef LineNumberInfo info = LineNumberInfo.__new__(LineNumberInfo)
+    info.start_pc = start_pc
+    info.line_number = line_number
+    return info
+
+
+cdef inline object _parsed_line_number_table_attr(
+    Py_ssize_t attribute_name_index,
+    Py_ssize_t attribute_length,
+    Py_ssize_t line_number_table_length,
+    list line_number_table,
+):
+    cdef LineNumberTableAttr attr = LineNumberTableAttr.__new__(LineNumberTableAttr)
+    _init_attribute_base(attr, attribute_name_index, attribute_length)
+    attr.line_number_table_length = line_number_table_length
+    attr.line_number_table = line_number_table
+    return attr
+
+
+cdef inline object _parsed_local_variable_info(
+    Py_ssize_t start_pc,
+    Py_ssize_t length,
+    Py_ssize_t name_index,
+    Py_ssize_t descriptor_index,
+    Py_ssize_t index,
+):
+    cdef LocalVariableInfo info = LocalVariableInfo.__new__(LocalVariableInfo)
+    info.start_pc = start_pc
+    info.length = length
+    info.name_index = name_index
+    info.descriptor_index = descriptor_index
+    info.index = index
+    return info
+
+
+cdef inline object _parsed_local_variable_table_attr(
+    Py_ssize_t attribute_name_index,
+    Py_ssize_t attribute_length,
+    Py_ssize_t local_variable_table_length,
+    list local_variable_table,
+):
+    cdef LocalVariableTableAttr attr = LocalVariableTableAttr.__new__(LocalVariableTableAttr)
+    _init_attribute_base(attr, attribute_name_index, attribute_length)
+    attr.local_variable_table_length = local_variable_table_length
+    attr.local_variable_table = local_variable_table
+    return attr
+
+
+cdef inline object _parsed_local_variable_type_info(
+    Py_ssize_t start_pc,
+    Py_ssize_t length,
+    Py_ssize_t name_index,
+    Py_ssize_t signature_index,
+    Py_ssize_t index,
+):
+    cdef LocalVariableTypeInfo info = LocalVariableTypeInfo.__new__(LocalVariableTypeInfo)
+    info.start_pc = start_pc
+    info.length = length
+    info.name_index = name_index
+    info.signature_index = signature_index
+    info.index = index
+    return info
+
+
+cdef inline object _parsed_local_variable_type_table_attr(
+    Py_ssize_t attribute_name_index,
+    Py_ssize_t attribute_length,
+    Py_ssize_t local_variable_type_table_length,
+    list local_variable_type_table,
+):
+    cdef LocalVariableTypeTableAttr attr = LocalVariableTypeTableAttr.__new__(LocalVariableTypeTableAttr)
+    _init_attribute_base(attr, attribute_name_index, attribute_length)
+    attr.local_variable_type_table_length = local_variable_type_table_length
+    attr.local_variable_type_table = local_variable_type_table
+    return attr
 
 
 cdef inline object _constant_pool_info_type(int tag):
@@ -309,42 +741,42 @@ cdef class ClassReader(BytesReader):
         else:
             instinfo = _INSTRUCTION_INFOS[opcode]
         if instinfo is LocalIndex:
-            return LocalIndex(inst_type, current_method_offset, _fast_u1(self))
+            return _parsed_local_index(inst_type, current_method_offset, _fast_u1(self))
         elif instinfo is ConstPoolIndex:
-            return ConstPoolIndex(inst_type, current_method_offset, _fast_u2(self))
+            return _parsed_const_pool_index(inst_type, current_method_offset, _fast_u2(self))
         elif instinfo is ByteValue:
-            return ByteValue(inst_type, current_method_offset, _fast_i1(self))
+            return _parsed_byte_value(inst_type, current_method_offset, _fast_i1(self))
         elif instinfo is ShortValue:
-            return ShortValue(inst_type, current_method_offset, _fast_i2(self))
+            return _parsed_short_value(inst_type, current_method_offset, _fast_i2(self))
         elif instinfo is Branch:
-            return Branch(inst_type, current_method_offset, _fast_i2(self))
+            return _parsed_branch(inst_type, current_method_offset, _fast_i2(self))
         elif instinfo is BranchW:
-            return BranchW(inst_type, current_method_offset, _fast_i4(self))
+            return _parsed_branch_w(inst_type, current_method_offset, _fast_i4(self))
         elif instinfo is IInc:
             index, value = _fast_u1(self), _fast_i1(self)
-            return IInc(inst_type, current_method_offset, index, value)
+            return _parsed_iinc(inst_type, current_method_offset, index, value)
         elif instinfo is InvokeDynamic:
             index, unused = _fast_u2(self), self.read_bytes(2)
-            return InvokeDynamic(inst_type, current_method_offset, index, unused)
+            return _parsed_invoke_dynamic(inst_type, current_method_offset, index, unused)
         elif instinfo is InvokeInterface:
             index, count, unused = _fast_u2(self), _fast_u1(self), self.read_bytes(1)
-            return InvokeInterface(inst_type, current_method_offset, index, count, unused)
+            return _parsed_invoke_interface(inst_type, current_method_offset, index, count, unused)
         elif instinfo is MultiANewArray:
             index, dimensions = _fast_u2(self), _fast_u1(self)
-            return MultiANewArray(inst_type, current_method_offset, index, dimensions)
+            return _parsed_multi_anew_array(inst_type, current_method_offset, index, dimensions)
         elif instinfo is NewArray:
             atype = _array_type(_fast_u1(self))
-            return NewArray(inst_type, current_method_offset, atype)
+            return _parsed_new_array(inst_type, current_method_offset, atype)
         elif instinfo is LookupSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, npairs = _fast_i4(self), _fast_u4(self)
-            pairs = [MatchOffsetPair(_fast_i4(self), _fast_i4(self)) for _ in range(npairs)]
-            return LookupSwitch(inst_type, current_method_offset, default, npairs, pairs)
+            pairs = [_parsed_match_offset_pair(_fast_i4(self), _fast_i4(self)) for _ in range(npairs)]
+            return _parsed_lookup_switch(inst_type, current_method_offset, default, npairs, pairs)
         elif instinfo is TableSwitch:
             self.read_align_bytes(current_method_offset + 1)
             default, low, high = _fast_i4(self), _fast_i4(self), _fast_i4(self)
             offsets = [_fast_i4(self) for _ in range(high - low + 1)]
-            return TableSwitch(inst_type, current_method_offset, default, low, high, offsets)
+            return _parsed_table_switch(inst_type, current_method_offset, default, low, high, offsets)
         elif inst_type is instructions.InsnInfoType.WIDE:
             wide_opcode = _fast_u1(self)
             wide_inst_type = _INSTRUCTION_TYPES[opcode + wide_opcode]
@@ -354,12 +786,12 @@ cdef class ClassReader(BytesReader):
             else:
                 instinfo = _INSTRUCTION_INFOS[opcode + wide_opcode]
             if instinfo is LocalIndexW:
-                return LocalIndexW(wide_inst_type, current_method_offset, _fast_u2(self))
+                return _parsed_local_index_w(wide_inst_type, current_method_offset, _fast_u2(self))
             elif instinfo is IIncW:
                 index, value = _fast_u2(self), _fast_i2(self)
-                return IIncW(wide_inst_type, current_method_offset, index, value)
+                return _parsed_iinc_w(wide_inst_type, current_method_offset, index, value)
         elif instinfo is InsnInfo:
-            return InsnInfo(inst_type, current_method_offset)
+            return _parsed_insn(inst_type, current_method_offset)
 
         raise Exception(f"Invalid InstInfoType: {inst_type.name} {inst_type.instinfo}")
 
@@ -394,23 +826,23 @@ cdef class ClassReader(BytesReader):
         cdef int tag
         tag = _fast_u1(self)
         if tag == constants.VerificationType.TOP:
-            return TopVariableInfo(tag)
+            return _parsed_top_variable_info(tag)
         elif tag == constants.VerificationType.INTEGER:
-            return IntegerVariableInfo(tag)
+            return _parsed_integer_variable_info(tag)
         elif tag == constants.VerificationType.FLOAT:
-            return FloatVariableInfo(tag)
+            return _parsed_float_variable_info(tag)
         elif tag == constants.VerificationType.DOUBLE:
-            return attributes.DoubleVariableInfo(tag)
+            return _parsed_double_variable_info(tag)
         elif tag == constants.VerificationType.LONG:
-            return LongVariableInfo(tag)
+            return _parsed_long_variable_info(tag)
         elif tag == constants.VerificationType.NULL:
-            return NullVariableInfo(tag)
+            return _parsed_null_variable_info(tag)
         elif tag == constants.VerificationType.UNINITIALIZED_THIS:
-            return UninitializedThisVariableInfo(tag)
+            return _parsed_uninitialized_this_variable_info(tag)
         elif tag == constants.VerificationType.OBJECT:
-            return ObjectVariableInfo(tag, _fast_u2(self))
+            return _parsed_object_variable_info(tag, _fast_u2(self))
         elif tag == constants.VerificationType.UNINITIALIZED:
-            return UninitializedVariableInfo(tag, _fast_u2(self))
+            return _parsed_uninitialized_variable_info(tag, _fast_u2(self))
         else:
             raise ValueError(f"Unknown verification type tag: {tag}")
 
@@ -598,12 +1030,12 @@ cdef class ClassReader(BytesReader):
             code = self.read_code_bytes(code_length)
             exception_table_length = _fast_u2(self)
             exception_table = [
-                ExceptionInfo(_fast_u2(self), _fast_u2(self), _fast_u2(self), _fast_u2(self))
+                _parsed_exception_info(_fast_u2(self), _fast_u2(self), _fast_u2(self), _fast_u2(self))
                 for _ in range(exception_table_length)
             ]
             attributes_count = _fast_u2(self)
             attributes_list = [self.read_attribute() for _ in range(attributes_count)]
-            return CodeAttr(
+            return _parsed_code_attr(
                 name_index,
                 length,
                 max_stack,
@@ -623,25 +1055,25 @@ cdef class ClassReader(BytesReader):
                 frame_type = _fast_u1(self)
 
                 if 0 <= frame_type < 64:
-                    entries.append(SameFrameInfo(frame_type))
+                    entries.append(_parsed_same_frame_info(frame_type))
                 elif 64 <= frame_type < 128:
-                    entries.append(SameLocals1StackItemFrameInfo(frame_type, self.read_verification_type_info()))
+                    entries.append(_parsed_same_locals_1_stack_item_frame_info(frame_type, self.read_verification_type_info()))
                 elif frame_type == 247:
                     entries.append(
-                        SameLocals1StackItemFrameExtendedInfo(
+                        _parsed_same_locals_1_stack_item_frame_extended_info(
                             frame_type,
                             _fast_u2(self),
                             self.read_verification_type_info(),
                         )
                     )
                 elif 248 <= frame_type <= 250:
-                    entries.append(ChopFrameInfo(frame_type, _fast_u2(self)))
+                    entries.append(_parsed_chop_frame_info(frame_type, _fast_u2(self)))
                 elif frame_type == 251:
-                    entries.append(SameFrameExtendedInfo(frame_type, _fast_u2(self)))
+                    entries.append(_parsed_same_frame_extended_info(frame_type, _fast_u2(self)))
                 elif 252 <= frame_type <= 254:
                     offset_delta = _fast_u2(self)
                     verification_type_infos = [self.read_verification_type_info() for __ in range(frame_type - 251)]
-                    entries.append(AppendFrameInfo(frame_type, offset_delta, verification_type_infos))
+                    entries.append(_parsed_append_frame_info(frame_type, offset_delta, verification_type_infos))
                 elif frame_type == 255:
                     offset_delta = _fast_u2(self)
                     number_of_locals = _fast_u2(self)
@@ -649,7 +1081,7 @@ cdef class ClassReader(BytesReader):
                     number_of_stack_items = _fast_u2(self)
                     stack = [self.read_verification_type_info() for __ in range(number_of_stack_items)]
                     entries.append(
-                        FullFrameInfo(
+                        _parsed_full_frame_info(
                             frame_type,
                             offset_delta,
                             number_of_locals,
@@ -661,7 +1093,7 @@ cdef class ClassReader(BytesReader):
                 else:
                     raise ValueError(f"Unknown stack map frame type: {frame_type}")
 
-            return StackMapTableAttr(name_index, length, number_of_entries, entries)
+            return _parsed_stack_map_table_attr(name_index, length, number_of_entries, entries)
 
         elif attr_type is attributes.AttributeInfoType.EXCEPTIONS:
             number_of_exceptions = _fast_u2(self)
@@ -690,14 +1122,14 @@ cdef class ClassReader(BytesReader):
         elif attr_type is attributes.AttributeInfoType.LINE_NUMBER_TABLE:
             line_number_table_length = _fast_u2(self)
             line_number_table = [
-                LineNumberInfo(_fast_u2(self), _fast_u2(self)) for _ in range(line_number_table_length)
+                _parsed_line_number_info(_fast_u2(self), _fast_u2(self)) for _ in range(line_number_table_length)
             ]
-            return LineNumberTableAttr(name_index, length, line_number_table_length, line_number_table)
+            return _parsed_line_number_table_attr(name_index, length, line_number_table_length, line_number_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TABLE:
             local_variable_table_length = _fast_u2(self)
             local_variable_table = [
-                LocalVariableInfo(
+                _parsed_local_variable_info(
                     _fast_u2(self),
                     _fast_u2(self),
                     _fast_u2(self),
@@ -706,12 +1138,12 @@ cdef class ClassReader(BytesReader):
                 )
                 for _ in range(local_variable_table_length)
             ]
-            return LocalVariableTableAttr(name_index, length, local_variable_table_length, local_variable_table)
+            return _parsed_local_variable_table_attr(name_index, length, local_variable_table_length, local_variable_table)
 
         elif attr_type is attributes.AttributeInfoType.LOCAL_VARIABLE_TYPE_TABLE:
             local_variable_type_table_length = _fast_u2(self)
             local_variable_type_table = [
-                LocalVariableTypeInfo(
+                _parsed_local_variable_type_info(
                     _fast_u2(self),
                     _fast_u2(self),
                     _fast_u2(self),
@@ -720,7 +1152,7 @@ cdef class ClassReader(BytesReader):
                 )
                 for _ in range(local_variable_type_table_length)
             ]
-            return LocalVariableTypeTableAttr(
+            return _parsed_local_variable_type_table_attr(
                 name_index,
                 length,
                 local_variable_type_table_length,

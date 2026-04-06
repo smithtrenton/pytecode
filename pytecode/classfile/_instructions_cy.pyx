@@ -48,6 +48,10 @@ cdef class InsnInfo:
         self.type = type
         self.bytecode_offset = bytecode_offset
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset):
+        return _trusted_raw_insn(type, bytecode_offset)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset)
 
@@ -89,6 +93,10 @@ cdef class LocalIndex(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.index = index
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        return _trusted_local_index(type, bytecode_offset, index)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index)
 
@@ -106,6 +114,10 @@ cdef class LocalIndexW(InsnInfo):
     def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.index = index
+
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        return _trusted_local_index_w(type, bytecode_offset, index)
 
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index)
@@ -125,6 +137,10 @@ cdef class ConstPoolIndex(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.index = index
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+        return _trusted_const_pool_index(type, bytecode_offset, index)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index)
 
@@ -142,6 +158,10 @@ cdef class ByteValue(InsnInfo):
     def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.value = value
+
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+        return _trusted_byte_value(type, bytecode_offset, value)
 
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.value)
@@ -161,6 +181,10 @@ cdef class ShortValue(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.value = value
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+        return _trusted_short_value(type, bytecode_offset, value)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.value)
 
@@ -179,6 +203,10 @@ cdef class Branch(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.offset = offset
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+        return _trusted_branch(type, bytecode_offset, offset)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.offset)
 
@@ -196,6 +224,10 @@ cdef class BranchW(InsnInfo):
     def __init__(self, object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.offset = offset
+
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+        return _trusted_branch_w(type, bytecode_offset, offset)
 
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.offset)
@@ -217,6 +249,10 @@ cdef class IInc(InsnInfo):
         self.index = index
         self.value = value
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+        return _trusted_iinc(type, bytecode_offset, index, value)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index, self.value)
 
@@ -237,6 +273,10 @@ cdef class IIncW(InsnInfo):
         self.index = index
         self.value = value
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+        return _trusted_iinc_w(type, bytecode_offset, index, value)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index, self.value)
 
@@ -256,6 +296,10 @@ cdef class InvokeDynamic(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.index = index
         self.unused = unused
+
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, object unused):
+        return _trusted_invoke_dynamic(type, bytecode_offset, index, unused)
 
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index, self.unused)
@@ -279,6 +323,17 @@ cdef class InvokeInterface(InsnInfo):
         self.count = count
         self.unused = unused
 
+    @classmethod
+    def _trusted(
+        cls,
+        object type,
+        Py_ssize_t bytecode_offset,
+        Py_ssize_t index,
+        Py_ssize_t count,
+        object unused,
+    ):
+        return _trusted_invoke_interface(type, bytecode_offset, index, count, unused)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index, self.count, self.unused)
 
@@ -301,6 +356,10 @@ cdef class NewArray(InsnInfo):
         InsnInfo.__init__(self, type, bytecode_offset)
         self.atype = atype
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, object atype):
+        return _trusted_new_array(type, bytecode_offset, atype)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.atype)
 
@@ -321,6 +380,10 @@ cdef class MultiANewArray(InsnInfo):
         self.index = index
         self.dimensions = dimensions
 
+    @classmethod
+    def _trusted(cls, object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t dimensions):
+        return _trusted_multi_anew_array(type, bytecode_offset, index, dimensions)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.index, self.dimensions)
 
@@ -339,6 +402,10 @@ cdef class MatchOffsetPair:
     def __init__(self, Py_ssize_t match, Py_ssize_t offset):
         self.match = match
         self.offset = offset
+
+    @classmethod
+    def _trusted(cls, Py_ssize_t match, Py_ssize_t offset):
+        return _trusted_match_offset_pair(match, offset)
 
     def _field_values(self):
         return (self.match, self.offset)
@@ -392,6 +459,17 @@ cdef class LookupSwitch(InsnInfo):
         self.npairs = npairs
         self.pairs = pairs
 
+    @classmethod
+    def _trusted(
+        cls,
+        object type,
+        Py_ssize_t bytecode_offset,
+        Py_ssize_t default,
+        Py_ssize_t npairs,
+        list pairs,
+    ):
+        return _trusted_lookup_switch(type, bytecode_offset, default, npairs, pairs)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.default, self.npairs, self.pairs)
 
@@ -428,6 +506,18 @@ cdef class TableSwitch(InsnInfo):
         self.high = high
         self.offsets = offsets
 
+    @classmethod
+    def _trusted(
+        cls,
+        object type,
+        Py_ssize_t bytecode_offset,
+        Py_ssize_t default,
+        Py_ssize_t low,
+        Py_ssize_t high,
+        list offsets,
+    ):
+        return _trusted_table_switch(type, bytecode_offset, default, low, high, offsets)
+
     def _field_values(self):
         return (self.type, self.bytecode_offset, self.default, self.low, self.high, self.offsets)
 
@@ -438,6 +528,180 @@ cdef class TableSwitch(InsnInfo):
             ("high", self.high),
             ("offsets", self.offsets),
         )
+
+
+cdef inline InsnInfo _trusted_raw_insn(object type, Py_ssize_t bytecode_offset):
+    cdef InsnInfo self = InsnInfo.__new__(InsnInfo)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    return self
+
+
+cdef inline LocalIndex _trusted_local_index(object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef LocalIndex self = LocalIndex.__new__(LocalIndex)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    return self
+
+
+cdef inline LocalIndexW _trusted_local_index_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef LocalIndexW self = LocalIndexW.__new__(LocalIndexW)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    return self
+
+
+cdef inline ConstPoolIndex _trusted_const_pool_index(object type, Py_ssize_t bytecode_offset, Py_ssize_t index):
+    cdef ConstPoolIndex self = ConstPoolIndex.__new__(ConstPoolIndex)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    return self
+
+
+cdef inline ByteValue _trusted_byte_value(object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+    cdef ByteValue self = ByteValue.__new__(ByteValue)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.value = value
+    return self
+
+
+cdef inline ShortValue _trusted_short_value(object type, Py_ssize_t bytecode_offset, Py_ssize_t value):
+    cdef ShortValue self = ShortValue.__new__(ShortValue)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.value = value
+    return self
+
+
+cdef inline Branch _trusted_branch(object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+    cdef Branch self = Branch.__new__(Branch)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.offset = offset
+    return self
+
+
+cdef inline BranchW _trusted_branch_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t offset):
+    cdef BranchW self = BranchW.__new__(BranchW)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.offset = offset
+    return self
+
+
+cdef inline IInc _trusted_iinc(object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+    cdef IInc self = IInc.__new__(IInc)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    self.value = value
+    return self
+
+
+cdef inline IIncW _trusted_iinc_w(object type, Py_ssize_t bytecode_offset, Py_ssize_t index, Py_ssize_t value):
+    cdef IIncW self = IIncW.__new__(IIncW)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    self.value = value
+    return self
+
+
+cdef inline InvokeDynamic _trusted_invoke_dynamic(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    object unused,
+):
+    cdef InvokeDynamic self = InvokeDynamic.__new__(InvokeDynamic)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    self.unused = unused
+    return self
+
+
+cdef inline InvokeInterface _trusted_invoke_interface(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t count,
+    object unused,
+):
+    cdef InvokeInterface self = InvokeInterface.__new__(InvokeInterface)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    self.count = count
+    self.unused = unused
+    return self
+
+
+cdef inline NewArray _trusted_new_array(object type, Py_ssize_t bytecode_offset, object atype):
+    cdef NewArray self = NewArray.__new__(NewArray)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.atype = atype
+    return self
+
+
+cdef inline MultiANewArray _trusted_multi_anew_array(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t index,
+    Py_ssize_t dimensions,
+):
+    cdef MultiANewArray self = MultiANewArray.__new__(MultiANewArray)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.index = index
+    self.dimensions = dimensions
+    return self
+
+
+cdef inline MatchOffsetPair _trusted_match_offset_pair(Py_ssize_t match, Py_ssize_t offset):
+    cdef MatchOffsetPair self = MatchOffsetPair.__new__(MatchOffsetPair)
+    self.match = match
+    self.offset = offset
+    return self
+
+
+cdef inline LookupSwitch _trusted_lookup_switch(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t npairs,
+    list pairs,
+):
+    cdef LookupSwitch self = LookupSwitch.__new__(LookupSwitch)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.default = default
+    self.npairs = npairs
+    self.pairs = pairs
+    return self
+
+
+cdef inline TableSwitch _trusted_table_switch(
+    object type,
+    Py_ssize_t bytecode_offset,
+    Py_ssize_t default,
+    Py_ssize_t low,
+    Py_ssize_t high,
+    list offsets,
+):
+    cdef TableSwitch self = TableSwitch.__new__(TableSwitch)
+    self.type = type
+    self.bytecode_offset = bytecode_offset
+    self.default = default
+    self.low = low
+    self.high = high
+    self.offsets = offsets
+    return self
 
 
 class InsnInfoType(IntEnum):

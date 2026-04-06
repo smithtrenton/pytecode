@@ -163,7 +163,7 @@ For the design rationale behind this editing model, see [editing model design ra
 
 ### `pytecode/transforms/__init__.py`
 
-Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
+Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current transform surface without introducing a second object model:
 
 - **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes. `FieldTransform` and `MethodTransform` receive the owning `ClassModel` as a second argument; `CodeTransform` receives the owning `MethodModel` and `ClassModel` so transforms can inspect their traversal context
 - **`Pipeline` / `pipeline()`** — deterministic class-transform composition; pipelines are themselves callable so they slot directly into `JarFile.rewrite(transform=...)`
@@ -216,7 +216,7 @@ Label-based bytecode editing helpers and lowering utilities introduced for issue
 - **`resolve_labels()`** — computes byte offsets for labels and instructions in a mixed `InsnInfo | Label` stream; for single-slot `LdcInsn` values, exact sizing uses a provided `ConstantPoolBuilder` context without mutating the live pool
 - **`lower_code()`** — lowers symbolic code back to a raw `CodeAttr`, recalculating offsets and switch padding, promoting `GOTO`/`JSR` to wide forms, inverting overflowing conditional branches, reconstructing lifted debug attributes, and lowering all operand wrappers from `pytecode.edit.operands` to spec-shaped raw instructions with correct CP index allocation
 
-For the broader design rationale, trade-offs, and future phases behind this editing model, see [editing model design rationale](../design/editing-model.md).
+For the broader design rationale, historical trade-offs, and follow-up ideas behind this editing model, see [editing model design rationale](../design/editing-model.md).
 
 ### `pytecode/analysis/__init__.py`
 
