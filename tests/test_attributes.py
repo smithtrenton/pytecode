@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
+from typing import cast
+
 import pytest
 
 import pytecode.classfile.attributes as attributes
 import pytecode.classfile.constant_pool as constant_pool
 import pytecode.classfile.constants as constants
 import pytecode.classfile.instructions as instructions
+from pytecode.edit._attribute_clone import clone_attribute
 from tests.helpers import attr_reader, class_reader_with_cp, i1, make_attribute_blob, make_utf8_info, u1, u2, u4
 
 # ---------------------------------------------------------------------------
@@ -171,6 +176,549 @@ def test_code_attr_with_exception_table_and_nested_attributes():
         )
         for entry in local_variables.local_variable_table
     ] == [(0, 4, 7, 8, 1)]
+
+
+def test_migrated_attribute_objects_preserve_dataclass_style_semantics():
+    base = attributes.AttributeInfo(7, 0)
+    line_number = attributes.LineNumberInfo(3, 11)
+
+    assert base == attributes.AttributeInfo(7, 0)
+    assert base != attributes.AttributeInfo(8, 0)
+    assert repr(base) == "AttributeInfo(attribute_name_index=7, attribute_length=0)"
+    assert repr(line_number) == "LineNumberInfo(start_pc=3, line_number=11)"
+
+    ctor, args = line_number.__reduce__()
+    assert ctor is attributes.LineNumberInfo
+    assert args == (3, 11)
+
+    with pytest.raises(TypeError, match="unhashable type"):
+        hash(base)
+    with pytest.raises(TypeError, match="unhashable type"):
+        hash(line_number)
+
+
+def test_code_attr_copy_deepcopy_and_clone_attribute_clone_nested_hot_objects():
+    original = attributes.CodeAttr(
+        1,
+        0,
+        2,
+        1,
+        1,
+        [instructions.InsnInfo(instructions.InsnInfoType.RETURN, 0)],
+        1,
+        [attributes.ExceptionInfo(0, 1, 1, 2)],
+        3,
+        [
+            attributes.LineNumberTableAttr(2, 0, 1, [attributes.LineNumberInfo(0, 10)]),
+            attributes.LocalVariableTableAttr(3, 0, 1, [attributes.LocalVariableInfo(0, 1, 4, 5, 0)]),
+            attributes.StackMapTableAttr(
+                4,
+                0,
+                1,
+                [
+                    attributes.FullFrameInfo(
+                        255,
+                        0,
+                        1,
+                        [attributes.ObjectVariableInfo(constants.VerificationType.OBJECT, 9)],
+                        1,
+                        [attributes.UninitializedVariableInfo(constants.VerificationType.UNINITIALIZED, 7)],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    shallow = copy.copy(original)
+    deep = copy.deepcopy(original)
+    cloned = cast(attributes.CodeAttr, clone_attribute(original))
+    original_stack_map = cast(attributes.StackMapTableAttr, original.attributes[2])
+    deep_stack_map = cast(attributes.StackMapTableAttr, deep.attributes[2])
+    cloned_stack_map = cast(attributes.StackMapTableAttr, cloned.attributes[2])
+    original_frame = cast(attributes.FullFrameInfo, original_stack_map.entries[0])
+    deep_frame = cast(attributes.FullFrameInfo, deep_stack_map.entries[0])
+    cloned_frame = cast(attributes.FullFrameInfo, cloned_stack_map.entries[0])
+
+    assert shallow == original
+    assert shallow is not original
+    assert shallow.code is original.code
+    assert shallow.exception_table is original.exception_table
+    assert shallow.attributes is original.attributes
+
+    assert deep == original
+    assert deep is not original
+    assert deep.code is not original.code
+    assert deep.code[0] == original.code[0]
+    assert deep.code[0] is not original.code[0]
+    assert deep.exception_table is not original.exception_table
+    assert deep.exception_table[0] == original.exception_table[0]
+    assert deep.exception_table[0] is not original.exception_table[0]
+    assert deep.attributes is not original.attributes
+    assert deep.attributes[0] is not original.attributes[0]
+    assert deep_frame is not original_frame
+    assert deep_frame.locals[0] is not original_frame.locals[0]
+
+    assert cloned == original
+    assert cloned is not original
+    assert cloned.code[0] is not original.code[0]
+    assert cloned.exception_table[0] is not original.exception_table[0]
+    assert cloned.attributes[0] is not original.attributes[0]
+    assert cloned_frame is not original_frame
+    assert cloned_frame.stack[0] is not original_frame.stack[0]
+
+
+def _assert_migrated_value_object_semantics(value: object) -> None:
+    shallow = copy.copy(value)
+    deep = copy.deepcopy(value)
+    ctor, args = cast(tuple[Callable[..., object], tuple[object, ...]], value.__reduce__())
+    rebuilt = ctor(*args)
+
+    assert shallow == value
+    assert shallow is not value
+    assert deep == value
+    assert deep is not value
+    assert rebuilt == value
+    assert rebuilt is not value
+
+    with pytest.raises(TypeError, match="unhashable type"):
+        hash(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        attributes.ConstValueInfo(4),
+        attributes.EnumConstantValueInfo(5, 6),
+        attributes.ClassInfoValueInfo(7),
+        attributes.ArrayValueInfo(1, [attributes.ElementValueInfo("I", attributes.ConstValueInfo(8))]),
+        attributes.ElementValueInfo("e", attributes.EnumConstantValueInfo(9, 10)),
+        attributes.ElementValuePairInfo(11, attributes.ElementValueInfo("c", attributes.ClassInfoValueInfo(12))),
+        attributes.AnnotationInfo(
+            13,
+            1,
+            [attributes.ElementValuePairInfo(14, attributes.ElementValueInfo("s", attributes.ConstValueInfo(15)))],
+        ),
+        attributes.ParameterAnnotationInfo(1, [attributes.AnnotationInfo(16, 0, [])]),
+        attributes.TargetInfo(),
+        attributes.TypeParameterTargetInfo(1),
+        attributes.SupertypeTargetInfo(2),
+        attributes.TypeParameterBoundTargetInfo(3, 4),
+        attributes.EmptyTargetInfo(),
+        attributes.FormalParameterTargetInfo(5),
+        attributes.ThrowsTargetInfo(6),
+        attributes.TableInfo(7, 8, 9),
+        attributes.LocalvarTargetInfo(1, [attributes.TableInfo(10, 11, 12)]),
+        attributes.CatchTargetInfo(13),
+        attributes.OffsetTargetInfo(14),
+        attributes.TypeArgumentTargetInfo(15, 16),
+        attributes.PathInfo(17, 18),
+        attributes.TypePathInfo(1, [attributes.PathInfo(19, 20)]),
+        attributes.TypeAnnotationInfo(
+            0x13,
+            attributes.EmptyTargetInfo(),
+            attributes.TypePathInfo(1, [attributes.PathInfo(0, 0)]),
+            21,
+            1,
+            [attributes.ElementValuePairInfo(22, attributes.ElementValueInfo("I", attributes.ConstValueInfo(23)))],
+        ),
+    ],
+)
+def test_migrated_annotation_payload_objects_preserve_dataclass_style_semantics(value: object):
+    _assert_migrated_value_object_semantics(value)
+
+
+def test_migrated_annotation_payload_objects_preserve_repr_and_mutable_attrs():
+    const_value = attributes.ConstValueInfo(4)
+    pair = attributes.ElementValuePairInfo(6, attributes.ElementValueInfo("I", const_value))
+    annotation = attributes.AnnotationInfo(5, 1, [pair])
+    type_path = attributes.TypePathInfo(1, [attributes.PathInfo(0, 0)])
+
+    assert repr(const_value) == "ConstValueInfo(const_value_index=4)"
+    assert repr(pair.element_value) == "ElementValueInfo(tag='I', value=ConstValueInfo(const_value_index=4))"
+    assert repr(annotation) == (
+        "AnnotationInfo(type_index=5, num_element_value_pairs=1, "
+        "element_value_pairs=[ElementValuePairInfo(element_name_index=6, "
+        "element_value=ElementValueInfo(tag='I', value=ConstValueInfo(const_value_index=4)))])"
+    )
+    assert repr(attributes.EmptyTargetInfo()) == "EmptyTargetInfo()"
+    assert repr(type_path) == "TypePathInfo(path_length=1, path=[PathInfo(type_path_kind=0, type_argument_index=0)])"
+
+    const_value.const_value_index = 9
+    pair.element_name_index = 7
+    pair.element_value = attributes.ElementValueInfo("c", attributes.ClassInfoValueInfo(10))
+    type_path.path_length = 2
+    type_path.path.append(attributes.PathInfo(1, 0))
+
+    assert const_value.const_value_index == 9
+    assert pair.element_name_index == 7
+    assert isinstance(pair.element_value.value, attributes.ClassInfoValueInfo)
+    assert type_path.path_length == 2
+    assert [(entry.type_path_kind, entry.type_argument_index) for entry in type_path.path] == [(0, 0), (1, 0)]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        attributes.InnerClassInfo(1, 2, 3, constants.NestedClassAccessFlag.PUBLIC),
+        attributes.BootstrapMethodInfo(4, 2, [5, 6]),
+        attributes.MethodParameterInfo(7, constants.MethodParameterAccessFlag.FINAL),
+        attributes.RecordComponentInfo(8, 9, 1, [attributes.SignatureAttr(10, 0, 11)]),
+    ],
+)
+def test_migrated_non_module_payload_objects_preserve_dataclass_style_semantics(value: object):
+    _assert_migrated_value_object_semantics(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        attributes.RequiresInfo(1, constants.ModuleRequiresAccessFlag.TRANSITIVE, 2),
+        attributes.ExportInfo(3, constants.ModuleExportsAccessFlag.MANDATED, 2, [4, 5]),
+        attributes.OpensInfo(6, constants.ModuleOpensAccessFlag.SYNTHETIC, 1, [7]),
+        attributes.ProvidesInfo(8, 2, [9, 10]),
+    ],
+)
+def test_migrated_module_payload_objects_preserve_dataclass_style_semantics(value: object):
+    _assert_migrated_value_object_semantics(value)
+
+
+def test_migrated_non_module_payload_objects_preserve_repr_and_mutable_attrs():
+    inner = attributes.InnerClassInfo(1, 2, 3, constants.NestedClassAccessFlag.PUBLIC)
+    bootstrap = attributes.BootstrapMethodInfo(4, 2, [5, 6])
+    parameter = attributes.MethodParameterInfo(7, constants.MethodParameterAccessFlag.FINAL)
+    signature = attributes.SignatureAttr(10, 0, 11)
+    component = attributes.RecordComponentInfo(8, 9, 1, [signature])
+
+    assert repr(inner) == (
+        "InnerClassInfo("
+        "inner_class_info_index=1, outer_class_info_index=2, inner_name_index=3, "
+        f"inner_class_access_flags={constants.NestedClassAccessFlag.PUBLIC!r})"
+    )
+    assert repr(bootstrap) == (
+        "BootstrapMethodInfo("
+        "bootstrap_method_ref=4, num_boostrap_arguments=2, boostrap_arguments=[5, 6])"
+    )
+    assert repr(parameter) == (
+        "MethodParameterInfo("
+        f"name_index=7, access_flags={constants.MethodParameterAccessFlag.FINAL!r})"
+    )
+    assert repr(component) == (
+        "RecordComponentInfo("
+        f"name_index=8, descriptor_index=9, attributes_count=1, attributes={[signature]!r})"
+    )
+
+    inner.inner_name_index = 12
+    inner.inner_class_access_flags = constants.NestedClassAccessFlag.STATIC
+    bootstrap.num_boostrap_arguments = 3
+    bootstrap.boostrap_arguments.append(7)
+    parameter.access_flags = constants.MethodParameterAccessFlag.SYNTHETIC
+    component.attributes_count = 2
+    component.attributes.append(attributes.DeprecatedAttr(12, 0))
+
+    assert inner.inner_name_index == 12
+    assert inner.inner_class_access_flags == constants.NestedClassAccessFlag.STATIC
+    assert bootstrap.num_boostrap_arguments == 3
+    assert bootstrap.boostrap_arguments == [5, 6, 7]
+    assert parameter.access_flags == constants.MethodParameterAccessFlag.SYNTHETIC
+    assert component.attributes_count == 2
+    assert isinstance(component.attributes[1], attributes.DeprecatedAttr)
+
+
+def test_migrated_module_payload_objects_preserve_repr_and_mutable_attrs():
+    requires = attributes.RequiresInfo(1, constants.ModuleRequiresAccessFlag.TRANSITIVE, 2)
+    export = attributes.ExportInfo(3, constants.ModuleExportsAccessFlag.MANDATED, 2, [4, 5])
+    opened = attributes.OpensInfo(6, constants.ModuleOpensAccessFlag.SYNTHETIC, 1, [7])
+    provide = attributes.ProvidesInfo(8, 2, [9, 10])
+
+    assert repr(requires) == (
+        "RequiresInfo("
+        f"requires_index=1, requires_flag={constants.ModuleRequiresAccessFlag.TRANSITIVE!r}, "
+        "requires_version_index=2)"
+    )
+    assert repr(export) == (
+        "ExportInfo("
+        f"exports_index=3, exports_flags={constants.ModuleExportsAccessFlag.MANDATED!r}, "
+        "exports_to_count=2, exports_to_index=[4, 5])"
+    )
+    assert repr(opened) == (
+        "OpensInfo("
+        f"opens_index=6, opens_flags={constants.ModuleOpensAccessFlag.SYNTHETIC!r}, "
+        "opens_to_count=1, opens_to_index=[7])"
+    )
+    assert repr(provide) == "ProvidesInfo(provides_index=8, provides_with_count=2, provides_with_index=[9, 10])"
+
+    requires.requires_version_index = 11
+    export.exports_to_count = 3
+    export.exports_to_index.append(6)
+    opened.opens_flags = constants.ModuleOpensAccessFlag.MANDATED
+    opened.opens_to_index.append(8)
+    provide.provides_with_count = 3
+    provide.provides_with_index.append(11)
+
+    assert requires.requires_version_index == 11
+    assert export.exports_to_count == 3
+    assert export.exports_to_index == [4, 5, 6]
+    assert opened.opens_flags == constants.ModuleOpensAccessFlag.MANDATED
+    assert opened.opens_to_index == [7, 8]
+    assert provide.provides_with_count == 3
+    assert provide.provides_with_index == [9, 10, 11]
+
+
+def test_annotation_payload_copy_deepcopy_and_clone_attribute_clone_nested_objects():
+    original = attributes.RuntimeVisibleTypeAnnotationsAttr(
+        1,
+        0,
+        1,
+        [
+            attributes.TypeAnnotationInfo(
+                constants.TargetType.TYPE_LOCAL_VARIABLE,
+                attributes.LocalvarTargetInfo(1, [attributes.TableInfo(0, 5, 1)]),
+                attributes.TypePathInfo(1, [attributes.PathInfo(constants.TypePathKind.ARRAY_TYPE, 0)]),
+                2,
+                1,
+                [
+                    attributes.ElementValuePairInfo(
+                        3,
+                        attributes.ElementValueInfo(
+                            "[",
+                            attributes.ArrayValueInfo(
+                                2,
+                                [
+                                    attributes.ElementValueInfo("s", attributes.ConstValueInfo(4)),
+                                    attributes.ElementValueInfo(
+                                        "@",
+                                        attributes.AnnotationInfo(
+                                            5,
+                                            1,
+                                            [
+                                                attributes.ElementValuePairInfo(
+                                                    6,
+                                                    attributes.ElementValueInfo(
+                                                        "c",
+                                                        attributes.ClassInfoValueInfo(7),
+                                                    ),
+                                                )
+                                            ],
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    shallow = copy.copy(original)
+    deep = copy.deepcopy(original)
+    cloned = cast(attributes.RuntimeVisibleTypeAnnotationsAttr, clone_attribute(original))
+    original_annotation = original.annotations[0]
+    deep_annotation = deep.annotations[0]
+    cloned_annotation = cloned.annotations[0]
+    original_target = cast(attributes.LocalvarTargetInfo, original_annotation.target_info)
+    deep_target = cast(attributes.LocalvarTargetInfo, deep_annotation.target_info)
+    cloned_target = cast(attributes.LocalvarTargetInfo, cloned_annotation.target_info)
+    original_array = cast(attributes.ArrayValueInfo, original_annotation.element_value_pairs[0].element_value.value)
+    deep_array = cast(attributes.ArrayValueInfo, deep_annotation.element_value_pairs[0].element_value.value)
+    cloned_array = cast(attributes.ArrayValueInfo, cloned_annotation.element_value_pairs[0].element_value.value)
+    original_nested_annotation = cast(attributes.AnnotationInfo, original_array.values[1].value)
+    deep_nested_annotation = cast(attributes.AnnotationInfo, deep_array.values[1].value)
+    cloned_nested_annotation = cast(attributes.AnnotationInfo, cloned_array.values[1].value)
+
+    assert shallow == original
+    assert shallow is not original
+    assert shallow.annotations is original.annotations
+
+    assert deep == original
+    assert deep is not original
+    assert deep.annotations is not original.annotations
+    assert deep_annotation is not original_annotation
+    assert deep_target is not original_target
+    assert deep_target.table is not original_target.table
+    assert deep_target.table[0] is not original_target.table[0]
+    assert deep_annotation.target_path is not original_annotation.target_path
+    assert deep_annotation.target_path.path is not original_annotation.target_path.path
+    assert deep_annotation.target_path.path[0] is not original_annotation.target_path.path[0]
+    assert deep_array is not original_array
+    assert deep_array.values is not original_array.values
+    assert deep_array.values[0] is not original_array.values[0]
+    assert deep_nested_annotation is not original_nested_annotation
+    assert deep_nested_annotation.element_value_pairs[0] is not original_nested_annotation.element_value_pairs[0]
+
+    assert cloned == original
+    assert cloned is not original
+    assert cloned.annotations is not original.annotations
+    assert cloned_annotation is not original_annotation
+    assert cloned_target is not original_target
+    assert cloned_target.table[0] is not original_target.table[0]
+    assert cloned_annotation.target_path is not original_annotation.target_path
+    assert cloned_annotation.target_path.path[0] is not original_annotation.target_path.path[0]
+    assert cloned_array is not original_array
+    assert cloned_array.values[1] is not original_array.values[1]
+    assert cloned_nested_annotation is not original_nested_annotation
+    assert (
+        cloned_nested_annotation.element_value_pairs[0].element_value.value
+        is not original_nested_annotation.element_value_pairs[0].element_value.value
+    )
+
+
+def test_record_attr_copy_deepcopy_and_clone_attribute_clone_nested_non_module_payload_objects():
+    original = attributes.RecordAttr(
+        1,
+        0,
+        1,
+        [
+            attributes.RecordComponentInfo(
+                2,
+                3,
+                3,
+                [
+                    attributes.InnerClassesAttr(
+                        4,
+                        0,
+                        1,
+                        [attributes.InnerClassInfo(5, 6, 7, constants.NestedClassAccessFlag.PUBLIC)],
+                    ),
+                    attributes.BootstrapMethodsAttr(
+                        5,
+                        0,
+                        1,
+                        [attributes.BootstrapMethodInfo(8, 2, [9, 10])],
+                    ),
+                    attributes.MethodParametersAttr(
+                        6,
+                        0,
+                        1,
+                        [attributes.MethodParameterInfo(11, constants.MethodParameterAccessFlag.FINAL)],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    shallow = copy.copy(original)
+    deep = copy.deepcopy(original)
+    cloned = cast(attributes.RecordAttr, clone_attribute(original))
+    original_component = original.components[0]
+    deep_component = deep.components[0]
+    cloned_component = cloned.components[0]
+    original_inner_attr = cast(attributes.InnerClassesAttr, original_component.attributes[0])
+    deep_inner_attr = cast(attributes.InnerClassesAttr, deep_component.attributes[0])
+    cloned_inner_attr = cast(attributes.InnerClassesAttr, cloned_component.attributes[0])
+    original_bootstrap_attr = cast(attributes.BootstrapMethodsAttr, original_component.attributes[1])
+    deep_bootstrap_attr = cast(attributes.BootstrapMethodsAttr, deep_component.attributes[1])
+    cloned_bootstrap_attr = cast(attributes.BootstrapMethodsAttr, cloned_component.attributes[1])
+    original_method_attr = cast(attributes.MethodParametersAttr, original_component.attributes[2])
+    deep_method_attr = cast(attributes.MethodParametersAttr, deep_component.attributes[2])
+    cloned_method_attr = cast(attributes.MethodParametersAttr, cloned_component.attributes[2])
+
+    assert shallow == original
+    assert shallow is not original
+    assert shallow.components is original.components
+    assert shallow.components[0] is original.components[0]
+
+    assert deep == original
+    assert deep is not original
+    assert deep.components is not original.components
+    assert deep_component is not original_component
+    assert deep_component.attributes is not original_component.attributes
+    assert deep_inner_attr is not original_inner_attr
+    assert deep_inner_attr.classes[0] is not original_inner_attr.classes[0]
+    assert deep_bootstrap_attr.bootstrap_methods[0] is not original_bootstrap_attr.bootstrap_methods[0]
+    assert (
+        deep_bootstrap_attr.bootstrap_methods[0].boostrap_arguments
+        is not original_bootstrap_attr.bootstrap_methods[0].boostrap_arguments
+    )
+    assert deep_method_attr.parameters[0] is not original_method_attr.parameters[0]
+
+    assert cloned == original
+    assert cloned is not original
+    assert cloned.components is not original.components
+    assert cloned_component is not original_component
+    assert cloned_component.attributes is not original_component.attributes
+    assert cloned_inner_attr is not original_inner_attr
+    assert cloned_inner_attr.classes[0] is not original_inner_attr.classes[0]
+    assert cloned_bootstrap_attr.bootstrap_methods[0] is not original_bootstrap_attr.bootstrap_methods[0]
+    assert (
+        cloned_bootstrap_attr.bootstrap_methods[0].boostrap_arguments
+        is not original_bootstrap_attr.bootstrap_methods[0].boostrap_arguments
+    )
+    assert cloned_method_attr.parameters[0] is not original_method_attr.parameters[0]
+
+
+def test_module_attr_copy_deepcopy_and_clone_attribute_clone_nested_module_payload_objects():
+    original = attributes.ModuleAttr(
+        1,
+        0,
+        2,
+        constants.ModuleAccessFlag.OPEN,
+        3,
+        1,
+        [attributes.RequiresInfo(4, constants.ModuleRequiresAccessFlag.TRANSITIVE, 5)],
+        1,
+        [attributes.ExportInfo(6, constants.ModuleExportsAccessFlag.MANDATED, 2, [7, 8])],
+        1,
+        [attributes.OpensInfo(9, constants.ModuleOpensAccessFlag.SYNTHETIC, 1, [10])],
+        2,
+        [11, 12],
+        1,
+        [attributes.ProvidesInfo(13, 2, [14, 15])],
+    )
+
+    shallow = copy.copy(original)
+    deep = copy.deepcopy(original)
+    cloned = cast(attributes.ModuleAttr, clone_attribute(original))
+    original_requires = original.requires[0]
+    deep_requires = deep.requires[0]
+    cloned_requires = cloned.requires[0]
+    original_export = original.exports[0]
+    deep_export = deep.exports[0]
+    cloned_export = cloned.exports[0]
+    original_open = original.opens[0]
+    deep_open = deep.opens[0]
+    cloned_open = cloned.opens[0]
+    original_provide = original.provides[0]
+    deep_provide = deep.provides[0]
+    cloned_provide = cloned.provides[0]
+
+    assert shallow == original
+    assert shallow is not original
+    assert shallow.requires is original.requires
+    assert shallow.exports is original.exports
+    assert shallow.opens is original.opens
+    assert shallow.uses_index is original.uses_index
+    assert shallow.provides is original.provides
+
+    assert deep == original
+    assert deep is not original
+    assert deep.requires is not original.requires
+    assert deep_requires is not original_requires
+    assert deep.exports is not original.exports
+    assert deep_export is not original_export
+    assert deep_export.exports_to_index is not original_export.exports_to_index
+    assert deep.opens is not original.opens
+    assert deep_open is not original_open
+    assert deep_open.opens_to_index is not original_open.opens_to_index
+    assert deep.uses_index is not original.uses_index
+    assert deep.provides is not original.provides
+    assert deep_provide is not original_provide
+    assert deep_provide.provides_with_index is not original_provide.provides_with_index
+
+    assert cloned == original
+    assert cloned is not original
+    assert cloned.requires is not original.requires
+    assert cloned_requires is not original_requires
+    assert cloned.exports is not original.exports
+    assert cloned_export is not original_export
+    assert cloned_export.exports_to_index is not original_export.exports_to_index
+    assert cloned.opens is not original.opens
+    assert cloned_open is not original_open
+    assert cloned_open.opens_to_index is not original_open.opens_to_index
+    assert cloned.uses_index is not original.uses_index
+    assert cloned.provides is not original.provides
+    assert cloned_provide is not original_provide
+    assert cloned_provide.provides_with_index is not original_provide.provides_with_index
 
 
 # ---------------------------------------------------------------------------
@@ -1075,6 +1623,47 @@ def test_module_attr_with_exports():
     assert exp.exports_flags == constants.ModuleExportsAccessFlag(0)
     assert exp.exports_to_count == 2
     assert exp.exports_to_index == [6, 7]
+
+
+def test_module_attr_with_opens_and_provides():
+    payload = (
+        u2(2)
+        + u2(0)
+        + u2(0)
+        + u2(0)  # requires_count=0
+        + u2(0)  # exports_count=0
+        + u2(1)  # opens_count=1
+        + u2(8)
+        + u2(0)
+        + u2(2)
+        + u2(9)
+        + u2(10)  # idx=8, flags=0, to_count=2, to=[9,10]
+        + u2(1)  # uses_count=1
+        + u2(11)
+        + u2(1)  # provides_count=1
+        + u2(12)
+        + u2(2)
+        + u2(13)
+        + u2(14)  # idx=12, with_count=2, with=[13,14]
+    )
+    reader = attr_reader("Module", payload)
+    attr = reader.read_attribute()
+    assert isinstance(attr, attributes.ModuleAttr)
+    assert attr.opens_count == 1
+    opened = attr.opens[0]
+    assert isinstance(opened, attributes.OpensInfo)
+    assert opened.opens_index == 8
+    assert opened.opens_flags == constants.ModuleOpensAccessFlag(0)
+    assert opened.opens_to_count == 2
+    assert opened.opens_to_index == [9, 10]
+    assert attr.uses_count == 1
+    assert attr.uses_index == [11]
+    assert attr.provides_count == 1
+    provide = attr.provides[0]
+    assert isinstance(provide, attributes.ProvidesInfo)
+    assert provide.provides_index == 12
+    assert provide.provides_with_count == 2
+    assert provide.provides_with_index == [13, 14]
 
 
 # ---------------------------------------------------------------------------

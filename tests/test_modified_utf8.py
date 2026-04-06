@@ -23,6 +23,11 @@ def test_modified_utf8_round_trip(value: str) -> None:
     assert decode_modified_utf8(encode_modified_utf8(value)) == value
 
 
+@pytest.mark.parametrize("value", ["\ud800", "\udc00", "\ud800A", "A\udc00"])
+def test_modified_utf8_round_trip_preserves_unpaired_surrogates(value: str) -> None:
+    assert decode_modified_utf8(encode_modified_utf8(value)) == value
+
+
 def test_decode_rejects_raw_nul_byte() -> None:
     with pytest.raises(UnicodeDecodeError, match="NUL"):
         decode_modified_utf8(b"\x00")

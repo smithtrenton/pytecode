@@ -67,35 +67,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed_output_dir = output_dir / "parsed"
     rewritten_output_dir = output_dir / "rewritten"
 
-    start = time.time()
+    start = time.perf_counter_ns()
     jar = JarFile(jar_path)
-    end = time.time()
-    print(f"Read time: {end - start}s")
+    end = time.perf_counter_ns()
+    print(f"Read time: {(end - start) / 1_000_000}ms")
 
-    start = time.time()
+    start = time.perf_counter_ns()
     classes, other_files = jar.parse_classes()
-    end = time.time()
-    print(f"Parse time: {end - start}s")
+    end = time.perf_counter_ns()
+    print(f"Parse time: {(end - start) / 1_000_000}ms")
     print(f"\tclasses: {len(classes)}")
     print(f"\tother_files: {len(other_files)}")
 
-    start = time.time()
+    start = time.perf_counter_ns()
     class_models = lift_models(classes)
-    end = time.time()
-    print(f"Lift time: {end - start}s")
+    end = time.perf_counter_ns()
+    print(f"Lift time: {(end - start) / 1_000_000}ms")
     print(f"\tclass_models: {len(class_models)}")
 
-    start = time.time()
-    write_classfiles(parsed_output_dir, classes, other_files)
-    end = time.time()
-    print(f"Write time: {end - start}s")
-    print(f"\tdir: {parsed_output_dir}")
-
-    start = time.time()
+    start = time.perf_counter_ns()
     write_classmodels(rewritten_output_dir, class_models, other_files)
-    end = time.time()
-    print(f"Rewrite time: {end - start}s")
+    end = time.perf_counter_ns()
+    print(f"Rewrite time: {(end - start) / 1_000_000}ms")
     print(f"\tdir: {rewritten_output_dir}")
+
+    start = time.perf_counter_ns()
+    write_classfiles(parsed_output_dir, classes, other_files)
+    end = time.perf_counter_ns()
+    print(f"Write time: {(end - start) / 1_000_000}ms")
+    print(f"\tdir: {parsed_output_dir}")
     return 0
 
 

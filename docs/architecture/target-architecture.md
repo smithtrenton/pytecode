@@ -29,9 +29,9 @@ Responsibilities:
 
 This is the layer you already have today.
 
-## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phases 1-2 landed)
+## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6))
 
-Phase 1 of this layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, and the Phase 2 extension now lives in `pytecode.transforms`. Together, these give pytecode a higher-level object model plus a lightweight composition layer for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, `ConstantPoolBuilder`, callable transform pipelines, and the richer matcher DSL.
+This layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, with the transform composition layer living in `pytecode.transforms`. Together, these give pytecode a higher-level object model plus a lightweight composition layer for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, `ConstantPoolBuilder`, callable transform pipelines, and the richer matcher DSL.
 
 Responsibilities:
 
@@ -46,9 +46,9 @@ Responsibilities:
 - preservation of unknown attributes through transformations
 - composable class/method/field/code transforms with deterministic pass ordering, owner-filtered lifting, and composable selection predicates
 
-This layer is now the core user-facing manipulation surface behind the requested "API to manipulate the classfiles." `pytecode.transforms` provides the landed Phase 2 composition layer (`Pipeline`, `pipeline()`, `Matcher`, `on_*` lifting helpers, owner filters, and the current selector/lightweight-helper surface) with context-passing transform protocols from the Phase 3 evaluation ([#21](https://github.com/smithtrenton/pytecode/issues/21)). The `FieldTransform`, `MethodTransform`, and `CodeTransform` protocols pass owning context (the parent `ClassModel` and, for code transforms, the parent `MethodModel`) so transforms can inspect where they are in the class hierarchy without needing a separate visitor API.
+This layer is now the core user-facing manipulation surface behind the requested "API to manipulate the classfiles." `pytecode.transforms` provides the current composition layer (`Pipeline`, `pipeline()`, `Matcher`, `on_*` lifting helpers, owner filters, and the current selector/lightweight-helper surface) with context-passing transform protocols from the later visitor evaluation ([#21](https://github.com/smithtrenton/pytecode/issues/21)). The `FieldTransform`, `MethodTransform`, and `CodeTransform` protocols pass owning context (the parent `ClassModel` and, for code transforms, the parent `MethodModel`) so transforms can inspect where they are in the class hierarchy without needing a separate visitor API.
 
-After evaluating five candidate designs — **(A)** direct mutable dataclasses, **(B)** builder objects (BCEL-style), **(C)** visitor/transformer pattern (ASM-style), **(D)** pass pipelines, and **(E)** dual tree+visitor — **Design A (Mutable Dataclasses)** was chosen as the primary editing API. The tree model is designed so that pass-style composition (Design D) can be layered on top, and a visitor layer (Design E) can be added later if streaming becomes necessary. See [editing model design rationale](../design/editing-model.md) for the full analysis, comparative feature matrix, library survey, and phased implementation plan.
+After evaluating five candidate designs — **(A)** direct mutable dataclasses, **(B)** builder objects (BCEL-style), **(C)** visitor/transformer pattern (ASM-style), **(D)** pass pipelines, and **(E)** dual tree+visitor — **Design A (Mutable Dataclasses)** was chosen as the primary editing API. The tree model is designed so that pass-style composition (Design D) can be layered on top, and a visitor layer (Design E) can be added later if streaming becomes necessary. See [editing model design rationale](../design/editing-model.md) for the full analysis, comparative feature matrix, library survey, and historical implementation record.
 
 ### 3a. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 

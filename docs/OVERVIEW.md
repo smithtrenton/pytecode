@@ -29,6 +29,13 @@ The original implementation roadmap is complete, so the docs are organized aroun
 | Bytecode validation framework, tier breakdown, and external-tool strategy | [design/validation-framework.md](design/validation-framework.md) |
 | CFG oracle research and the reasoning behind the ASM-based differential suite | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
 
+## Experiments and performance history
+
+| Topic | Location |
+|------|----------|
+| Cython migration narrative and backend-port history | [experiments/cython-migration.md](experiments/cython-migration.md) |
+| Benchmark snapshots and performance notes from completed Cython passes | [experiments/cython-benchmarks.md](experiments/cython-benchmarks.md) |
+
 ## Current package shape
 
 The core user-facing entry points are:
@@ -42,4 +49,4 @@ Supporting submodules provide transforms, labels, operands, analysis, hierarchy 
 
 ## Notes on historical docs
 
-Some design documents intentionally preserve the reasoning used to choose the current architecture. When those docs refer to phases, issues, or alternatives, treat them as historical rationale rather than an active backlog.
+Some design and experiment documents intentionally preserve the reasoning used to choose the current architecture. When those docs refer to phases, issues, or alternatives, treat them as historical rationale rather than an active backlog.

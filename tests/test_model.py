@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import pytecode.classfile.constant_pool as cp_module
 from pytecode.classfile.attributes import (
+    AttributeInfo,
     CodeAttr,
     InnerClassesAttr,
     RuntimeVisibleAnnotationsAttr,
@@ -20,7 +24,14 @@ from pytecode.classfile.info import ClassFile, FieldInfo
 from pytecode.classfile.instructions import InsnInfo, InsnInfoType
 from pytecode.classfile.modified_utf8 import decode_modified_utf8
 from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
-from pytecode.edit.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
+from pytecode.edit.labels import (
+    BranchInsn,
+    CodeItem,
+    ExceptionHandler,
+    Label,
+    LookupSwitchInsn,
+    TableSwitchInsn,
+)
 from pytecode.edit.model import ClassModel, CodeModel, FieldModel, MethodModel
 from pytecode.edit.operands import MethodInsn, TypeInsn
 from tests.helpers import (
@@ -158,6 +169,166 @@ def _find_method_with_stack_map(cf: ClassFile) -> tuple[str, StackMapTableAttr]:
         if stack_map is not None:
             return _resolve_utf8(cf, method.name_index), stack_map
     raise AssertionError("Method with non-empty StackMapTable not found in ClassFile")
+
+
+# ---------------------------------------------------------------------------
+# Dataclass-compatibility helpers
+# ---------------------------------------------------------------------------
+
+
+def _sample_code_model_for_semantics() -> CodeModel:
+    return CodeModel(
+        max_stack=1,
+        max_locals=1,
+        instructions=[InsnInfo(InsnInfoType.NOP, 0), InsnInfo(InsnInfoType.RETURN, 1)],
+        attributes=[SyntheticAttr(7, 0)],
+        _nested_attribute_layout=("other", "line_numbers"),
+    )
+
+
+def test_model_objects_repr_match_dataclass_style() -> None:
+    field = FieldModel(FieldAccessFlag.PRIVATE, "count", "I", [])
+    method = MethodModel(MethodAccessFlag.PUBLIC, "run", "()V", None, [])
+    code = CodeModel(max_stack=1, max_locals=2, _nested_attribute_layout=("other",))
+    cls = ClassModel(
+        version=(52, 0),
+        access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        name="com/example/Demo",
+        super_name="java/lang/Object",
+        interfaces=[],
+        fields=[field],
+        methods=[method],
+        attributes=[],
+        constant_pool=cast(ConstantPoolBuilder, "cp"),
+    )
+
+    assert repr(field) == (
+        f"FieldModel(access_flags={FieldAccessFlag.PRIVATE!r}, name='count', descriptor='I', attributes=[])"
+    )
+    assert repr(method) == (
+        f"MethodModel(access_flags={MethodAccessFlag.PUBLIC!r}, name='run', descriptor='()V', code=None, attributes=[])"
+    )
+    assert repr(code) == (
+        "CodeModel("
+        "max_stack=1, max_locals=2, instructions=[], exception_handlers=[], "
+        "line_numbers=[], local_variables=[], local_variable_types=[], attributes=[], "
+        "debug_info_state=<DebugInfoState.FRESH: 'fresh'>)"
+    )
+    assert "_nested_attribute_layout" not in repr(code)
+    assert repr(cls) == (
+        "ClassModel("
+        f"version=(52, 0), access_flags={ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER!r}, "
+        "name='com/example/Demo', super_name='java/lang/Object', interfaces=[], "
+        f"fields={[field]!r}, methods={[method]!r}, attributes=[], constant_pool='cp', "
+        "debug_info_state=<DebugInfoState.FRESH: 'fresh'>)"
+    )
+
+
+def test_model_constructors_preserve_explicit_none_values() -> None:
+    code = CodeModel(
+        max_stack=1,
+        max_locals=1,
+        instructions=cast(list[CodeItem], None),
+        attributes=cast(list[AttributeInfo], None),
+    )
+    cls = ClassModel(
+        version=(52, 0),
+        access_flags=ClassAccessFlag.PUBLIC,
+        name="com/example/Demo",
+        super_name=None,
+        interfaces=[],
+        fields=[],
+        methods=[],
+        attributes=[],
+        constant_pool=cast(ConstantPoolBuilder, None),
+    )
+
+    assert code.instructions is None
+    assert code.attributes is None
+    assert cls.constant_pool is None
+
+
+def test_model_objects_support_copy_deepcopy_reduce_and_unhashable() -> None:
+    code = _sample_code_model_for_semantics()
+    field = FieldModel(FieldAccessFlag.PRIVATE, "count", "I", [SyntheticAttr(3, 0)])
+    method = MethodModel(MethodAccessFlag.PUBLIC, "run", "()V", code, [SignatureAttr(8, 0, 9)])
+    cls = ClassModel(
+        version=(52, 0),
+        access_flags=ClassAccessFlag.PUBLIC | ClassAccessFlag.SUPER,
+        name="com/example/Demo",
+        super_name="java/lang/Object",
+        interfaces=["java/io/Serializable"],
+        fields=[field],
+        methods=[method],
+        attributes=[SyntheticAttr(10, 0)],
+        constant_pool=cast(ConstantPoolBuilder, "cp"),
+    )
+
+    shallow_code = copy.copy(code)
+    deep_code = copy.deepcopy(code)
+    code_ctor, code_args = cast(tuple[Callable[..., object], tuple[object, ...]], code.__reduce__())
+    rebuilt_code = code_ctor(*code_args)
+    assert shallow_code == code
+    assert shallow_code is not code
+    assert shallow_code.instructions is code.instructions
+    assert deep_code == code
+    assert deep_code is not code
+    assert deep_code.instructions == code.instructions
+    assert deep_code.instructions is not code.instructions
+    assert rebuilt_code == code
+    assert rebuilt_code is not code
+    assert cast(tuple[str, ...], rebuilt_code._nested_attribute_layout) == code._nested_attribute_layout
+
+    shallow_field = copy.copy(field)
+    deep_field = copy.deepcopy(field)
+    field_ctor, field_args = cast(tuple[Callable[..., object], tuple[object, ...]], field.__reduce__())
+    rebuilt_field = field_ctor(*field_args)
+    assert shallow_field == field
+    assert shallow_field.attributes is field.attributes
+    assert deep_field == field
+    assert deep_field.attributes is not field.attributes
+    assert rebuilt_field == field
+
+    shallow_method = copy.copy(method)
+    deep_method = copy.deepcopy(method)
+    method_ctor, method_args = cast(tuple[Callable[..., object], tuple[object, ...]], method.__reduce__())
+    rebuilt_method = method_ctor(*method_args)
+    assert shallow_method == method
+    assert shallow_method.attributes is method.attributes
+    assert shallow_method.code is method.code
+    assert deep_method == method
+    assert deep_method.attributes is not method.attributes
+    assert deep_method.code is not method.code
+    assert rebuilt_method == method
+
+    shallow_cls = copy.copy(cls)
+    deep_cls = copy.deepcopy(cls)
+    cls_ctor, cls_args = cast(tuple[Callable[..., object], tuple[object, ...]], cls.__reduce__())
+    rebuilt_cls = cls_ctor(*cls_args)
+    assert shallow_cls == cls
+    assert shallow_cls.fields is cls.fields
+    assert shallow_cls.methods is cls.methods
+    assert deep_cls == cls
+    assert deep_cls.fields is not cls.fields
+    assert deep_cls.methods is not cls.methods
+    assert rebuilt_cls == cls
+
+    for value in (code, field, method, cls):
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(value)
+
+
+def test_code_model_equality_ignores_nested_attribute_layout_but_reduce_preserves_it() -> None:
+    code = CodeModel(max_stack=1, max_locals=1, _nested_attribute_layout=("other", "line_numbers"))
+    same_fields_different_layout = CodeModel(max_stack=1, max_locals=1, _nested_attribute_layout=("line_numbers",))
+
+    assert code == same_fields_different_layout
+
+    ctor, args = cast(tuple[Callable[..., object], tuple[object, ...]], code.__reduce__())
+    rebuilt = ctor(*args)
+
+    assert rebuilt == code
+    assert cast(tuple[str, ...], rebuilt._nested_attribute_layout) == ("other", "line_numbers")
 
 
 # ===========================================================================

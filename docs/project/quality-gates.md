@@ -4,7 +4,7 @@
 
 A change is ready to merge or tag when it:
 
-- passes lint, format, type-checking, and test validation
+- passes lint, format, type-checking, test validation, and packaging validation
 - keeps the documented public surface in sync with generated API docs
 - preserves roundtrip and verifier behavior for existing fixtures
 - documents any intentional behavior change in parsing, lowering, validation, or archive rewrite semantics
@@ -18,6 +18,7 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+uv build
 ```
 
 ## What the current suite covers

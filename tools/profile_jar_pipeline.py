@@ -15,15 +15,36 @@ import io
 import json
 import os
 import pstats
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pytecode import ClassModel, ClassReader, ClassWriter, JarFile
-from pytecode.archive import JarInfo
-from pytecode.classfile.info import ClassFile
+
+def _requested_backend_from_argv(argv: Sequence[str]) -> str | None:
+    for index, argument in enumerate(argv):
+        if argument == "--backend":
+            if index + 1 < len(argv):
+                return argv[index + 1]
+            return None
+        if argument.startswith("--backend="):
+            return argument.partition("=")[2]
+    return None
+
+
+# Optional Cython imports are selected during module import, so the CLI backend
+# switch must be applied before importing pytecode itself.
+_requested_backend = _requested_backend_from_argv(sys.argv[1:])
+if _requested_backend == "python":
+    os.environ["PYTECODE_BLOCK_CYTHON"] = "1"
+elif _requested_backend == "cython":
+    os.environ.pop("PYTECODE_BLOCK_CYTHON", None)
+
+from pytecode import ClassModel, ClassReader, ClassWriter, JarFile  # noqa: E402
+from pytecode.archive import JarInfo  # noqa: E402
+from pytecode.classfile.info import ClassFile  # noqa: E402
 
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]
@@ -34,6 +55,7 @@ type SerializedClasses = list[tuple[JarInfo, bytes]]
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS_OUTPUT_DIR = REPO_ROOT / "output" / "profiles" / "common-libs"
 DEFAULT_CORPUS_STAGES = ("model-lift", "model-lower")
+NANOSECONDS_PER_MILLISECOND = 1_000_000
 
 SORT_CHOICES = (
     "calls",
@@ -131,7 +153,7 @@ class StageReport:
     name: str
     description: str
     summary: str
-    elapsed_seconds: float
+    elapsed_milliseconds: float
     profile_path: Path | None
     stats_text: str
 
@@ -141,9 +163,9 @@ class StageAggregate:
     """Aggregate elapsed-time statistics for one stage across many JARs."""
 
     count: int
-    mean_seconds: float
-    min_seconds: float
-    max_seconds: float
+    mean_milliseconds: float
+    min_milliseconds: float
+    max_milliseconds: float
 
 
 @dataclass(frozen=True)
@@ -387,6 +409,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print stats without writing .prof files.",
     )
+    parser.add_argument(
+        "--backend",
+        choices=("cython", "python"),
+        default=None,
+        help=(
+            "Force a specific backend for profiling. 'python' sets "
+            "PYTECODE_BLOCK_CYTHON=1 to use the pure-Python fallback. "
+            "'cython' ensures the Cython extensions are used (default). "
+            "When omitted, uses whatever backend is currently active."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -409,9 +442,9 @@ def run_stage(
 ) -> StageReport:
     """Execute and profile a single prepared stage."""
     profiler = cProfile.Profile()
-    start = time.perf_counter()
+    start_ns = time.perf_counter_ns()
     summary = profiler.runcall(stage.workload)
-    elapsed_seconds = time.perf_counter() - start
+    elapsed_milliseconds = (time.perf_counter_ns() - start_ns) / NANOSECONDS_PER_MILLISECOND
 
     if profile_path is not None:
         profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,7 +455,7 @@ def run_stage(
         name=stage.name,
         description=stage.description,
         summary=summary,
-        elapsed_seconds=elapsed_seconds,
+        elapsed_milliseconds=elapsed_milliseconds,
         profile_path=profile_path,
         stats_text=format_profile_stats(profiler, sort=sort, top=top),
     )
@@ -453,15 +486,15 @@ def stage_averages(jar_reports: Sequence[JarProfileReport]) -> dict[str, StageAg
     elapsed_by_stage: dict[str, list[float]] = {}
     for jar_report in jar_reports:
         for stage_report in jar_report.stage_reports:
-            elapsed_by_stage.setdefault(stage_report.name, []).append(stage_report.elapsed_seconds)
+            elapsed_by_stage.setdefault(stage_report.name, []).append(stage_report.elapsed_milliseconds)
 
     aggregates: dict[str, StageAggregate] = {}
     for stage_name, elapsed_values in elapsed_by_stage.items():
         aggregates[stage_name] = StageAggregate(
             count=len(elapsed_values),
-            mean_seconds=sum(elapsed_values) / len(elapsed_values),
-            min_seconds=min(elapsed_values),
-            max_seconds=max(elapsed_values),
+            mean_milliseconds=sum(elapsed_values) / len(elapsed_values),
+            min_milliseconds=min(elapsed_values),
+            max_milliseconds=max(elapsed_values),
         )
     return aggregates
 
@@ -517,7 +550,7 @@ def corpus_report_to_json(report: CorpusReport) -> dict[str, object]:
                 "jar_path": str(jar_report.jar_path),
                 "stages": {
                     stage_report.name: {
-                        "elapsed_seconds": stage_report.elapsed_seconds,
+                        "elapsed_milliseconds": stage_report.elapsed_milliseconds,
                         "summary": stage_report.summary,
                         "profile_path": None if stage_report.profile_path is None else str(stage_report.profile_path),
                     }
@@ -529,9 +562,9 @@ def corpus_report_to_json(report: CorpusReport) -> dict[str, object]:
         "stage_averages": {
             stage_name: {
                 "count": aggregate.count,
-                "mean_seconds": aggregate.mean_seconds,
-                "min_seconds": aggregate.min_seconds,
-                "max_seconds": aggregate.max_seconds,
+                "mean_milliseconds": aggregate.mean_milliseconds,
+                "min_milliseconds": aggregate.min_milliseconds,
+                "max_milliseconds": aggregate.max_milliseconds,
             }
             for stage_name, aggregate in report.stage_averages.items()
         },
@@ -548,7 +581,7 @@ def print_stage_report(report: StageReport) -> None:
     """Print a human-readable summary for a completed stage."""
     print(f"== Stage {report.index}: {report.name} ==")
     print(report.description)
-    print(f"elapsed: {report.elapsed_seconds:.6f}s")
+    print(f"elapsed: {report.elapsed_milliseconds:.3f}ms")
     print(f"summary: {report.summary}")
     if report.profile_path is not None:
         print(f"profile: {report.profile_path}")
@@ -574,7 +607,7 @@ def print_corpus_report(
     for jar_report in report.jars:
         print(f"== Jar: {jar_report.jar_path} ==")
         for stage_report in jar_report.stage_reports:
-            print(f"{stage_report.name}: {stage_report.elapsed_seconds:.6f}s")
+            print(f"{stage_report.name}: {stage_report.elapsed_milliseconds:.3f}ms")
             print(f"summary: {stage_report.summary}")
             if stage_report.profile_path is not None:
                 print(f"profile: {stage_report.profile_path}")
@@ -585,16 +618,28 @@ def print_corpus_report(
         aggregate = report.stage_averages[stage_name]
         print(
             f"{stage_name}: "
-            f"mean={aggregate.mean_seconds:.6f}s "
-            f"min={aggregate.min_seconds:.6f}s "
-            f"max={aggregate.max_seconds:.6f}s "
+            f"mean={aggregate.mean_milliseconds:.3f}ms "
+            f"min={aggregate.min_milliseconds:.3f}ms "
+            f"max={aggregate.max_milliseconds:.3f}ms "
             f"count={aggregate.count}"
         )
+
+
+def _activate_backend(backend: str | None) -> str:
+    """Set the environment for the requested backend and return its label."""
+    if backend == "python":
+        os.environ["PYTECODE_BLOCK_CYTHON"] = "1"
+        return "python"
+    if backend == "cython":
+        os.environ.pop("PYTECODE_BLOCK_CYTHON", None)
+        return "cython"
+    return "cython" if os.environ.get("PYTECODE_BLOCK_CYTHON") != "1" else "python"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the profiling harness for one jar or a directory of jars."""
     args = parse_args(argv)
+    backend_label = _activate_backend(args.backend)
     single_jar_mode = is_single_jar_input(args.inputs)
     stage_names = default_stage_names(args.inputs, args.stages)
     try:
@@ -624,6 +669,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=output_dir,
         )
         print(f"jar: {jar_path}")
+        print(f"backend: {backend_label}")
         print(f"stages: {', '.join(stage_names)}")
         print(f"profile_output_dir: {output_dir if output_dir is not None else 'disabled'}")
         if summary_json is not None:

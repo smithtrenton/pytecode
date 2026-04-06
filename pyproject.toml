@@ -9,7 +9,7 @@ include-package-data = true
 include = ["pytecode*"]
 
 [tool.setuptools.package-data]
-pytecode = ["py.typed"]
+pytecode = ["py.typed", "**/*.pxd"]
 
 [project]
 name = "pytecode"
@@ -36,12 +36,14 @@ Repository = "https://github.com/smithtrenton/pytecode"
 Issues = "https://github.com/smithtrenton/pytecode/issues"
 Changelog = "https://github.com/smithtrenton/pytecode/releases"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "basedpyright>=1.38.3,<2.0.0",
+  "Cython>=3.1.1,<4.0.0",
   "pdoc>=16.0.0,<17.0.0",
   "pytest>=9.0.2,<10.0.0",
   "ruff>=0.15.7,<0.16.0",
+  "setuptools>=82.0.1,<83.0.0",
 ]
 
 [tool.basedpyright]

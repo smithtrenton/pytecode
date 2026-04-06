@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -10,6 +13,7 @@ from pytecode.classfile.attributes import (
     LineNumberTableAttr,
     LocalVariableTableAttr,
     LocalVariableTypeTableAttr,
+    SyntheticAttr,
 )
 from pytecode.classfile.instructions import (
     ArrayType,
@@ -37,6 +41,7 @@ from pytecode.edit.labels import (
     CodeItem,
     ExceptionHandler,
     Label,
+    LabelResolution,
     LineNumberEntry,
     LocalVariableEntry,
     LocalVariableTypeEntry,
@@ -81,6 +86,167 @@ def test_resolve_labels_allows_adjacent_and_terminal_labels() -> None:
     assert resolution.label_offsets[alias] == 0
     assert resolution.label_offsets[end] == 1
     assert resolution.total_code_length == 1
+
+
+def test_label_preserves_identity_hashing_repr_and_copy_helpers() -> None:
+    named = Label("named")
+    unnamed = Label()
+    named_copy = copy.copy(named)
+    named_deepcopy = copy.deepcopy(named)
+    ctor, args = cast(tuple[Callable[..., object], tuple[object, ...]], named.__reduce__())
+    rebuilt = cast(Label, ctor(*args))
+    mapping = {named: "value"}
+
+    assert named != Label("named")
+    assert isinstance(hash(named), int)
+    assert mapping[named] == "value"
+    assert named_copy not in mapping
+    assert repr(named) == "Label('named')"
+    assert repr(unnamed).startswith("Label(id=0x")
+    assert repr(unnamed).endswith(")")
+    assert named_copy is not named
+    assert named_copy.name == named.name
+    assert named_copy != named
+    assert named_deepcopy is not named
+    assert named_deepcopy.name == named.name
+    assert named_deepcopy != named
+    assert rebuilt is not named
+    assert rebuilt.name == named.name
+    assert rebuilt != named
+
+
+def test_migrated_label_record_objects_preserve_label_aware_value_semantics() -> None:
+    start = Label("start")
+    end = Label("end")
+    handler = Label("handler")
+    record_values = [
+        (
+            ExceptionHandler(start, end, handler, "java/lang/Exception"),
+            "ExceptionHandler(start=Label('start'), end=Label('end'), handler=Label('handler'), "
+            "catch_type='java/lang/Exception')",
+            ("start", "end", "handler"),
+        ),
+        (
+            LineNumberEntry(start, 42),
+            "LineNumberEntry(label=Label('start'), line_number=42)",
+            ("label",),
+        ),
+        (
+            LocalVariableEntry(start, end, "value", "I", 1),
+            "LocalVariableEntry(start=Label('start'), end=Label('end'), name='value', descriptor='I', slot=1)",
+            ("start", "end"),
+        ),
+        (
+            LocalVariableTypeEntry(start, end, "value", "TT;", 1),
+            "LocalVariableTypeEntry(start=Label('start'), end=Label('end'), name='value', signature='TT;', slot=1)",
+            ("start", "end"),
+        ),
+        (
+            LabelResolution({start: 0}, [0, 1], 2),
+            "LabelResolution(label_offsets={Label('start'): 0}, instruction_offsets=[0, 1], total_code_length=2)",
+            (),
+        ),
+    ]
+
+    for value, expected_repr, label_attrs in record_values:
+        shallow = copy.copy(value)
+        deep = copy.deepcopy(value)
+        ctor, args = cast(tuple[Callable[..., object], tuple[object, ...]], value.__reduce__())
+        rebuilt = ctor(*args)
+
+        assert shallow == value
+        assert shallow is not value
+        assert deep is not value
+        assert deep != value
+        assert rebuilt == value
+        assert rebuilt is not value
+        assert repr(value) == expected_repr
+
+        for attr_name in label_attrs:
+            assert getattr(shallow, attr_name) is getattr(value, attr_name)
+            assert getattr(deep, attr_name) is not getattr(value, attr_name)
+
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(value)
+
+
+def test_migrated_symbolic_instruction_wrappers_preserve_instruction_style_semantics() -> None:
+    default_target = Label("default")
+    case_one = Label("case_one")
+    case_two = Label("case_two")
+    branch = BranchInsn(InsnInfoType.GOTO, case_one, 5)
+    lookup = LookupSwitchInsn(default_target, [(1, case_one), (2, case_two)], 4)
+    table = TableSwitchInsn(default_target, 0, 1, [case_one, case_two], 7)
+
+    assert repr(branch) == "BranchInsn(type=<InsnInfoType.GOTO: 167>, bytecode_offset=5, target=Label('case_one'))"
+    assert branch == BranchInsn(InsnInfoType.GOTO, case_one, 5)
+    assert branch != BranchInsn(InsnInfoType.JSR, case_one, 5)
+    assert branch != BranchInsn(InsnInfoType.GOTO, case_one, 6)
+
+    shallow_branch = copy.copy(branch)
+    deep_branch = copy.deepcopy(branch)
+    branch_ctor, branch_args = cast(tuple[Callable[..., object], tuple[object, ...]], branch.__reduce__())
+    rebuilt_branch = branch_ctor(*branch_args)
+    assert shallow_branch == branch
+    assert shallow_branch.target is branch.target
+    assert deep_branch != branch
+    assert deep_branch.target is not branch.target
+    assert rebuilt_branch == branch
+    assert branch_args == (InsnInfoType.GOTO, case_one, 5)
+
+    assert repr(lookup) == (
+        "LookupSwitchInsn(type=<InsnInfoType.LOOKUPSWITCH: 171>, bytecode_offset=4, "
+        "default_target=Label('default'), pairs=[(1, Label('case_one')), (2, Label('case_two'))])"
+    )
+    assert lookup == LookupSwitchInsn(default_target, [(1, case_one), (2, case_two)], 4)
+    assert lookup != LookupSwitchInsn(default_target, [(1, case_one), (2, case_two)], 5)
+
+    shallow_lookup = copy.copy(lookup)
+    deep_lookup = copy.deepcopy(lookup)
+    lookup_ctor, lookup_args = cast(tuple[Callable[..., object], tuple[object, ...]], lookup.__reduce__())
+    rebuilt_lookup = lookup_ctor(*lookup_args)
+    assert shallow_lookup == lookup
+    assert shallow_lookup.pairs is lookup.pairs
+    assert deep_lookup != lookup
+    assert deep_lookup.pairs is not lookup.pairs
+    assert deep_lookup.pairs[0] is not lookup.pairs[0]
+    assert deep_lookup.pairs[0][1] is not lookup.pairs[0][1]
+    assert rebuilt_lookup == lookup
+    assert lookup_args == (default_target, [(1, case_one), (2, case_two)], 4)
+
+    assert repr(table) == (
+        "TableSwitchInsn(type=<InsnInfoType.TABLESWITCH: 170>, bytecode_offset=7, "
+        "default_target=Label('default'), low=0, high=1, targets=[Label('case_one'), Label('case_two')])"
+    )
+    assert table == TableSwitchInsn(default_target, 0, 1, [case_one, case_two], 7)
+    assert table != TableSwitchInsn(default_target, 0, 1, [case_one, case_two], 8)
+
+    shallow_table = copy.copy(table)
+    deep_table = copy.deepcopy(table)
+    table_ctor, table_args = cast(tuple[Callable[..., object], tuple[object, ...]], table.__reduce__())
+    rebuilt_table = table_ctor(*table_args)
+    assert shallow_table == table
+    assert shallow_table.targets is table.targets
+    assert deep_table != table
+    assert deep_table.targets is not table.targets
+    assert deep_table.targets[0] is not table.targets[0]
+    assert rebuilt_table == table
+    assert table_args == (default_target, 0, 1, [case_one, case_two], 7)
+
+    for value in (branch, lookup, table):
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(value)
+
+
+def test_symbolic_instruction_wrappers_preserve_constructor_validation() -> None:
+    target = Label("target")
+
+    with pytest.raises(ValueError, match="NOP is not a branch opcode"):
+        BranchInsn(InsnInfoType.NOP, target)
+    with pytest.raises(ValueError, match="tableswitch high must be >= low"):
+        TableSwitchInsn(target, 2, 1, [target])
+    with pytest.raises(ValueError, match="tableswitch range 0..1 requires 2 targets, got 1"):
+        TableSwitchInsn(target, 0, 1, [target])
 
 
 def test_resolve_labels_requires_cp_for_single_slot_ldc() -> None:
@@ -321,6 +487,36 @@ def test_lower_code_rebuilds_exception_handlers_and_debug_attrs() -> None:
     assert local_variable_types.local_variable_type_table[0].start_pc == 0
     assert local_variable_types.local_variable_type_table[0].length == 1
     assert local_variable_types.local_variable_type_table[0].index == 1
+
+
+def test_lower_code_respects_nested_attribute_layout_and_deduplicates_debug_tokens() -> None:
+    start = Label("start")
+    end = Label("end")
+    marker = SyntheticAttr(7, 0)
+    code = CodeModel(
+        max_stack=1,
+        max_locals=2,
+        instructions=[
+            start,
+            InsnInfo(InsnInfoType.NOP, -1),
+            end,
+            InsnInfo(InsnInfoType.RETURN, -1),
+        ],
+        line_numbers=[LineNumberEntry(start, 10)],
+        local_variables=[LocalVariableEntry(start, end, "value", "I", 1)],
+        local_variable_types=[LocalVariableTypeEntry(start, end, "value", "TT;", 1)],
+        attributes=[marker],
+        _nested_attribute_layout=("line_numbers", "line_numbers", "other", "local_variables"),
+    )
+
+    lowered = lower_code(code, ConstantPoolBuilder())
+
+    assert [type(attr) for attr in lowered.attributes] == [
+        LineNumberTableAttr,
+        SyntheticAttr,
+        LocalVariableTableAttr,
+        LocalVariableTypeTableAttr,
+    ]
 
 
 def test_lower_code_rejects_empty_exception_handler_range() -> None:

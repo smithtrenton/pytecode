@@ -292,7 +292,7 @@ def test_unknown_cp_tag():
 
 
 def test_truncated_classfile():
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, IndexError)):
         ClassReader.from_bytes(b"\xca\xfe\xba\xbe")
 
 
@@ -350,7 +350,7 @@ def test_truncated_constant_pool_utf8():
     tag_and_length = u1(1) + u2(10)  # tag=1, length=10
     partial_string = b"hello"  # only 5 bytes instead of 10
     truncated = magic + version + cp_count + cp_entries + tag_and_length + partial_string
-    with pytest.raises((struct.error, MalformedClassException)):
+    with pytest.raises((struct.error, MalformedClassException, IndexError)):
         ClassReader.from_bytes(truncated)
 
 
@@ -370,7 +370,7 @@ def test_truncated_constant_pool_fieldref():
     tag = u1(9)  # Fieldref tag
     partial = u2(2)  # class_index only, missing name_and_type_index
     truncated = magic + version + cp_count + cp_entries + tag + partial
-    with pytest.raises((struct.error, MalformedClassException)):
+    with pytest.raises((struct.error, MalformedClassException, IndexError)):
         ClassReader.from_bytes(truncated)
 
 
@@ -387,7 +387,7 @@ def test_truncated_before_access_flags():
         + class_entry_bytes(3)
     )
     truncated = magic + version + cp_count + cp_entries
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, IndexError)):
         ClassReader.from_bytes(truncated)
 
 
@@ -403,7 +403,7 @@ def test_truncated_method_attributes():
         methods_count=1,
         methods_bytes=method_bytes,
     )
-    with pytest.raises((struct.error, MalformedClassException)):
+    with pytest.raises((struct.error, MalformedClassException, IndexError)):
         ClassReader.from_bytes(data)
 
 
@@ -425,17 +425,17 @@ def test_truncated_code_attribute_body():
         methods_count=1,
         methods_bytes=method_bytes,
     )
-    with pytest.raises((struct.error, MalformedClassException)):
+    with pytest.raises((struct.error, MalformedClassException, IndexError)):
         ClassReader.from_bytes(data)
 
 
 def test_empty_file():
     """A zero-length file should fail immediately."""
-    with pytest.raises((struct.error, MalformedClassException)):
+    with pytest.raises((struct.error, MalformedClassException, IndexError)):
         ClassReader.from_bytes(b"")
 
 
 def test_only_magic():
     """File has magic number but nothing else."""
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, IndexError)):
         ClassReader.from_bytes(b"\xca\xfe\xba\xbe")
