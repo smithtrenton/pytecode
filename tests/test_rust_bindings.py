@@ -6,10 +6,21 @@ import pytest
 
 from pytecode.analysis.hierarchy import ResolvedClass
 from pytecode.analysis.verify import verify_classfile
+from pytecode.classfile.attributes import (
+    BootstrapMethodsAttr,
+    CodeAttr,
+    DeprecatedAttr,
+    LineNumberTableAttr,
+    PermittedSubclassesAttr,
+    RecordAttr,
+    RuntimeVisibleParameterAnnotationsAttr,
+    RuntimeVisibleTypeAnnotationsAttr,
+)
 from pytecode.classfile.constants import ClassAccessFlag
+from pytecode.classfile.reader import ClassReader
 from pytecode.classfile.writer import ClassWriter
 from pytecode.edit.model import ClassModel
-from tests.helpers import compile_java_resource
+from tests.helpers import compile_java_resource, compile_java_resource_classes
 
 rust = pytest.importorskip("pytecode._rust")
 
@@ -98,3 +109,49 @@ def test_public_class_writer_accepts_rust_classfile(tmp_path: Path) -> None:
     rust_classfile = rust.ClassReader.from_bytes(class_bytes).class_info
 
     assert ClassWriter.write(rust_classfile) == class_bytes
+
+
+def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
+    annotated = ClassReader.from_file(compile_java_resource(tmp_path, "AnnotatedClass.java")).class_info
+    assert any(isinstance(attr, DeprecatedAttr) for attr in annotated.attributes)
+    assert any(isinstance(attr, DeprecatedAttr) for field in annotated.fields for attr in field.attributes)
+    assert any(isinstance(attr, DeprecatedAttr) for method in annotated.methods for attr in method.attributes)
+
+    parameter_annotations = ClassReader.from_file(
+        compile_java_resource(tmp_path, "ParameterAnnotations.java")
+    ).class_info
+    assert any(
+        isinstance(attr, RuntimeVisibleParameterAnnotationsAttr)
+        for method in parameter_annotations.methods
+        for attr in method.attributes
+    )
+
+    type_annotations = ClassReader.from_file(compile_java_resource(tmp_path, "TypeAnnotationShowcase.java")).class_info
+    assert any(isinstance(attr, RuntimeVisibleTypeAnnotationsAttr) for attr in type_annotations.attributes)
+    assert any(
+        isinstance(attr, RuntimeVisibleTypeAnnotationsAttr)
+        for field in type_annotations.fields
+        for attr in field.attributes
+    )
+    assert any(
+        isinstance(attr, RuntimeVisibleTypeAnnotationsAttr)
+        for method in type_annotations.methods
+        for attr in method.attributes
+    )
+
+    hello = ClassReader.from_file(compile_java_resource(tmp_path, "HelloWorld.java")).class_info
+    code_attr = next(attr for method in hello.methods for attr in method.attributes if isinstance(attr, CodeAttr))
+    assert any(isinstance(attr, LineNumberTableAttr) for attr in code_attr.attributes)
+
+    lambda_showcase = ClassReader.from_file(compile_java_resource(tmp_path, "LambdaShowcase.java")).class_info
+    assert any(isinstance(attr, BootstrapMethodsAttr) for attr in lambda_showcase.attributes)
+
+    record_classes = compile_java_resource_classes(tmp_path, "RecordClass.java", release=16)
+    point_class = next(path for path in record_classes if path.name == "RecordClass$Point.class")
+    point = ClassReader.from_file(point_class).class_info
+    assert any(isinstance(attr, RecordAttr) for attr in point.attributes)
+
+    sealed_classes = compile_java_resource_classes(tmp_path, "SealedHierarchy.java", release=17)
+    shape_class = next(path for path in sealed_classes if path.name == "SealedHierarchy$Shape.class")
+    shape = ClassReader.from_file(shape_class).class_info
+    assert any(isinstance(attr, PermittedSubclassesAttr) for attr in shape.attributes)

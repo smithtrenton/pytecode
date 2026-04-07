@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import struct
 from typing import Any, cast
 
-from .._internal.bytes_utils import BytesReader
 from . import attributes, constant_pool, info, instructions
 
 
@@ -177,6 +175,9 @@ def _convert_attribute(
     attr: Any,
     constant_pool_items: list[constant_pool.ConstantPoolInfo | None],
 ) -> attributes.AttributeInfo:
+    if isinstance(attr, attributes.AttributeInfo):
+        return attr
+
     name = type(attr).__name__
 
     if name == "ConstantValueAttr":
@@ -228,27 +229,14 @@ def _convert_attribute(
             nested_attrs,
         )
     if name == "UnimplementedAttr":
-        return _parse_unknown_attribute(attr, constant_pool_items)
+        return attributes.UnimplementedAttr(
+            int(attr.attribute_name_index),
+            int(attr.attribute_length),
+            bytes(attr.info),
+            attributes.AttributeInfoType.UNIMPLEMENTED,
+        )
 
     raise TypeError(f"Unsupported Rust attribute wrapper {name}")
-
-
-def _parse_unknown_attribute(
-    attr: Any,
-    constant_pool_items: list[constant_pool.ConstantPoolInfo | None],
-) -> attributes.AttributeInfo:
-    from . import reader as reader_module
-
-    payload = (
-        struct.pack(">H", int(attr.attribute_name_index))
-        + struct.pack(">I", int(attr.attribute_length))
-        + bytes(attr.info)
-    )
-    scratch = object.__new__(reader_module.ClassReader)
-    BytesReader.__init__(scratch, payload)
-    scratch.constant_pool = constant_pool_items
-    scratch._rust_reader = None
-    return reader_module.ClassReader.read_attribute(scratch)
 
 
 def _convert_exception(entry: Any) -> attributes.ExceptionInfo:

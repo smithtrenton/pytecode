@@ -1,7 +1,7 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyModule, PyType};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyModule, PyType};
 use pytecode_engine::raw;
 use pytecode_engine::raw::ClassFile;
 use pytecode_engine::{parse_class, write_class};
@@ -22,6 +22,16 @@ macro_rules! wrap_pyclass {
     ($py:expr, $value:expr) => {
         Py::new($py, $value).map(|obj| obj.into_bound($py).into_any().unbind())
     };
+}
+
+macro_rules! call_attr_class {
+    ($py:expr, $class_name:expr $(, $arg:expr )* $(,)?) => {{
+        let module = PyModule::import($py, "pytecode.classfile.attributes")?;
+        module
+            .getattr($class_name)?
+            .call1(($($arg,)*))
+            .map(|obj| obj.unbind())
+    }};
 }
 
 fn python_enum(
@@ -77,6 +87,651 @@ fn wrap_array_type(py: Python<'_>, atype: raw::ArrayType) -> PyResult<Py<PyAny>>
         "pytecode.classfile.instructions",
         "ArrayType",
         i64::from(atype as u8),
+    )
+}
+
+fn wrap_nested_class_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::NestedClassAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "NestedClassAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_method_parameter_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::MethodParameterAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "MethodParameterAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_module_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::ModuleAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "ModuleAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_module_requires_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::ModuleRequiresAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "ModuleRequiresAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_module_exports_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::ModuleExportsAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "ModuleExportsAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_module_opens_access_flags(
+    py: Python<'_>,
+    flags: pytecode_engine::constants::ModuleOpensAccessFlag,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "ModuleOpensAccessFlag",
+        i64::from(flags.bits()),
+    )
+}
+
+fn wrap_verification_type(
+    py: Python<'_>,
+    tag: pytecode_engine::constants::VerificationType,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "VerificationType",
+        i64::from(tag as u8),
+    )
+}
+
+fn wrap_target_type(
+    py: Python<'_>,
+    target_type: pytecode_engine::constants::TargetType,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "TargetType",
+        i64::from(target_type as u8),
+    )
+}
+
+fn wrap_type_path_kind(
+    py: Python<'_>,
+    kind: pytecode_engine::constants::TypePathKind,
+) -> PyResult<Py<PyAny>> {
+    python_enum(
+        py,
+        "pytecode.classfile.constants",
+        "TypePathKind",
+        i64::from(kind as u8),
+    )
+}
+
+fn wrap_unimplemented_attr_type(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    Ok(PyModule::import(py, "pytecode.classfile.attributes")?
+        .getattr("AttributeInfoType")?
+        .getattr("UNIMPLEMENTED")?
+        .unbind())
+}
+
+fn wrap_verification_type_info(
+    py: Python<'_>,
+    info: &raw::VerificationTypeInfo,
+) -> PyResult<Py<PyAny>> {
+    match info {
+        raw::VerificationTypeInfo::Top => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Top)?;
+            call_attr_class!(py, "TopVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Integer => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Integer)?;
+            call_attr_class!(py, "IntegerVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Float => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Float)?;
+            call_attr_class!(py, "FloatVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Double => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Double)?;
+            call_attr_class!(py, "DoubleVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Long => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Long)?;
+            call_attr_class!(py, "LongVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Null => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Null)?;
+            call_attr_class!(py, "NullVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::UninitializedThis => {
+            let tag = wrap_verification_type(
+                py,
+                pytecode_engine::constants::VerificationType::UninitializedThis,
+            )?;
+            call_attr_class!(py, "UninitializedThisVariableInfo", tag)
+        }
+        raw::VerificationTypeInfo::Object { cpool_index } => {
+            let tag =
+                wrap_verification_type(py, pytecode_engine::constants::VerificationType::Object)?;
+            call_attr_class!(py, "ObjectVariableInfo", tag, *cpool_index)
+        }
+        raw::VerificationTypeInfo::Uninitialized { offset } => {
+            let tag = wrap_verification_type(
+                py,
+                pytecode_engine::constants::VerificationType::Uninitialized,
+            )?;
+            call_attr_class!(py, "UninitializedVariableInfo", tag, *offset)
+        }
+    }
+}
+
+fn wrap_stack_map_frame_info(
+    py: Python<'_>,
+    frame: &raw::StackMapFrameInfo,
+) -> PyResult<Py<PyAny>> {
+    match frame {
+        raw::StackMapFrameInfo::Same { frame_type } => {
+            call_attr_class!(py, "SameFrameInfo", *frame_type)
+        }
+        raw::StackMapFrameInfo::SameLocals1StackItem { frame_type, stack } => {
+            let stack = wrap_verification_type_info(py, stack)?;
+            call_attr_class!(py, "SameLocals1StackItemFrameInfo", *frame_type, stack)
+        }
+        raw::StackMapFrameInfo::SameLocals1StackItemExtended {
+            frame_type,
+            offset_delta,
+            stack,
+        } => {
+            let stack = wrap_verification_type_info(py, stack)?;
+            call_attr_class!(
+                py,
+                "SameLocals1StackItemFrameExtendedInfo",
+                *frame_type,
+                *offset_delta,
+                stack
+            )
+        }
+        raw::StackMapFrameInfo::Chop {
+            frame_type,
+            offset_delta,
+        } => call_attr_class!(py, "ChopFrameInfo", *frame_type, *offset_delta),
+        raw::StackMapFrameInfo::SameExtended {
+            frame_type,
+            offset_delta,
+        } => call_attr_class!(py, "SameFrameExtendedInfo", *frame_type, *offset_delta),
+        raw::StackMapFrameInfo::Append {
+            frame_type,
+            offset_delta,
+            locals,
+        } => {
+            let locals = locals
+                .iter()
+                .map(|value| wrap_verification_type_info(py, value))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(py, "AppendFrameInfo", *frame_type, *offset_delta, locals)
+        }
+        raw::StackMapFrameInfo::Full {
+            frame_type,
+            offset_delta,
+            locals,
+            stack,
+        } => {
+            let locals = locals
+                .iter()
+                .map(|value| wrap_verification_type_info(py, value))
+                .collect::<PyResult<Vec<_>>>()?;
+            let stack = stack
+                .iter()
+                .map(|value| wrap_verification_type_info(py, value))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "FullFrameInfo",
+                *frame_type,
+                *offset_delta,
+                locals.len(),
+                locals,
+                stack.len(),
+                stack
+            )
+        }
+    }
+}
+
+fn wrap_line_number_info(py: Python<'_>, info: &raw::LineNumberInfo) -> PyResult<Py<PyAny>> {
+    call_attr_class!(py, "LineNumberInfo", info.start_pc, info.line_number)
+}
+
+fn wrap_local_variable_info(py: Python<'_>, info: &raw::LocalVariableInfo) -> PyResult<Py<PyAny>> {
+    call_attr_class!(
+        py,
+        "LocalVariableInfo",
+        info.start_pc,
+        info.length,
+        info.name_index,
+        info.descriptor_index,
+        info.index
+    )
+}
+
+fn wrap_local_variable_type_info(
+    py: Python<'_>,
+    info: &raw::LocalVariableTypeInfo,
+) -> PyResult<Py<PyAny>> {
+    call_attr_class!(
+        py,
+        "LocalVariableTypeInfo",
+        info.start_pc,
+        info.length,
+        info.name_index,
+        info.signature_index,
+        info.index
+    )
+}
+
+fn wrap_inner_class_info(py: Python<'_>, info: &raw::InnerClassInfo) -> PyResult<Py<PyAny>> {
+    let access_flags = wrap_nested_class_access_flags(py, info.inner_class_access_flags)?;
+    call_attr_class!(
+        py,
+        "InnerClassInfo",
+        info.inner_class_info_index,
+        info.outer_class_info_index,
+        info.inner_name_index,
+        access_flags
+    )
+}
+
+fn wrap_const_value_info(py: Python<'_>, const_value_index: u16) -> PyResult<Py<PyAny>> {
+    call_attr_class!(py, "ConstValueInfo", const_value_index)
+}
+
+fn wrap_element_value_info(py: Python<'_>, value: &raw::ElementValueInfo) -> PyResult<Py<PyAny>> {
+    match value {
+        raw::ElementValueInfo::Const {
+            tag,
+            const_value_index,
+        } => {
+            let tag = (*tag as u8 as char).to_string();
+            let value = wrap_const_value_info(py, *const_value_index)?;
+            call_attr_class!(py, "ElementValueInfo", tag, value)
+        }
+        raw::ElementValueInfo::Enum {
+            type_name_index,
+            const_name_index,
+        } => {
+            let value = call_attr_class!(
+                py,
+                "EnumConstantValueInfo",
+                *type_name_index,
+                *const_name_index
+            )?;
+            call_attr_class!(py, "ElementValueInfo", "e", value)
+        }
+        raw::ElementValueInfo::Class { class_info_index } => {
+            let value = call_attr_class!(py, "ClassInfoValueInfo", *class_info_index)?;
+            call_attr_class!(py, "ElementValueInfo", "c", value)
+        }
+        raw::ElementValueInfo::Annotation(annotation) => {
+            let value = wrap_annotation_info(py, annotation)?;
+            call_attr_class!(py, "ElementValueInfo", "@", value)
+        }
+        raw::ElementValueInfo::Array { values } => {
+            let values = values
+                .iter()
+                .map(|value| wrap_element_value_info(py, value))
+                .collect::<PyResult<Vec<_>>>()?;
+            let value = call_attr_class!(py, "ArrayValueInfo", values.len(), values)?;
+            call_attr_class!(py, "ElementValueInfo", "[", value)
+        }
+    }
+}
+
+fn wrap_element_value_pair_info(
+    py: Python<'_>,
+    pair: &raw::ElementValuePairInfo,
+) -> PyResult<Py<PyAny>> {
+    let element_value = wrap_element_value_info(py, &pair.element_value)?;
+    call_attr_class!(
+        py,
+        "ElementValuePairInfo",
+        pair.element_name_index,
+        element_value
+    )
+}
+
+fn wrap_annotation_info(py: Python<'_>, info: &raw::AnnotationInfo) -> PyResult<Py<PyAny>> {
+    let pairs = info
+        .element_value_pairs
+        .iter()
+        .map(|pair| wrap_element_value_pair_info(py, pair))
+        .collect::<PyResult<Vec<_>>>()?;
+    call_attr_class!(py, "AnnotationInfo", info.type_index, pairs.len(), pairs)
+}
+
+fn wrap_parameter_annotation_info(
+    py: Python<'_>,
+    info: &raw::ParameterAnnotationInfo,
+) -> PyResult<Py<PyAny>> {
+    let annotations = info
+        .annotations
+        .iter()
+        .map(|annotation| wrap_annotation_info(py, annotation))
+        .collect::<PyResult<Vec<_>>>()?;
+    call_attr_class!(
+        py,
+        "ParameterAnnotationInfo",
+        annotations.len(),
+        annotations
+    )
+}
+
+fn wrap_table_info(py: Python<'_>, info: &raw::TableInfo) -> PyResult<Py<PyAny>> {
+    call_attr_class!(py, "TableInfo", info.start_pc, info.length, info.index)
+}
+
+fn wrap_target_info(py: Python<'_>, info: &raw::TargetInfo) -> PyResult<Py<PyAny>> {
+    match info {
+        raw::TargetInfo::TypeParameter {
+            type_parameter_index,
+        } => call_attr_class!(py, "TypeParameterTargetInfo", *type_parameter_index),
+        raw::TargetInfo::Supertype { supertype_index } => {
+            call_attr_class!(py, "SupertypeTargetInfo", *supertype_index)
+        }
+        raw::TargetInfo::TypeParameterBound {
+            type_parameter_index,
+            bound_index,
+        } => call_attr_class!(
+            py,
+            "TypeParameterBoundTargetInfo",
+            *type_parameter_index,
+            *bound_index
+        ),
+        raw::TargetInfo::Empty => call_attr_class!(py, "EmptyTargetInfo"),
+        raw::TargetInfo::FormalParameter {
+            formal_parameter_index,
+        } => call_attr_class!(py, "FormalParameterTargetInfo", *formal_parameter_index),
+        raw::TargetInfo::Throws { throws_type_index } => {
+            call_attr_class!(py, "ThrowsTargetInfo", *throws_type_index)
+        }
+        raw::TargetInfo::Localvar { table } => {
+            let table = table
+                .iter()
+                .map(|entry| wrap_table_info(py, entry))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(py, "LocalvarTargetInfo", table.len(), table)
+        }
+        raw::TargetInfo::Catch {
+            exception_table_index,
+        } => call_attr_class!(py, "CatchTargetInfo", *exception_table_index),
+        raw::TargetInfo::Offset { offset } => call_attr_class!(py, "OffsetTargetInfo", *offset),
+        raw::TargetInfo::TypeArgument {
+            offset,
+            type_argument_index,
+        } => call_attr_class!(py, "TypeArgumentTargetInfo", *offset, *type_argument_index),
+    }
+}
+
+fn wrap_path_info(py: Python<'_>, info: &raw::PathInfo) -> PyResult<Py<PyAny>> {
+    let type_path_kind = wrap_type_path_kind(py, info.type_path_kind)?;
+    call_attr_class!(py, "PathInfo", type_path_kind, info.type_argument_index)
+}
+
+fn wrap_type_path_info(py: Python<'_>, info: &raw::TypePathInfo) -> PyResult<Py<PyAny>> {
+    let path = info
+        .path
+        .iter()
+        .map(|entry| wrap_path_info(py, entry))
+        .collect::<PyResult<Vec<_>>>()?;
+    call_attr_class!(py, "TypePathInfo", path.len(), path)
+}
+
+fn wrap_type_annotation_info(
+    py: Python<'_>,
+    info: &raw::TypeAnnotationInfo,
+) -> PyResult<Py<PyAny>> {
+    let target_type = wrap_target_type(py, info.target_type)?;
+    let target_info = wrap_target_info(py, &info.target_info)?;
+    let target_path = wrap_type_path_info(py, &info.target_path)?;
+    let element_value_pairs = info
+        .element_value_pairs
+        .iter()
+        .map(|pair| wrap_element_value_pair_info(py, pair))
+        .collect::<PyResult<Vec<_>>>()?;
+    call_attr_class!(
+        py,
+        "TypeAnnotationInfo",
+        target_type,
+        target_info,
+        target_path,
+        info.type_index,
+        element_value_pairs.len(),
+        element_value_pairs
+    )
+}
+
+fn wrap_bootstrap_method_info(
+    py: Python<'_>,
+    info: &raw::BootstrapMethodInfo,
+) -> PyResult<Py<PyAny>> {
+    call_attr_class!(
+        py,
+        "BootstrapMethodInfo",
+        info.bootstrap_method_ref,
+        info.bootstrap_arguments.len(),
+        info.bootstrap_arguments.clone()
+    )
+}
+
+fn wrap_method_parameter_info(
+    py: Python<'_>,
+    info: &raw::MethodParameterInfo,
+) -> PyResult<Py<PyAny>> {
+    let access_flags = wrap_method_parameter_access_flags(py, info.access_flags)?;
+    call_attr_class!(py, "MethodParameterInfo", info.name_index, access_flags)
+}
+
+fn wrap_requires_info(py: Python<'_>, info: &raw::RequiresInfo) -> PyResult<Py<PyAny>> {
+    let requires_flag = wrap_module_requires_access_flags(py, info.requires_flags)?;
+    call_attr_class!(
+        py,
+        "RequiresInfo",
+        info.requires_index,
+        requires_flag,
+        info.requires_version_index
+    )
+}
+
+fn wrap_export_info(py: Python<'_>, info: &raw::ExportInfo) -> PyResult<Py<PyAny>> {
+    let exports_flags = wrap_module_exports_access_flags(py, info.exports_flags)?;
+    call_attr_class!(
+        py,
+        "ExportInfo",
+        info.exports_index,
+        exports_flags,
+        info.exports_to_index.len(),
+        info.exports_to_index.clone()
+    )
+}
+
+fn wrap_opens_info(py: Python<'_>, info: &raw::OpensInfo) -> PyResult<Py<PyAny>> {
+    let opens_flags = wrap_module_opens_access_flags(py, info.opens_flags)?;
+    call_attr_class!(
+        py,
+        "OpensInfo",
+        info.opens_index,
+        opens_flags,
+        info.opens_to_index.len(),
+        info.opens_to_index.clone()
+    )
+}
+
+fn wrap_provides_info(py: Python<'_>, info: &raw::ProvidesInfo) -> PyResult<Py<PyAny>> {
+    call_attr_class!(
+        py,
+        "ProvidesInfo",
+        info.provides_index,
+        info.provides_with_index.len(),
+        info.provides_with_index.clone()
+    )
+}
+
+fn wrap_unimplemented_attr(py: Python<'_>, info: &raw::UnknownAttribute) -> PyResult<Py<PyAny>> {
+    let attr_type = wrap_unimplemented_attr_type(py)?;
+    let info_bytes = PyBytes::new(py, &info.info).unbind();
+    call_attr_class!(
+        py,
+        "UnimplementedAttr",
+        info.attribute_name_index,
+        info.attribute_length,
+        info_bytes,
+        attr_type
+    )
+}
+
+fn wrap_record_component_attribute(
+    py: Python<'_>,
+    attribute: &raw::AttributeInfo,
+) -> PyResult<Py<PyAny>> {
+    match attribute {
+        raw::AttributeInfo::Synthetic(inner) => call_attr_class!(
+            py,
+            "SyntheticAttr",
+            inner.attribute_name_index,
+            inner.attribute_length
+        ),
+        raw::AttributeInfo::Signature(inner) => call_attr_class!(
+            py,
+            "SignatureAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.signature_index
+        ),
+        raw::AttributeInfo::Deprecated(inner) => call_attr_class!(
+            py,
+            "DeprecatedAttr",
+            inner.attribute_name_index,
+            inner.attribute_length
+        ),
+        raw::AttributeInfo::RuntimeVisibleAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeVisibleAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeInvisibleAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeInvisibleAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeVisibleTypeAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_type_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeVisibleTypeAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeInvisibleTypeAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_type_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeInvisibleTypeAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::Unknown(inner) => wrap_unimplemented_attr(py, inner),
+        _ => Err(PyOSError::new_err(format!(
+            "Unsupported nested record attribute for Rust bridge: {attribute:?}"
+        ))),
+    }
+}
+
+fn wrap_record_component_info(
+    py: Python<'_>,
+    info: &raw::RecordComponentInfo,
+) -> PyResult<Py<PyAny>> {
+    let attributes = info
+        .attributes
+        .iter()
+        .map(|attribute| wrap_record_component_attribute(py, attribute))
+        .collect::<PyResult<Vec<_>>>()?;
+    call_attr_class!(
+        py,
+        "RecordComponentInfo",
+        info.name_index,
+        info.descriptor_index,
+        attributes.len(),
+        attributes
     )
 }
 
@@ -883,17 +1538,342 @@ fn wrap_attribute(py: Python<'_>, attribute: &raw::AttributeInfo) -> PyResult<Py
                 inner: inner.clone(),
             }
         ),
+        raw::AttributeInfo::Code(inner) => wrap_pyclass!(
+            py,
+            PyCodeAttr {
+                inner: inner.clone(),
+            }
+        ),
+        raw::AttributeInfo::StackMapTable(inner) => {
+            let entries = inner
+                .entries
+                .iter()
+                .map(|entry| wrap_stack_map_frame_info(py, entry))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "StackMapTableAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                entries.len(),
+                entries
+            )
+        }
         raw::AttributeInfo::Exceptions(inner) => wrap_pyclass!(
             py,
             PyExceptionsAttr {
                 inner: inner.clone(),
             }
         ),
-        raw::AttributeInfo::Code(inner) => wrap_pyclass!(
+        raw::AttributeInfo::InnerClasses(inner) => {
+            let classes = inner
+                .classes
+                .iter()
+                .map(|class_info| wrap_inner_class_info(py, class_info))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "InnerClassesAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                classes.len(),
+                classes
+            )
+        }
+        raw::AttributeInfo::EnclosingMethod(inner) => call_attr_class!(
             py,
-            PyCodeAttr {
-                inner: inner.clone(),
-            }
+            "EnclosingMethodAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.class_index,
+            inner.method_index
+        ),
+        raw::AttributeInfo::Synthetic(inner) => call_attr_class!(
+            py,
+            "SyntheticAttr",
+            inner.attribute_name_index,
+            inner.attribute_length
+        ),
+        raw::AttributeInfo::Deprecated(inner) => call_attr_class!(
+            py,
+            "DeprecatedAttr",
+            inner.attribute_name_index,
+            inner.attribute_length
+        ),
+        raw::AttributeInfo::LineNumberTable(inner) => {
+            let entries = inner
+                .line_number_table
+                .iter()
+                .map(|entry| wrap_line_number_info(py, entry))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "LineNumberTableAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                entries.len(),
+                entries
+            )
+        }
+        raw::AttributeInfo::LocalVariableTable(inner) => {
+            let entries = inner
+                .local_variable_table
+                .iter()
+                .map(|entry| wrap_local_variable_info(py, entry))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "LocalVariableTableAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                entries.len(),
+                entries
+            )
+        }
+        raw::AttributeInfo::LocalVariableTypeTable(inner) => {
+            let entries = inner
+                .local_variable_type_table
+                .iter()
+                .map(|entry| wrap_local_variable_type_info(py, entry))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "LocalVariableTypeTableAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                entries.len(),
+                entries
+            )
+        }
+        raw::AttributeInfo::RuntimeVisibleAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeVisibleAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeInvisibleAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeInvisibleAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeVisibleParameterAnnotations(inner) => {
+            let annotations = inner
+                .parameter_annotations
+                .iter()
+                .map(|annotation| wrap_parameter_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeVisibleParameterAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeInvisibleParameterAnnotations(inner) => {
+            let annotations = inner
+                .parameter_annotations
+                .iter()
+                .map(|annotation| wrap_parameter_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeInvisibleParameterAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeVisibleTypeAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_type_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeVisibleTypeAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::RuntimeInvisibleTypeAnnotations(inner) => {
+            let annotations = inner
+                .annotations
+                .iter()
+                .map(|annotation| wrap_type_annotation_info(py, annotation))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RuntimeInvisibleTypeAnnotationsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                annotations.len(),
+                annotations
+            )
+        }
+        raw::AttributeInfo::AnnotationDefault(inner) => {
+            let default_value = wrap_element_value_info(py, &inner.default_value)?;
+            call_attr_class!(
+                py,
+                "AnnotationDefaultAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                default_value
+            )
+        }
+        raw::AttributeInfo::BootstrapMethods(inner) => {
+            let methods = inner
+                .bootstrap_methods
+                .iter()
+                .map(|method| wrap_bootstrap_method_info(py, method))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "BootstrapMethodsAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                methods.len(),
+                methods
+            )
+        }
+        raw::AttributeInfo::MethodParameters(inner) => {
+            let parameters = inner
+                .parameters
+                .iter()
+                .map(|parameter| wrap_method_parameter_info(py, parameter))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "MethodParametersAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                parameters.len(),
+                parameters
+            )
+        }
+        raw::AttributeInfo::Module(inner) => {
+            let module_flags = wrap_module_access_flags(py, inner.module.module_flags)?;
+            let requires = inner
+                .module
+                .requires
+                .iter()
+                .map(|info| wrap_requires_info(py, info))
+                .collect::<PyResult<Vec<_>>>()?;
+            let exports = inner
+                .module
+                .exports
+                .iter()
+                .map(|info| wrap_export_info(py, info))
+                .collect::<PyResult<Vec<_>>>()?;
+            let opens = inner
+                .module
+                .opens
+                .iter()
+                .map(|info| wrap_opens_info(py, info))
+                .collect::<PyResult<Vec<_>>>()?;
+            let provides = inner
+                .module
+                .provides
+                .iter()
+                .map(|info| wrap_provides_info(py, info))
+                .collect::<PyResult<Vec<_>>>()?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("attribute_name_index", inner.attribute_name_index)?;
+            kwargs.set_item("attribute_length", inner.attribute_length)?;
+            kwargs.set_item("module_name_index", inner.module.module_name_index)?;
+            kwargs.set_item("module_flags", module_flags)?;
+            kwargs.set_item("module_version_index", inner.module.module_version_index)?;
+            kwargs.set_item("requires_count", requires.len())?;
+            kwargs.set_item("requires", requires)?;
+            kwargs.set_item("exports_count", exports.len())?;
+            kwargs.set_item("exports", exports)?;
+            kwargs.set_item("opens_count", opens.len())?;
+            kwargs.set_item("opens", opens)?;
+            kwargs.set_item("uses_count", inner.module.uses_index.len())?;
+            kwargs.set_item("uses_index", inner.module.uses_index.clone())?;
+            kwargs.set_item("provides_count", provides.len())?;
+            kwargs.set_item("provides", provides)?;
+            PyModule::import(py, "pytecode.classfile.attributes")?
+                .getattr("ModuleAttr")?
+                .call((), Some(&kwargs))
+                .map(|obj| obj.unbind())
+        }
+        raw::AttributeInfo::ModulePackages(inner) => call_attr_class!(
+            py,
+            "ModulePackagesAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.package_index.len(),
+            inner.package_index.clone()
+        ),
+        raw::AttributeInfo::ModuleMainClass(inner) => call_attr_class!(
+            py,
+            "ModuleMainClassAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.main_class_index
+        ),
+        raw::AttributeInfo::NestHost(inner) => call_attr_class!(
+            py,
+            "NestHostAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.host_class_index
+        ),
+        raw::AttributeInfo::NestMembers(inner) => call_attr_class!(
+            py,
+            "NestMembersAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.classes.len(),
+            inner.classes.clone()
+        ),
+        raw::AttributeInfo::Record(inner) => {
+            let components = inner
+                .components
+                .iter()
+                .map(|component| wrap_record_component_info(py, component))
+                .collect::<PyResult<Vec<_>>>()?;
+            call_attr_class!(
+                py,
+                "RecordAttr",
+                inner.attribute_name_index,
+                inner.attribute_length,
+                components.len(),
+                components
+            )
+        }
+        raw::AttributeInfo::PermittedSubclasses(inner) => call_attr_class!(
+            py,
+            "PermittedSubclassesAttr",
+            inner.attribute_name_index,
+            inner.attribute_length,
+            inner.classes.len(),
+            inner.classes.clone()
         ),
         raw::AttributeInfo::Unknown(inner) => wrap_pyclass!(
             py,

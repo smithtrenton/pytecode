@@ -21,7 +21,7 @@ use crate::raw::{
     AttributeInfo, Branch, ClassFile, CodeAttribute, ConstantPoolEntry, FieldInfo, Instruction,
     InvokeDynamicInsn as RawInvokeDynamicInsn, InvokeInterfaceInsn as RawInvokeInterfaceInsn,
     LookupSwitchInsn as RawLookupSwitchInsn, MatchOffsetPair, MethodInfo, RawClassStub,
-    TableSwitchInsn as RawTableSwitchInsn, UnknownAttribute, WideInstruction,
+    TableSwitchInsn as RawTableSwitchInsn, WideInstruction,
 };
 use crate::{EngineError, EngineErrorKind, Result, parse_class, write_class};
 use std::collections::{BTreeMap, HashMap};
@@ -1232,11 +1232,7 @@ fn lower_nested_attributes(
         .iter()
         .filter(|attribute| {
             !(frame_mode == FrameComputationMode::Recompute
-                && matches!(
-                    attribute,
-                    AttributeInfo::Unknown(unknown)
-                        if matches!(unknown.name.as_str(), "StackMapTable" | "StackMap")
-                ))
+                && stack_map_attr_name(attribute).is_some())
         })
         .cloned();
     let mut attributes = Vec::new();
@@ -1298,16 +1294,7 @@ fn lower_stack_map_table(
     cp: &mut ConstantPoolBuilder,
     item_offsets: &HashMap<usize, u32>,
 ) -> Result<AttributeInfo> {
-    if frames.frames.is_empty() {
-        return Ok(AttributeInfo::Unknown(UnknownAttribute {
-            attribute_name_index: cp.add_utf8("StackMapTable")?,
-            attribute_length: 2,
-            name: "StackMapTable".to_owned(),
-            info: vec![0, 0],
-        }));
-    }
-    let mut info = Vec::new();
-    write_u2(&mut info, frames.frames.len() as u16);
+    let mut entries = Vec::with_capacity(frames.frames.len());
     let mut previous_offset = 0_u32;
     for (frame_index, frame) in frames.frames.iter().enumerate() {
         let offset = *item_offsets
@@ -1321,52 +1308,57 @@ fn lower_stack_map_table(
                 .ok_or_else(|| model_error("stack-map frame offsets are not monotonic"))?
         };
         previous_offset = offset;
-        write_u1(&mut info, 255);
-        write_u2(&mut info, offset_delta as u16);
-        write_u2(&mut info, frame.locals.len() as u16);
-        for value in &frame.locals {
-            write_verification_type(&mut info, value, cp, item_offsets)?;
-        }
-        write_u2(&mut info, frame.stack.len() as u16);
-        for value in &frame.stack {
-            write_verification_type(&mut info, value, cp, item_offsets)?;
-        }
+        let locals = frame
+            .locals
+            .iter()
+            .map(|value| raw_verification_type(value, cp, item_offsets))
+            .collect::<Result<Vec<_>>>()?;
+        let stack = frame
+            .stack
+            .iter()
+            .map(|value| raw_verification_type(value, cp, item_offsets))
+            .collect::<Result<Vec<_>>>()?;
+        entries.push(crate::raw::StackMapFrameInfo::Full {
+            frame_type: 255,
+            offset_delta: offset_delta as u16,
+            locals,
+            stack,
+        });
     }
-    Ok(AttributeInfo::Unknown(UnknownAttribute {
-        attribute_name_index: cp.add_utf8("StackMapTable")?,
-        attribute_length: info.len() as u32,
-        name: "StackMapTable".to_owned(),
-        info,
-    }))
+    Ok(AttributeInfo::StackMapTable(
+        crate::raw::StackMapTableAttribute {
+            attribute_name_index: cp.add_utf8("StackMapTable")?,
+            attribute_length: 2,
+            entries,
+        },
+    ))
 }
 
-fn write_verification_type(
-    out: &mut Vec<u8>,
+fn raw_verification_type(
     value: &VType,
     cp: &mut ConstantPoolBuilder,
     item_offsets: &HashMap<usize, u32>,
-) -> Result<()> {
+) -> Result<crate::raw::VerificationTypeInfo> {
     match value {
-        VType::Top => write_u1(out, 0),
-        VType::Integer => write_u1(out, 1),
-        VType::Float => write_u1(out, 2),
-        VType::Double => write_u1(out, 3),
-        VType::Long => write_u1(out, 4),
-        VType::Null => write_u1(out, 5),
-        VType::UninitializedThis => write_u1(out, 6),
-        VType::Object(class_name) => {
-            write_u1(out, 7);
-            write_u2(out, cp.add_class(class_name)?);
-        }
+        VType::Top => Ok(crate::raw::VerificationTypeInfo::Top),
+        VType::Integer => Ok(crate::raw::VerificationTypeInfo::Integer),
+        VType::Float => Ok(crate::raw::VerificationTypeInfo::Float),
+        VType::Double => Ok(crate::raw::VerificationTypeInfo::Double),
+        VType::Long => Ok(crate::raw::VerificationTypeInfo::Long),
+        VType::Null => Ok(crate::raw::VerificationTypeInfo::Null),
+        VType::UninitializedThis => Ok(crate::raw::VerificationTypeInfo::UninitializedThis),
+        VType::Object(class_name) => Ok(crate::raw::VerificationTypeInfo::Object {
+            cpool_index: cp.add_class(class_name)?,
+        }),
         VType::Uninitialized { code_index, .. } => {
-            write_u1(out, 8);
             let offset = *item_offsets
                 .get(code_index)
                 .ok_or_else(|| model_error("missing offset for uninitialized new instruction"))?;
-            write_u2(out, offset as u16);
+            Ok(crate::raw::VerificationTypeInfo::Uninitialized {
+                offset: offset as u16,
+            })
         }
     }
-    Ok(())
 }
 
 fn lower_line_number_table(
@@ -1374,23 +1366,25 @@ fn lower_line_number_table(
     cp: &mut ConstantPoolBuilder,
     label_offsets: &HashMap<Label, u32>,
 ) -> Result<AttributeInfo> {
-    let mut info = Vec::new();
-    write_u2(&mut info, entries.len() as u16);
-    for entry in entries {
-        write_u2(
-            &mut info,
-            *label_offsets
-                .get(&entry.label)
-                .ok_or_else(|| model_error("line number label missing"))? as u16,
-        );
-        write_u2(&mut info, entry.line_number);
-    }
-    Ok(AttributeInfo::Unknown(UnknownAttribute {
-        attribute_name_index: cp.add_utf8("LineNumberTable")?,
-        attribute_length: info.len() as u32,
-        name: "LineNumberTable".to_owned(),
-        info,
-    }))
+    let line_number_table = entries
+        .iter()
+        .map(|entry| {
+            Ok(crate::raw::LineNumberInfo {
+                start_pc: *label_offsets
+                    .get(&entry.label)
+                    .ok_or_else(|| model_error("line number label missing"))?
+                    as u16,
+                line_number: entry.line_number,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AttributeInfo::LineNumberTable(
+        crate::raw::LineNumberTableAttribute {
+            attribute_name_index: cp.add_utf8("LineNumberTable")?,
+            attribute_length: 2,
+            line_number_table,
+        },
+    ))
 }
 
 fn lower_local_variable_table(
@@ -1399,35 +1393,35 @@ fn lower_local_variable_table(
     label_offsets: &HashMap<Label, u32>,
     type_table: bool,
 ) -> Result<AttributeInfo> {
-    let name = if type_table {
-        "LocalVariableTypeTable"
-    } else {
-        "LocalVariableTable"
-    };
-    let mut info = Vec::new();
-    write_u2(&mut info, entries.len() as u16);
-    for entry in entries {
-        let start_pc = *label_offsets
-            .get(&entry.start)
-            .ok_or_else(|| model_error("local variable start label missing"))?;
-        let end_pc = *label_offsets
-            .get(&entry.end)
-            .ok_or_else(|| model_error("local variable end label missing"))?;
-        if end_pc < start_pc {
-            return Err(model_error("local variable end precedes start"));
-        }
-        write_u2(&mut info, start_pc as u16);
-        write_u2(&mut info, (end_pc - start_pc) as u16);
-        write_u2(&mut info, cp.add_utf8(&entry.name)?);
-        write_u2(&mut info, cp.add_utf8(&entry.descriptor)?);
-        write_u2(&mut info, entry.index);
-    }
-    Ok(AttributeInfo::Unknown(UnknownAttribute {
-        attribute_name_index: cp.add_utf8(name)?,
-        attribute_length: info.len() as u32,
-        name: name.to_owned(),
-        info,
-    }))
+    debug_assert!(!type_table);
+    let local_variable_table = entries
+        .iter()
+        .map(|entry| {
+            let start_pc = *label_offsets
+                .get(&entry.start)
+                .ok_or_else(|| model_error("local variable start label missing"))?;
+            let end_pc = *label_offsets
+                .get(&entry.end)
+                .ok_or_else(|| model_error("local variable end label missing"))?;
+            if end_pc < start_pc {
+                return Err(model_error("local variable end precedes start"));
+            }
+            Ok(crate::raw::LocalVariableInfo {
+                start_pc: start_pc as u16,
+                length: (end_pc - start_pc) as u16,
+                name_index: cp.add_utf8(&entry.name)?,
+                descriptor_index: cp.add_utf8(&entry.descriptor)?,
+                index: entry.index,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AttributeInfo::LocalVariableTable(
+        crate::raw::LocalVariableTableAttribute {
+            attribute_name_index: cp.add_utf8("LocalVariableTable")?,
+            attribute_length: 2,
+            local_variable_table,
+        },
+    ))
 }
 
 fn lower_local_variable_type_table(
@@ -1435,30 +1429,34 @@ fn lower_local_variable_type_table(
     cp: &mut ConstantPoolBuilder,
     label_offsets: &HashMap<Label, u32>,
 ) -> Result<AttributeInfo> {
-    let mut info = Vec::new();
-    write_u2(&mut info, entries.len() as u16);
-    for entry in entries {
-        let start_pc = *label_offsets
-            .get(&entry.start)
-            .ok_or_else(|| model_error("local variable type start label missing"))?;
-        let end_pc = *label_offsets
-            .get(&entry.end)
-            .ok_or_else(|| model_error("local variable type end label missing"))?;
-        if end_pc < start_pc {
-            return Err(model_error("local variable type end precedes start"));
-        }
-        write_u2(&mut info, start_pc as u16);
-        write_u2(&mut info, (end_pc - start_pc) as u16);
-        write_u2(&mut info, cp.add_utf8(&entry.name)?);
-        write_u2(&mut info, cp.add_utf8(&entry.signature)?);
-        write_u2(&mut info, entry.index);
-    }
-    Ok(AttributeInfo::Unknown(UnknownAttribute {
-        attribute_name_index: cp.add_utf8("LocalVariableTypeTable")?,
-        attribute_length: info.len() as u32,
-        name: "LocalVariableTypeTable".to_owned(),
-        info,
-    }))
+    let local_variable_type_table = entries
+        .iter()
+        .map(|entry| {
+            let start_pc = *label_offsets
+                .get(&entry.start)
+                .ok_or_else(|| model_error("local variable type start label missing"))?;
+            let end_pc = *label_offsets
+                .get(&entry.end)
+                .ok_or_else(|| model_error("local variable type end label missing"))?;
+            if end_pc < start_pc {
+                return Err(model_error("local variable type end precedes start"));
+            }
+            Ok(crate::raw::LocalVariableTypeInfo {
+                start_pc: start_pc as u16,
+                length: (end_pc - start_pc) as u16,
+                name_index: cp.add_utf8(&entry.name)?,
+                signature_index: cp.add_utf8(&entry.signature)?,
+                index: entry.index,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AttributeInfo::LocalVariableTypeTable(
+        crate::raw::LocalVariableTypeTableAttribute {
+            attribute_name_index: cp.add_utf8("LocalVariableTypeTable")?,
+            attribute_length: 2,
+            local_variable_type_table,
+        },
+    ))
 }
 
 fn class_attributes_for_policy(
@@ -1493,21 +1491,81 @@ fn parse_debug_attribute(
     cp: &ConstantPoolBuilder,
     labels_by_offset: &mut BTreeMap<u32, Label>,
 ) -> Result<ParsedDebugAttribute> {
-    let AttributeInfo::Unknown(unknown) = attribute else {
-        return Ok(ParsedDebugAttribute::Other(attribute.clone()));
-    };
-    match unknown.name.as_str() {
-        "LineNumberTable" => Ok(ParsedDebugAttribute::LineNumbers(parse_line_number_table(
-            &unknown.info,
-            labels_by_offset,
-        )?)),
-        "LocalVariableTable" => Ok(ParsedDebugAttribute::LocalVariables(
-            parse_local_variable_table(&unknown.info, cp, labels_by_offset, false)?,
+    match attribute {
+        AttributeInfo::LineNumberTable(attribute) => Ok(ParsedDebugAttribute::LineNumbers(
+            attribute
+                .line_number_table
+                .iter()
+                .map(|entry| LineNumberEntry {
+                    label: label_for_offset(labels_by_offset, entry.start_pc as u32),
+                    line_number: entry.line_number,
+                })
+                .collect(),
         )),
-        "LocalVariableTypeTable" => Ok(ParsedDebugAttribute::LocalVariableTypes(
-            parse_local_variable_type_table(&unknown.info, cp, labels_by_offset)?,
+        AttributeInfo::LocalVariableTable(attribute) => Ok(ParsedDebugAttribute::LocalVariables(
+            attribute
+                .local_variable_table
+                .iter()
+                .map(|entry| {
+                    Ok(LocalVariableEntry {
+                        start: label_for_offset(labels_by_offset, entry.start_pc as u32),
+                        end: label_for_offset(
+                            labels_by_offset,
+                            entry.start_pc as u32 + entry.length as u32,
+                        ),
+                        name: cp.resolve_utf8(entry.name_index)?,
+                        descriptor: cp.resolve_utf8(entry.descriptor_index)?,
+                        index: entry.index,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
         )),
+        AttributeInfo::LocalVariableTypeTable(attribute) => {
+            Ok(ParsedDebugAttribute::LocalVariableTypes(
+                attribute
+                    .local_variable_type_table
+                    .iter()
+                    .map(|entry| {
+                        Ok(LocalVariableTypeEntry {
+                            start: label_for_offset(labels_by_offset, entry.start_pc as u32),
+                            end: label_for_offset(
+                                labels_by_offset,
+                                entry.start_pc as u32 + entry.length as u32,
+                            ),
+                            name: cp.resolve_utf8(entry.name_index)?,
+                            signature: cp.resolve_utf8(entry.signature_index)?,
+                            index: entry.index,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ))
+        }
+        AttributeInfo::Unknown(unknown) => match unknown.name.as_str() {
+            "LineNumberTable" => Ok(ParsedDebugAttribute::LineNumbers(parse_line_number_table(
+                &unknown.info,
+                labels_by_offset,
+            )?)),
+            "LocalVariableTable" => Ok(ParsedDebugAttribute::LocalVariables(
+                parse_local_variable_table(&unknown.info, cp, labels_by_offset, false)?,
+            )),
+            "LocalVariableTypeTable" => Ok(ParsedDebugAttribute::LocalVariableTypes(
+                parse_local_variable_type_table(&unknown.info, cp, labels_by_offset)?,
+            )),
+            _ => Ok(ParsedDebugAttribute::Other(attribute.clone())),
+        },
         _ => Ok(ParsedDebugAttribute::Other(attribute.clone())),
+    }
+}
+
+fn stack_map_attr_name(attribute: &AttributeInfo) -> Option<&str> {
+    match attribute {
+        AttributeInfo::StackMapTable(_) => Some("StackMapTable"),
+        AttributeInfo::Unknown(unknown)
+            if matches!(unknown.name.as_str(), "StackMapTable" | "StackMap") =>
+        {
+            Some(unknown.name.as_str())
+        }
+        _ => None,
     }
 }
 
@@ -1605,14 +1663,6 @@ fn ensure_consumed(info: &[u8], cursor: usize, name: &str) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn write_u2(out: &mut Vec<u8>, value: u16) {
-    out.extend_from_slice(&value.to_be_bytes());
-}
-
-fn write_u1(out: &mut Vec<u8>, value: u8) {
-    out.push(value);
 }
 
 fn register_instruction_labels(
@@ -1746,14 +1796,7 @@ fn code_shape_edited(code: &CodeModel) -> bool {
 }
 
 fn first_frame_sensitive_attr_name(attributes: &[AttributeInfo]) -> Option<&str> {
-    attributes.iter().find_map(|attribute| match attribute {
-        AttributeInfo::Unknown(unknown)
-            if matches!(unknown.name.as_str(), "StackMapTable" | "StackMap") =>
-        {
-            Some(unknown.name.as_str())
-        }
-        _ => None,
-    })
+    attributes.iter().find_map(stack_map_attr_name)
 }
 
 fn instruction_length(instruction: &Instruction) -> u32 {

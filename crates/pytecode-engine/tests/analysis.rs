@@ -66,9 +66,13 @@ fn code_mut(method: &mut pytecode_engine::model::MethodModel) -> &mut CodeModel 
 }
 
 fn has_code_attr_named(code: &pytecode_engine::raw::CodeAttribute, name: &str) -> bool {
-    code.attributes.iter().any(
-        |attribute| matches!(attribute, AttributeInfo::Unknown(unknown) if unknown.name == name),
-    )
+    code.attributes
+        .iter()
+        .any(|attribute| match (attribute, name) {
+            (AttributeInfo::StackMapTable(_), "StackMapTable") => true,
+            (AttributeInfo::Unknown(unknown), name) => unknown.name == name,
+            _ => false,
+        })
 }
 
 fn cp_utf8(classfile: &pytecode_engine::raw::ClassFile, index: u16) -> String {

@@ -75,15 +75,27 @@ fn has_code_attr_named(class_bytes: &[u8], method_name: &str, attr_name: &str) -
         .iter()
         .find(|method| cp_utf8(&classfile, method.name_index) == method_name)
         .and_then(|method| {
-            method.attributes.iter().find_map(|attribute| match attribute {
-                AttributeInfo::Code(code) => Some(code),
-                _ => None,
-            })
+            method
+                .attributes
+                .iter()
+                .find_map(|attribute| match attribute {
+                    AttributeInfo::Code(code) => Some(code),
+                    _ => None,
+                })
         })
         .map(|code| {
-            code.attributes.iter().any(
-                |attribute| matches!(attribute, AttributeInfo::Unknown(unknown) if unknown.name == attr_name),
-            )
+            code.attributes
+                .iter()
+                .any(|attribute| match (attribute, attr_name) {
+                    (AttributeInfo::StackMapTable(_), "StackMapTable") => true,
+                    (AttributeInfo::LineNumberTable(_), "LineNumberTable") => true,
+                    (AttributeInfo::LocalVariableTable(_), "LocalVariableTable") => true,
+                    (AttributeInfo::LocalVariableTypeTable(_), "LocalVariableTypeTable") => true,
+                    (AttributeInfo::Synthetic(_), "Synthetic") => true,
+                    (AttributeInfo::Deprecated(_), "Deprecated") => true,
+                    (AttributeInfo::Unknown(unknown), _) if unknown.name == attr_name => true,
+                    _ => false,
+                })
         })
         .unwrap_or(false)
 }

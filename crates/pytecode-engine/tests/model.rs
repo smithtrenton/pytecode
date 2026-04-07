@@ -51,15 +51,14 @@ fn code_mut(method: &mut MethodModel) -> &mut CodeModel {
 }
 
 fn strip_code_attr_named(code: &mut CodeModel, name: &str) {
-    code.attributes.retain(
-        |attribute| !matches!(attribute, AttributeInfo::Unknown(unknown) if unknown.name == name),
-    );
+    code.attributes
+        .retain(|attribute| !attribute_named(attribute, name));
 }
 
 fn has_code_attr_named(code: &CodeModel, name: &str) -> bool {
-    code.attributes.iter().any(
-        |attribute| matches!(attribute, AttributeInfo::Unknown(unknown) if unknown.name == name),
-    )
+    code.attributes
+        .iter()
+        .any(|attribute| attribute_named(attribute, name))
 }
 
 fn has_class_debug_info(attributes: &[AttributeInfo]) -> bool {
@@ -73,15 +72,21 @@ fn has_class_debug_info(attributes: &[AttributeInfo]) -> bool {
 
 fn has_code_debug_info(attributes: &[AttributeInfo]) -> bool {
     attributes.iter().any(|attribute| {
-        matches!(
-            attribute,
-            AttributeInfo::Unknown(unknown)
-                if matches!(
-                    unknown.name.as_str(),
-                    "LineNumberTable" | "LocalVariableTable" | "LocalVariableTypeTable"
-                )
-        )
+        attribute_named(attribute, "LineNumberTable")
+            || attribute_named(attribute, "LocalVariableTable")
+            || attribute_named(attribute, "LocalVariableTypeTable")
     })
+}
+
+fn attribute_named(attribute: &AttributeInfo, name: &str) -> bool {
+    match (attribute, name) {
+        (AttributeInfo::StackMapTable(_), "StackMapTable")
+        | (AttributeInfo::LineNumberTable(_), "LineNumberTable")
+        | (AttributeInfo::LocalVariableTable(_), "LocalVariableTable")
+        | (AttributeInfo::LocalVariableTypeTable(_), "LocalVariableTypeTable") => true,
+        (AttributeInfo::Unknown(unknown), name) => unknown.name == name,
+        _ => false,
+    }
 }
 
 fn cp_utf8(pool: &[Option<ConstantPoolEntry>], index: u16) -> String {
