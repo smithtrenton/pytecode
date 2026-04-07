@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 
 __all__ = ["ClassModel", "CodeModel", "FieldModel", "MethodModel"]
 
+from ..classfile._rust_bridge import coerce_python_classfile
 from ..classfile.attributes import (
     AttributeInfo,
     CodeAttr,
@@ -243,6 +244,7 @@ class ClassModel:
         Raises:
             ValueError: If a constant-pool entry has an unexpected type.
         """
+        cf = coerce_python_classfile(cf)
         cp = ConstantPoolBuilder.from_pool(cf.constant_pool)
 
         # Resolve this_class → class name string.
@@ -299,7 +301,7 @@ class ClassModel:
         Returns:
             A fully resolved ``ClassModel``.
         """
-        reader = ClassReader(data)
+        reader = ClassReader.from_bytes(data)
         return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
 
     # ------------------------------------------------------------------

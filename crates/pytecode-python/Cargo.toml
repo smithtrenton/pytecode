@@ -1,0 +1,25 @@
+[package]
+name = "pytecode-python"
+version = "0.1.0"
+description = "PyO3 bindings that expose the pytecode Rust backend to Python"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["bytecode", "classfile", "jvm", "python"]
+categories = ["development-tools", "parser-implementations"]
+
+[lib]
+name = "_rust"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3.workspace = true
+pytecode-archive = { path = "../pytecode-archive" }
+pytecode-engine = { path = "../pytecode-engine" }
+
+[package.metadata.maturin]
+python-source = "../.."
+module-name = "pytecode._rust"

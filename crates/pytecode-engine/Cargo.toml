@@ -1,0 +1,22 @@
+[package]
+name = "pytecode-engine"
+version = "0.1.0"
+description = "Rust engine for parsing, editing, analyzing, and emitting JVM classfiles"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["bytecode", "classfile", "java", "jvm"]
+categories = ["parser-implementations", "development-tools"]
+
+[dependencies]
+bitflags.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]

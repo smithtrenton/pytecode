@@ -14,6 +14,7 @@ on:
 env:
   PYTHON_VERSION: "3.14"
   JAVA_VERSION: "25"
+  RUST_TOOLCHAIN: "stable"
 
 jobs:
   prepare:
@@ -73,6 +74,11 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Validate release tag
@@ -87,6 +93,12 @@ jobs:
         run: uv run pytest -q
       - name: Validate API docs coverage
         run: uv run python tools/generate_api_docs.py --check
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --workspace
 
   build:
     name: Build distributions
@@ -104,6 +116,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Validate release tag
         run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
       - name: Build distributions

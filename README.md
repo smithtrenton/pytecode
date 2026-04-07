@@ -133,6 +133,8 @@ Create a local environment with development tools:
 uv sync --extra dev
 ```
 
+`uv sync --extra dev` now builds the local editable package through `maturin`, so a working Rust toolchain is required alongside Python.
+
 Common checks:
 
 ```powershell
@@ -141,7 +143,49 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
+
+Rust workspace smoke and comparison commands:
+
+```powershell
+cargo run -p pytecode-cli -- compat-manifest --max-release 25
+cargo run --release -p pytecode-cli -- bench-smoke --iterations 5
+uv run python tools\benchmark_jar_pipeline.py crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5
+uv run python tools\compare_rust_python_benchmarks.py --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5 --output output\benchmarks\rust-vs-python-byte-buddy.json
+cargo run -p pytecode-cli -- class-summary --path target\pytecode-rust-javac\release-8\HelloWorld\classes\HelloWorld.class
+cargo run -p pytecode-cli -- rewrite-smoke --jar input.jar --output output.jar --class-name HelloWorld
+uv run python tools\compare_rust_python.py
+```
+
+Rust-owned fixtures now live under `crates\pytecode-engine\fixtures\`. Rust crate tests only read those copied fixture sources and do not invoke Python. The Rust harness lazily compiles `crates\pytecode-engine\fixtures\java\*.java` into `target\pytecode-rust-javac\...` and only reruns `javac` when the source bytes, required `--release`, or `javac` identity changes. Cross-language Rust-vs-Python checks live in `tools\compare_rust_python.py`, which exports JSON from each side and compares outside the Rust test suites.
+
+`bench-smoke` now reports isolated-stage timing samples with median+spread summaries instead of only one accumulated elapsed total. `tools\benchmark_jar_pipeline.py` mirrors that isolated-stage reporting for the Python implementation, and `tools\compare_rust_python_benchmarks.py` runs release-mode Rust against Python on the same jar so benchmark artifacts stay comparable.
+
+Small Rust examples now live under `crates\pytecode-engine\examples\finalize_main.rs` and `crates\pytecode-archive\examples\rewrite_jar.rs` to show direct transform and archive rewrite workflows without going through the CLI.
+
+The recommended long-term Rust workspace shape is intentionally small:
+
+- `pytecode-engine` for the main classfile/edit/analysis/transform engine,
+- `pytecode-archive` for JAR handling,
+- `pytecode-cli` for compatibility and benchmark tooling,
+- `pytecode-python` for PyO3 bindings and wheel packaging.
+
+That keeps the important seams while avoiding unnecessary crate churn during the early implementation phases.
+
+Current Rust implementation status:
+
+- phases 0, 1, 2, 3, 4, 5, 6, and 7 are complete,
+- `pytecode-engine` now has the raw classfile parse/write core plus a real symbolic model, hierarchy/CFG/verification analysis surface, constant-pool builder, symbolic operands, labels, debug-info handling, raw <-> symbolic lift/lower, and a Rust transform layer with `Pipeline`, `pipeline!`, lifted field/method/code helpers, and matcher composition,
+- `pytecode-archive` now provides in-memory JAR state with add/remove operations plus safe rewrite-to-disk that can pass classes through unchanged or re-lower them through transforms and Phase 4 frame recomputation,
+- `pytecode-cli` now has rewrite smoke coverage plus isolated benchmark reporting with median+spread summaries instead of only cumulative elapsed totals,
+- release-ready Cargo metadata, release automation, and crate-level examples now make the Rust workspace much closer to a standalone deliverable,
+- benchmark `model-lift` and `model-lower` stages now exercise the real symbolic pipeline, and focused Rust tests cover exact roundtrip fidelity, debug-info strip/stale behavior, interface-backed method references, conditional branch widening, switch-layout edits, hierarchy queries, CFG construction, structured verifier diagnostics, transform pipeline behavior, archive rewrite behavior, and end-to-end `StackMapTable` recomputation for edited methods,
+- phase 6 added benchmark-report tooling, examples, public-surface polish, and packaging polish on top of the completed lowering and analysis stack,
+- phase 7 added `pytecode-python`, `maturin`-built source/platform distributions, a Rust-backed `pytecode._rust` extension module, and compatibility bridges so `ClassModel.from_classfile`, `ResolvedClass.from_classfile`, `verify_classfile`, and `ClassWriter.write` all accept Rust-backed classfiles,
+- the default `ClassReader` parse path now goes through the Rust extension when available, while keeping the old Python reader methods as compatibility helpers for low-level tests and niche callers.
 
 Generate local API reference HTML with:
 
@@ -155,6 +199,8 @@ Build source and wheel distributions locally:
 uv build
 ```
 
+`uv build` now produces a mixed Python/Rust wheel (for example `pytecode-0.0.3-cp311-abi3-win_amd64.whl`) instead of a pure-Python `py3-none-any` wheel.
+
 Profile isolated JAR-processing stages without `run.py`'s output overhead:
 
 ```powershell
@@ -163,13 +209,13 @@ uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages class-parse
 uv run python tools/profile_jar_pipeline.py path/to/dir/with/jars --stages model-lift model-lower --summary-json output/profiles/common-libs/summary.json
 ```
 
-When making runtime-performance changes, prefer checking both a focused jar such as `225.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
+When making runtime-performance changes, prefer checking both a focused jar such as `crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. Byte Buddy is the default focused Rust benchmark fixture because it is a common JVM library, carries a much larger class corpus than the old `225.jar` fixture, and also includes newer multi-release classes than Guava. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
 
 The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache/pytecode-oracle` and also honor manually seeded jars in `tests/resources/oracle/lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
 
 ## Release automation
 
-PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, builds both `sdist` and `wheel` with `uv build`, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
+PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, builds both `sdist` and the `maturin`-backed extension wheel with `uv build`, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
 
 Release procedure:
 
@@ -180,6 +226,9 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 
 git commit -am "Bump version to X.Y.Z"
 git push origin master

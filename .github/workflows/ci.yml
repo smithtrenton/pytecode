@@ -10,6 +10,7 @@ env:
   PYTHON_VERSION: "3.14"
   JAVA_VERSION: "25"
   PYTEST_CACHE_VERSION: "v1"
+  RUST_TOOLCHAIN: "stable"
 
 jobs:
   quality:
@@ -23,6 +24,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Lint
@@ -33,6 +38,23 @@ jobs:
         run: uv run basedpyright
       - name: Validate API docs coverage
         run: uv run python tools/generate_api_docs.py --check
+
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace
 
   test:
     name: Pytest (non-oracle)
@@ -50,6 +72,10 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Cache Pytest data
@@ -79,6 +105,10 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Cache Pytest data
@@ -103,7 +133,7 @@ jobs:
   pages-build:
     name: Build GitHub Pages artifact
     if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-    needs: [quality, test, oracle]
+    needs: [quality, rust, test, oracle]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,6 +145,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Configure GitHub Pages

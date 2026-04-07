@@ -88,22 +88,25 @@ The compatibility target is the **behavior** of the current library where that b
 
 ## Top-level product shape
 
-The end state should be a Rust workspace with a reusable core library and a later Python binding layer.
+The end state should be a Rust workspace with a reusable engine library, a separate archive layer, dedicated tooling, and a later Python binding layer.
 
-Suggested workspace shape:
+Recommended workspace shape:
 
 | Crate | Purpose |
 |---|---|
-| `pytecode-core` | shared low-level primitives, typed indexes, common errors, utility traits |
-| `pytecode-classfile` | raw JVM classfile parsing and emission |
-| `pytecode-edit` | symbolic editing model, labels, operands, constant-pool builder |
-| `pytecode-analysis` | CFG, frame simulation, hierarchy, verifier |
-| `pytecode-archive` | JAR read/mutate/rewrite support |
-| `pytecode-transform` | matcher DSL and transform orchestration |
-| `pytecode-cli` | smoke-test and benchmark/debug tooling |
+| `pytecode-engine` | core JVM engine: shared primitives, raw classfile parse/write, symbolic editing, analysis, and transform orchestration |
+| `pytecode-archive` | JAR read/mutate/rewrite support built on top of the engine |
+| `pytecode-cli` | smoke-test, compatibility, benchmark, and debug tooling |
 | `pytecode-python` | later PyO3/maturin bindings for Python integration |
 
-This can begin as fewer crates if that speeds delivery. The important point is keeping the layers conceptually separate even if the first implementation is more consolidated.
+This reduced layout keeps the important boundaries while avoiding early over-fragmentation:
+
+- keep the main bytecode engine in one crate while the APIs are still evolving,
+- keep archive/container concerns separate from classfile-only workflows,
+- keep CLI/tooling out of the library surface,
+- keep Python bindings isolated until the Rust API is mature.
+
+The conceptual layers still matter inside `pytecode-engine`; they just do not all need to be separate crates. The key goal is preserving clean boundaries, not maximizing crate count.
 
 ## Architectural principles
 
@@ -247,6 +250,23 @@ Areas where compatibility can be adapted:
 
 ## Suggested implementation phases
 
+### Current implementation status
+
+- Phases 0, 1, 2, 3, 4, 5, and 6 are complete in the current repository.
+- Rust tests now use Rust-owned fixtures under `crates\pytecode-engine\fixtures`; Java fixture sources compile lazily into `target\pytecode-rust-javac` when inputs change, and cross-language checks run through standalone tooling rather than Rust crate tests.
+- The default focused Rust benchmark fixture is `crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar`.
+- `pytecode-engine::model` now contains a real symbolic editing layer with a constant-pool builder, symbolic operands, labels, debug-info handling, raw <-> symbolic lift/lower, and opt-in frame recomputation during lowering.
+- `pytecode-engine::analysis` now exposes hierarchy resolution, CFG construction, JVM-slot simulation, structured verifier diagnostics, and frame recomputation directly from Rust.
+- `pytecode-engine::transform` now exposes Rust-native pipeline/matcher helpers (`Pipeline`, `pipeline!`, `on_fields`, `on_methods`, `on_code`, and the current selector subset) layered directly on `ClassModel`.
+- `pytecode-archive` now provides in-memory JAR state, entry mutation helpers, and rewrite flows that compose with transform pipelines and Phase 4 lowering controls.
+- `pytecode-cli` now exposes a rewrite smoke command plus isolated-stage benchmark reporting with per-iteration samples and median/spread summaries.
+- Rust-owned examples now live in `crates\pytecode-engine\examples` and `crates\pytecode-archive\examples`, and the crate manifests now include release-ready metadata such as descriptions, keywords, categories, and README linkage.
+- Python-side tooling now includes isolated-stage benchmark reporting and a Rust-vs-Python comparison tool so benchmark artifacts can be regenerated against the current Python implementation.
+- Benchmark `model-lift` / `model-lower` stages now use that real symbolic pipeline, and focused Rust tests cover exact roundtrip fidelity plus key edit-model, analysis, transform, and archive edge cases, including conditional branch widening, switch-layout edits, hierarchy queries, CFG edges, verifier diagnostics, transform pipeline behavior, archive rewrite flows, and recomputation of edited methods that previously failed on stale `StackMapTable`.
+- `pytecode-python` now provides a PyO3 binding crate plus `maturin` packaging, so `uv sync` and `uv build` install/build mixed Python/Rust distributions with `pytecode._rust` included by default.
+- The public Python package now defaults to the Rust parser path when the extension is available, and compatibility bridges let existing `ClassModel`, hierarchy, verifier, and writer entry points consume Rust-backed classfiles without a second maintained backend.
+- Phase 7 Python backend integration is complete.
+
 ### Phase 0: project setup and compatibility harness
 
 **Goal:** create the Rust workspace and define the compatibility target before core implementation grows.
@@ -255,16 +275,16 @@ Deliverables:
 
 - Cargo workspace layout,
 - crate skeletons,
-- fixture import strategy using existing `.class`/`.jar` test resources,
-- cross-language differential test harness,
+- Rust-owned fixture source set copied into the Rust workspace plus a lazy `javac` cache for compiled classes,
+- standalone cross-language comparison tooling,
 - benchmark harness aligned with current stage names,
 - CI for format, lint, tests, benchmarks-on-demand.
 
 Exit criteria:
 
 - Rust workspace builds cleanly,
-- fixtures can be loaded from the existing repository,
-- baseline benchmarks and diff tests can run even if most features are stubs.
+- Rust fixtures can be compiled and loaded without depending on Python test directories or checked-in `.class` files,
+- baseline benchmarks and standalone diff tooling can run even if most features are stubs.
 
 ### Phase 1: raw classfile parse/write core
 
@@ -291,6 +311,8 @@ Exit criteria:
 
 **Goal:** implement the Rust equivalent of `ClassModel`, `CodeModel`, and the pool builder.
 
+This phase is now complete in the current repository state.
+
 Deliverables:
 
 - `ConstantPoolBuilder`,
@@ -308,25 +330,31 @@ Exit criteria:
 
 ### Phase 3: code editing completeness
 
-**Goal:** make bytecode editing ergonomic and correct for real transforms.
+**Goal:** make mutation-heavy bytecode editing ergonomic and correct before frame recomputation lands.
+
+This phase is now complete in the current repository state.
 
 Deliverables:
 
-- full label resolution,
-- switch lowering with padding,
-- branch widening/inversion logic,
-- local-variable shorthand/wide normalization,
-- symbolic LDC and member/type instruction lowering,
-- debug-info lifting/lowering and staleness behavior.
+- conditional branch widening/inversion logic for edited methods,
+- fixed-point control-flow layout that keeps branch and switch offsets correct after code-size changes,
+- hardened lowering/normalization paths for edited symbolic instructions and code attributes,
+- explicit stale handling for frame-sensitive code attributes such as `StackMapTable` until Phase 4 recomputation exists,
+- broader mutation-heavy Rust fixture coverage for symbolic editing behavior.
 
 Exit criteria:
 
-- existing edit/labels/operands/debug-info behaviors have Rust equivalents,
-- code-shape edits can be performed without raw offset or CP index management.
+- code-shape edits that grow or shrink methods lower without raw offset management,
+- conditional branches widen correctly instead of failing with a phase-3 placeholder error,
+- switch padding/targets remain correct after edits,
+- lowering fails explicitly rather than silently preserving stale frame-sensitive attrs,
+- mutation-heavy Rust tests pass across representative fixtures.
 
 ### Phase 4: analysis, hierarchy, and verification
 
 **Goal:** implement the advanced correctness layers needed for frame recomputation and validation.
+
+This phase is now complete in the current repository state.
 
 Deliverables:
 
@@ -348,23 +376,31 @@ Exit criteria:
 
 **Goal:** implement high-level workflows users actually rely on.
 
+This phase is now complete in the current repository state.
+
 Deliverables:
 
-- transform pipeline abstraction,
-- matcher DSL or equivalent selector layer,
-- JAR read/mutate/rewrite support,
-- safe atomic rewrite behavior,
-- resource preservation and metadata preservation,
-- optional parallel class processing inside archive rewrites.
+- transform traits/helpers for class, field, method, and code mutation,
+- pipeline abstraction with deterministic traversal semantics,
+- matcher DSL or equivalent selector layer for common class/field/method filters,
+- JAR archive state that can inspect, add, remove, and rewrite entries,
+- safe atomic rewrite behavior with unchanged-class passthrough when possible,
+- resource preservation and ZIP metadata preservation,
+- recompute/debug-info lowering options threaded through archive rewrite flows,
+- optional parallel class processing only after single-threaded rewrite semantics are stable.
 
 Exit criteria:
 
 - Rust can perform end-to-end JAR transformations analogous to current README workflows,
-- transforms can target classes/fields/methods/code with deterministic traversal semantics.
+- transforms can target classes/fields/methods/code with deterministic traversal semantics,
+- rewritten archives preserve non-class resources and produce stable output paths safely,
+- archive rewrite APIs compose cleanly with Phase 4 frame recomputation and debug-info controls.
 
 ### Phase 6: polish, optimization, and packaging
 
 **Goal:** make the Rust library production-ready on its own.
+
+This phase is now complete in the current repository state.
 
 Deliverables:
 
@@ -387,15 +423,15 @@ Exit criteria:
 Deliverables:
 
 - PyO3/maturin binding crate,
-- Python-compatible top-level entry points,
-- conversion or handle strategy between Python-facing objects and Rust internals,
-- fallback/feature-flag rollout plan,
-- packaging and wheel build integration.
+- Rust-backed Python entry points and raw wrappers under `pytecode._rust`,
+- compatibility bridges from Rust-backed classfiles into the remaining Python edit/analysis/archive surfaces,
+- source + wheel packaging integration through `maturin`.
 
 Exit criteria:
 
-- Python can use Rust for the heavy paths without breaking the current API story,
-- feature parity is sufficient for default use in targeted workflows.
+- Python uses Rust for the default parse/package path without breaking the current API story,
+- mixed Python/Rust distributions build in CI and release workflows,
+- remaining Python-side pieces act as thin compatibility shims over Rust-backed classfiles instead of a separate parser backend.
 
 ## Recommended roadmap order
 
@@ -427,12 +463,11 @@ When Rust is ready, Python integration should be phased rather than all-at-once.
 | opaque Rust handles with Python façade | smaller FFI boundary, faster internals | harder Python ergonomics |
 | hybrid: Rust for parse/lower/analyze/JAR loops, Python for orchestration | fastest path to adoption | duplicated model logic if taken too far |
 
-Recommended direction:
+Implemented direction:
 
-- start with a **hybrid backend** for the heaviest operations,
-- then move more model ownership into Rust once the integration story is proven.
-
-That gives earlier wins without forcing the first Rust release to expose the entire edit model safely into Python.
+- use **thin Rust-backed Python objects** for the raw parse/package surface,
+- bridge those objects into the current Python edit/analysis/archive layers where direct wrappers are not yet worth the binding cost,
+- keep compatibility helpers only where they preserve the documented API story and no second parser backend is maintained.
 
 ## Validation strategy
 
@@ -441,7 +476,7 @@ The Rust project should adopt the current repository as its validation oracle.
 Recommended validation layers:
 
 1. fixture-based parse/write roundtrip tests,
-2. differential tests against Python `pytecode` outputs,
+2. standalone comparison utilities that diff Rust exports against Python `pytecode` outputs,
 3. verifier tests using the same conceptual cases as current Python tests,
 4. JVM-backed execution/verification tests where already used by the repository,
 5. targeted benchmark suites for parse/lift/lower/write/JAR workflows.

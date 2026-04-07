@@ -13,6 +13,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from ..classfile._rust_bridge import coerce_python_classfile
 from ..classfile.constant_pool import ClassInfo
 from ..classfile.constants import ClassAccessFlag, MethodAccessFlag
 from ..classfile.info import ClassFile
@@ -120,7 +121,7 @@ class ResolvedClass:
         Returns:
             A new ``ResolvedClass`` populated from the class file metadata.
         """
-
+        classfile = coerce_python_classfile(classfile)
         cp = ConstantPoolBuilder.from_pool(classfile.constant_pool)
         methods = tuple(
             ResolvedMethod(

@@ -11,6 +11,7 @@ import os
 
 from .._internal.bytes_utils import BytesReader
 from . import attributes, constant_pool, constants, info, instructions
+from ._rust_bridge import coerce_python_classfile
 from .modified_utf8 import decode_modified_utf8
 
 __all__ = ["ClassReader", "MalformedClassException"]
@@ -30,6 +31,7 @@ class ClassReader(BytesReader):
     """
 
     class_info: info.ClassFile
+    _rust_reader: object | None
 
     def __init__(self, bytes_or_bytearray: bytes | bytearray) -> None:
         """Initialise the reader and immediately parse the class-file bytes.
@@ -42,7 +44,21 @@ class ClassReader(BytesReader):
         """
         super().__init__(bytes_or_bytearray)
         self.constant_pool: list[constant_pool.ConstantPoolInfo | None] = []
-        self.read_class()
+        self._rust_reader = None
+        try:
+            from pytecode import _rust
+        except ModuleNotFoundError:
+            self.read_class()
+            return
+
+        try:
+            self._rust_reader = _rust.ClassReader.from_bytes(bytes_or_bytearray)
+        except _rust.MalformedClassException:
+            self.read_class()
+            return
+
+        self.class_info = coerce_python_classfile(self._rust_reader.class_info)
+        self.constant_pool = self.class_info.constant_pool
 
     @classmethod
     def from_file(cls, path: str | os.PathLike[str]) -> ClassReader:

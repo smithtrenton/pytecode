@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from .._internal.bytes_utils import BytesWriter
 from . import attributes, constant_pool, instructions
+from ._rust_bridge import is_rust_classfile
 from .info import ClassFile, FieldInfo, MethodInfo
 
 __all__ = ["ClassWriter"]
@@ -18,7 +21,7 @@ class ClassWriter:
     """
 
     @staticmethod
-    def write(classfile: ClassFile) -> bytes:
+    def write(classfile: ClassFile | object) -> bytes:
         """Serialize a ``ClassFile`` into raw ``.class`` file bytes.
 
         Encodes all sections of the class file (magic number, version,
@@ -31,8 +34,12 @@ class ClassWriter:
         Returns:
             The complete ``.class`` binary content.
         """
+        if is_rust_classfile(classfile):
+            from pytecode import _rust
+
+            return bytes(_rust.ClassWriter.write(cast(Any, classfile)))
         writer = BytesWriter()
-        _write_classfile(writer, classfile)
+        _write_classfile(writer, cast(ClassFile, classfile))
         return writer.to_bytes()
 
 

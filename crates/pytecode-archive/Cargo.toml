@@ -1,0 +1,18 @@
+[package]
+name = "pytecode-archive"
+version = "0.1.0"
+description = "Rust JAR archive helpers for pytecode classfile rewrite workflows"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["bytecode", "classfile", "jar", "jvm"]
+categories = ["parser-implementations", "development-tools"]
+
+[dependencies]
+pytecode-engine = { path = "../pytecode-engine" }
+serde.workspace = true
+thiserror.workspace = true
+zip.workspace = true

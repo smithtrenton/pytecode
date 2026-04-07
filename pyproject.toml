@@ -1,15 +1,6 @@
 [build-system]
-requires = ["setuptools>=82.0.1,<83.0.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-include = ["pytecode*"]
-
-[tool.setuptools.package-data]
-pytecode = ["py.typed"]
+requires = ["maturin>=1.9.4,<2.0.0"]
+build-backend = "maturin"
 
 [project]
 name = "pytecode"
@@ -39,10 +30,17 @@ Changelog = "https://github.com/smithtrenton/pytecode/releases"
 [project.optional-dependencies]
 dev = [
   "basedpyright>=1.38.3,<2.0.0",
+  "maturin>=1.9.4,<2.0.0",
   "pdoc>=16.0.0,<17.0.0",
   "pytest>=9.0.2,<10.0.0",
   "ruff>=0.15.7,<0.16.0",
 ]
+
+[tool.maturin]
+manifest-path = "crates/pytecode-python/Cargo.toml"
+python-source = "."
+module-name = "pytecode._rust"
+include = ["pytecode/*.pyi", "pytecode/py.typed"]
 
 [tool.basedpyright]
 pythonVersion = "3.14"

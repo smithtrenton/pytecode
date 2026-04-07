@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from ..classfile._rust_bridge import coerce_python_classfile
 from ..classfile.attributes import (
     AnnotationDefaultAttr,
     AttributeInfo,
@@ -1187,6 +1188,7 @@ def verify_classfile(cf: ClassFile, *, fail_fast: bool = False) -> list[Diagnost
     Raises:
         FailFastError: If ``fail_fast`` is ``True`` and an ERROR is found.
     """
+    cf = coerce_python_classfile(cf)
     dc = _Collector(fail_fast)
     class_name = _resolve_class_name(cf)
     loc = Location(class_name=class_name)
