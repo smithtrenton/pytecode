@@ -4,6 +4,7 @@
 //! Python code can construct matcher trees that Rust evaluates natively.
 
 use pyo3::prelude::*;
+use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::matcher_spec::{
     ClassMatcherSpec, FieldMatcherSpec, MethodMatcherSpec,
 };
@@ -651,6 +652,29 @@ impl PyPipeline {
         });
     }
 
+    /// Add a class-level step with a custom Python callback.
+    ///
+    /// The callback receives a mutable `RustClassModel` and should modify it
+    /// in-place. Matching is still done natively in Rust.
+    fn on_classes_custom(&mut self, matcher: &PyClassMatcher, callback: PyObject) {
+        let cb = std::sync::Arc::new(callback);
+        self.spec.steps.push(PipelineStep::Class {
+            matcher: matcher.spec.clone(),
+            action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
+                Python::with_gil(|py| {
+                    let py_model = PyClassModel {
+                        inner: model.clone(),
+                    };
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    if let Err(e) = cb.call1(py, (&cell,)) {
+                        e.print(py);
+                    }
+                    *model = cell.borrow(py).inner.clone();
+                });
+            })),
+        });
+    }
+
     /// Add a field-level step: apply transform when any field matches.
     #[pyo3(signature = (field_matcher, transform, owner_matcher=None))]
     fn on_fields(
@@ -668,6 +692,35 @@ impl PyPipeline {
         });
     }
 
+    /// Add a field-level step with a custom Python callback.
+    #[pyo3(signature = (field_matcher, callback, owner_matcher=None))]
+    fn on_fields_custom(
+        &mut self,
+        field_matcher: &PyFieldMatcher,
+        callback: PyObject,
+        owner_matcher: Option<&PyClassMatcher>,
+    ) {
+        let cb = std::sync::Arc::new(callback);
+        self.spec.steps.push(PipelineStep::Field {
+            owner_matcher: owner_matcher
+                .map(|m| m.spec.clone())
+                .unwrap_or(ClassMatcherSpec::Any),
+            field_matcher: field_matcher.spec.clone(),
+            action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
+                Python::with_gil(|py| {
+                    let py_model = PyClassModel {
+                        inner: model.clone(),
+                    };
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    if let Err(e) = cb.call1(py, (&cell,)) {
+                        e.print(py);
+                    }
+                    *model = cell.borrow(py).inner.clone();
+                });
+            })),
+        });
+    }
+
     /// Add a method-level step: apply transform when any method matches.
     #[pyo3(signature = (method_matcher, transform, owner_matcher=None))]
     fn on_methods(
@@ -682,6 +735,35 @@ impl PyPipeline {
                 .unwrap_or(ClassMatcherSpec::Any),
             method_matcher: method_matcher.spec.clone(),
             action: TransformAction::BuiltIn(transform.spec.clone()),
+        });
+    }
+
+    /// Add a method-level step with a custom Python callback.
+    #[pyo3(signature = (method_matcher, callback, owner_matcher=None))]
+    fn on_methods_custom(
+        &mut self,
+        method_matcher: &PyMethodMatcher,
+        callback: PyObject,
+        owner_matcher: Option<&PyClassMatcher>,
+    ) {
+        let cb = std::sync::Arc::new(callback);
+        self.spec.steps.push(PipelineStep::Method {
+            owner_matcher: owner_matcher
+                .map(|m| m.spec.clone())
+                .unwrap_or(ClassMatcherSpec::Any),
+            method_matcher: method_matcher.spec.clone(),
+            action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
+                Python::with_gil(|py| {
+                    let py_model = PyClassModel {
+                        inner: model.clone(),
+                    };
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    if let Err(e) = cb.call1(py, (&cell,)) {
+                        e.print(py);
+                    }
+                    *model = cell.borrow(py).inner.clone();
+                });
+            })),
         });
     }
 

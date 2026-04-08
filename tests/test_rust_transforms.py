@@ -471,3 +471,114 @@ class TestPipelineApply:
         result = m.to_bytes()
         assert isinstance(result, bytes)
         assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# Custom callback tests (T4)
+# ---------------------------------------------------------------------------
+
+
+class TestCustomCallbacks:
+    """Pipeline with custom Python callbacks in the hot path."""
+
+    def test_class_callback_modifies_name(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+
+        def rename(model: object) -> None:
+            model.name = "com/callback/Renamed"  # type: ignore[attr-defined]
+
+        p = RustPipelineBuilder()
+        p.on_classes_custom(class_named(m.name), rename)
+        p.build().apply(m)
+
+        assert m.name == "com/callback/Renamed"
+
+    def test_class_callback_no_match(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        original = m.name
+        called = []
+
+        def should_not_run(model: object) -> None:
+            called.append(True)
+
+        p = RustPipelineBuilder()
+        p.on_classes_custom(class_named("nonexistent/Class"), should_not_run)
+        p.build().apply(m)
+
+        assert m.name == original
+        assert not called
+
+    def test_mixed_builtin_and_callback(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        original_name = m.name
+
+        def add_iface(model: object) -> None:
+            ifaces = list(model.interfaces)  # type: ignore[attr-defined]
+            ifaces.append("com/callback/Added")
+            model.interfaces = ifaces  # type: ignore[attr-defined]
+
+        p = RustPipelineBuilder()
+        # Built-in step first
+        p.on_classes(class_named(original_name), add_access_flags(0x0010))
+        # Custom callback second
+        p.on_classes_custom(class_named(original_name), add_iface)
+        p.build().apply(m)
+
+        assert m.access_flags & 0x0010
+        assert "com/callback/Added" in m.interfaces
+
+    def test_callback_on_methods_guard(
+        self, multi_class_bytes: list[bytes]
+    ) -> None:
+        from pytecode._rust import RustClassModel
+
+        models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
+        transformed = []
+
+        def track(model: object) -> None:
+            transformed.append(model.name)  # type: ignore[attr-defined]
+
+        p = RustPipelineBuilder()
+        p.on_methods_custom(method_named("<init>"), track)
+        pipeline = p.build()
+        for m in models:
+            pipeline.apply(m)
+
+        # At least some classes should have <init>
+        assert len(transformed) > 0
+
+    def test_callback_exception_handled(self, class_bytes: bytes) -> None:
+        """Python exception in callback should not crash."""
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        original = m.name
+
+        def bad_callback(model: object) -> None:
+            raise ValueError("intentional error")
+
+        p = RustPipelineBuilder()
+        p.on_classes_custom(class_named(original), bad_callback)
+        # Should not crash — error is printed but not propagated
+        p.build().apply(m)
+
+    def test_compiled_with_callback(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+
+        def rename(model: object) -> None:
+            model.name = "com/compiled/Callback"  # type: ignore[attr-defined]
+
+        p = RustPipelineBuilder()
+        p.on_classes_custom(class_named(m.name), rename)
+        compiled = p.compile()
+        compiled.apply(m)
+
+        assert m.name == "com/compiled/Callback"

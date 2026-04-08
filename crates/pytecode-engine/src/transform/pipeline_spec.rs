@@ -13,10 +13,21 @@ use crate::transform::transform_spec::ClassTransformSpec;
 use std::fmt;
 
 /// The action to perform when a step's matcher matches.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TransformAction {
     /// A built-in transform that Rust applies natively.
     BuiltIn(ClassTransformSpec),
+    /// A custom callback function (e.g. from Python via PyO3).
+    Custom(std::sync::Arc<dyn Fn(&mut ClassModel) + Send + Sync>),
+}
+
+impl fmt::Debug for TransformAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BuiltIn(spec) => f.debug_tuple("BuiltIn").field(spec).finish(),
+            Self::Custom(_) => f.debug_tuple("Custom").field(&"<callback>").finish(),
+        }
+    }
 }
 
 /// A single step in a declarative pipeline.
@@ -235,6 +246,7 @@ impl CompiledPipeline {
     fn apply_action(action: &TransformAction, model: &mut ClassModel) {
         match action {
             TransformAction::BuiltIn(spec) => spec.apply(model),
+            TransformAction::Custom(callback) => callback(model),
         }
     }
 }

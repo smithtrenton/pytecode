@@ -61,6 +61,41 @@ class RustPipelineBuilder:
         self._pipeline.on_methods(method_matcher, transform, owner_matcher)
         return self
 
+    # -- custom callback variants --
+
+    def on_classes_custom(
+        self,
+        matcher: RustClassMatcher,
+        callback: object,
+    ) -> RustPipelineBuilder:
+        """Class step with custom Python callback (receives RustClassModel)."""
+        self._pipeline.on_classes_custom(matcher, callback)
+        return self
+
+    def on_fields_custom(
+        self,
+        field_matcher: RustFieldMatcher,
+        callback: object,
+        *,
+        owner_matcher: RustClassMatcher | None = None,
+    ) -> RustPipelineBuilder:
+        """Field step with custom Python callback."""
+        self._pipeline.on_fields_custom(field_matcher, callback, owner_matcher)
+        return self
+
+    def on_methods_custom(
+        self,
+        method_matcher: RustMethodMatcher,
+        callback: object,
+        *,
+        owner_matcher: RustClassMatcher | None = None,
+    ) -> RustPipelineBuilder:
+        """Method step with custom Python callback."""
+        self._pipeline.on_methods_custom(
+            method_matcher, callback, owner_matcher
+        )
+        return self
+
     def build(self) -> RustPipeline:
         """Return the constructed pipeline."""
         return self._pipeline
