@@ -413,12 +413,8 @@ impl CompiledClassMatcher {
             ClassMatcherSpec::Version(v) => Self::Version(*v),
             ClassMatcherSpec::VersionAtLeast(v) => Self::VersionAtLeast(*v),
             ClassMatcherSpec::VersionBelow(v) => Self::VersionBelow(*v),
-            ClassMatcherSpec::And(specs) => {
-                Self::And(specs.iter().map(Self::from_spec).collect())
-            }
-            ClassMatcherSpec::Or(specs) => {
-                Self::Or(specs.iter().map(Self::from_spec).collect())
-            }
+            ClassMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
+            ClassMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
             ClassMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
         }
     }
@@ -478,12 +474,8 @@ impl CompiledFieldMatcher {
                 Self::AccessAny(FieldAccessFlags::from_bits_truncate(*f))
             }
             FieldMatcherSpec::IsPackagePrivate => Self::IsPackagePrivate,
-            FieldMatcherSpec::And(specs) => {
-                Self::And(specs.iter().map(Self::from_spec).collect())
-            }
-            FieldMatcherSpec::Or(specs) => {
-                Self::Or(specs.iter().map(Self::from_spec).collect())
-            }
+            FieldMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
+            FieldMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
             FieldMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
         }
     }
@@ -552,12 +544,8 @@ impl CompiledMethodMatcher {
             MethodMatcherSpec::IsConstructor => Self::IsConstructor,
             MethodMatcherSpec::IsStaticInitializer => Self::IsStaticInitializer,
             MethodMatcherSpec::Returns(d) => Self::Returns(d.clone()),
-            MethodMatcherSpec::And(specs) => {
-                Self::And(specs.iter().map(Self::from_spec).collect())
-            }
-            MethodMatcherSpec::Or(specs) => {
-                Self::Or(specs.iter().map(Self::from_spec).collect())
-            }
+            MethodMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
+            MethodMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
             MethodMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
         }
     }

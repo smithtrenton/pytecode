@@ -7,6 +7,8 @@ use pyo3::prelude::*;
 use pytecode_engine::transform::matcher_spec::{
     ClassMatcherSpec, FieldMatcherSpec, MethodMatcherSpec,
 };
+use pytecode_engine::transform::pipeline_spec::{PipelineSpec, PipelineStep, TransformAction};
+use pytecode_engine::transform::transform_spec::ClassTransformSpec;
 
 // ---------------------------------------------------------------------------
 // PyClassMatcher
@@ -492,5 +494,199 @@ impl PyMethodMatcher {
 
     fn __str__(&self) -> String {
         self.spec.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyClassTransform — wraps ClassTransformSpec
+// ---------------------------------------------------------------------------
+
+/// A declarative class transform that Rust applies natively.
+#[pyclass(name = "RustClassTransform", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyClassTransform {
+    pub(crate) spec: ClassTransformSpec,
+}
+
+#[pymethods]
+impl PyClassTransform {
+    #[staticmethod]
+    fn rename_class(name: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::RenameClass(name),
+        }
+    }
+
+    #[staticmethod]
+    fn set_access_flags(flags: u16) -> Self {
+        Self {
+            spec: ClassTransformSpec::SetAccessFlags(flags),
+        }
+    }
+
+    #[staticmethod]
+    fn add_access_flags(flags: u16) -> Self {
+        Self {
+            spec: ClassTransformSpec::AddAccessFlags(flags),
+        }
+    }
+
+    #[staticmethod]
+    fn remove_access_flags(flags: u16) -> Self {
+        Self {
+            spec: ClassTransformSpec::RemoveAccessFlags(flags),
+        }
+    }
+
+    #[staticmethod]
+    fn set_super_class(name: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::SetSuperClass(name),
+        }
+    }
+
+    #[staticmethod]
+    fn add_interface(name: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::AddInterface(name),
+        }
+    }
+
+    #[staticmethod]
+    fn remove_interface(name: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::RemoveInterface(name),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (name, descriptor=None))]
+    fn remove_method(name: String, descriptor: Option<String>) -> Self {
+        Self {
+            spec: ClassTransformSpec::RemoveMethod { name, descriptor },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (name, descriptor=None))]
+    fn remove_field(name: String, descriptor: Option<String>) -> Self {
+        Self {
+            spec: ClassTransformSpec::RemoveField { name, descriptor },
+        }
+    }
+
+    #[staticmethod]
+    fn rename_method(from: String, to: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::RenameMethod { from, to },
+        }
+    }
+
+    #[staticmethod]
+    fn rename_field(from: String, to: String) -> Self {
+        Self {
+            spec: ClassTransformSpec::RenameField { from, to },
+        }
+    }
+
+    #[staticmethod]
+    fn set_method_access_flags(name: String, flags: u16) -> Self {
+        Self {
+            spec: ClassTransformSpec::SetMethodAccessFlags { name, flags },
+        }
+    }
+
+    #[staticmethod]
+    fn set_field_access_flags(name: String, flags: u16) -> Self {
+        Self {
+            spec: ClassTransformSpec::SetFieldAccessFlags { name, flags },
+        }
+    }
+
+    #[staticmethod]
+    fn sequence(transforms: Vec<PyClassTransform>) -> Self {
+        Self {
+            spec: ClassTransformSpec::Sequence(transforms.into_iter().map(|t| t.spec).collect()),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RustClassTransform({})", self.spec)
+    }
+
+    fn __str__(&self) -> String {
+        self.spec.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyPipeline — wraps PipelineSpec
+// ---------------------------------------------------------------------------
+
+/// A declarative transform pipeline that Rust evaluates natively.
+#[pyclass(name = "RustPipeline", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyPipeline {
+    pub(crate) spec: PipelineSpec,
+}
+
+#[pymethods]
+impl PyPipeline {
+    #[new]
+    fn new() -> Self {
+        Self {
+            spec: PipelineSpec::new(),
+        }
+    }
+
+    /// Add a class-level step: apply transform to classes matching the matcher.
+    fn on_classes(&mut self, matcher: &PyClassMatcher, transform: &PyClassTransform) {
+        self.spec.steps.push(PipelineStep::Class {
+            matcher: matcher.spec.clone(),
+            action: TransformAction::BuiltIn(transform.spec.clone()),
+        });
+    }
+
+    /// Add a field-level step: apply transform when any field matches.
+    #[pyo3(signature = (field_matcher, transform, owner_matcher=None))]
+    fn on_fields(
+        &mut self,
+        field_matcher: &PyFieldMatcher,
+        transform: &PyClassTransform,
+        owner_matcher: Option<&PyClassMatcher>,
+    ) {
+        self.spec.steps.push(PipelineStep::Field {
+            owner_matcher: owner_matcher
+                .map(|m| m.spec.clone())
+                .unwrap_or(ClassMatcherSpec::Any),
+            field_matcher: field_matcher.spec.clone(),
+            action: TransformAction::BuiltIn(transform.spec.clone()),
+        });
+    }
+
+    /// Add a method-level step: apply transform when any method matches.
+    #[pyo3(signature = (method_matcher, transform, owner_matcher=None))]
+    fn on_methods(
+        &mut self,
+        method_matcher: &PyMethodMatcher,
+        transform: &PyClassTransform,
+        owner_matcher: Option<&PyClassMatcher>,
+    ) {
+        self.spec.steps.push(PipelineStep::Method {
+            owner_matcher: owner_matcher
+                .map(|m| m.spec.clone())
+                .unwrap_or(ClassMatcherSpec::Any),
+            method_matcher: method_matcher.spec.clone(),
+            action: TransformAction::BuiltIn(transform.spec.clone()),
+        });
+    }
+
+    /// Return the number of steps in this pipeline.
+    fn __len__(&self) -> usize {
+        self.spec.steps.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RustPipeline(steps={})", self.spec.steps.len())
     }
 }

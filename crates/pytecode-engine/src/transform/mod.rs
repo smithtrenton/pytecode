@@ -1,4 +1,6 @@
 pub mod matcher_spec;
+pub mod pipeline_spec;
+pub mod transform_spec;
 
 use crate::Result;
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
