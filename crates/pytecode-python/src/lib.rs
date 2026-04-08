@@ -8,13 +8,17 @@ use pytecode_engine::{parse_class, write_class};
 use std::fs;
 use std::path::PathBuf;
 
+mod analysis;
+mod attributes;
+mod model;
+
 create_exception!(
     pytecode,
     MalformedClassException,
     pyo3::exceptions::PyException
 );
 
-fn engine_error_to_py(error: pytecode_engine::EngineError) -> PyErr {
+pub(crate) fn engine_error_to_py(error: pytecode_engine::EngineError) -> PyErr {
     MalformedClassException::new_err(error.to_string())
 }
 
@@ -1512,7 +1516,10 @@ fn wrap_constant_pool_entry(
     }
 }
 
-fn wrap_attribute(py: Python<'_>, attribute: &raw::AttributeInfo) -> PyResult<Py<PyAny>> {
+pub(crate) fn wrap_attribute(
+    py: Python<'_>,
+    attribute: &raw::AttributeInfo,
+) -> PyResult<Py<PyAny>> {
     match attribute {
         raw::AttributeInfo::ConstantValue(inner) => wrap_pyclass!(
             py,
@@ -2215,6 +2222,9 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyClassReader>()?;
     module.add_class::<PyClassWriter>()?;
     module.add_function(wrap_pyfunction!(backend_info, module)?)?;
+    model::register(py, module)?;
+    analysis::register(py, module)?;
+    attributes::register(py, module)?;
     module.add(
         "__all__",
         vec![

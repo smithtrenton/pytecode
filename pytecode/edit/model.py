@@ -294,6 +294,9 @@ class ClassModel:
     def from_bytes(cls, data: bytes | bytearray, *, skip_debug: bool = False) -> ClassModel:
         """Parse raw class-file bytes and build a ``ClassModel``.
 
+        Uses the Rust model layer when available for faster parsing,
+        falling back to the pure-Python path otherwise.
+
         Args:
             data: Raw ``.class`` file content.
             skip_debug: If true, strip debug metadata during lifting.
@@ -301,6 +304,26 @@ class ClassModel:
         Returns:
             A fully resolved ``ClassModel``.
         """
+        try:
+            from .._rust import RustClassModel  # type: ignore[attr-defined]
+
+            rust_model = RustClassModel.from_bytes(data)
+            from ._rust_bridge_model import from_rust_model
+
+            model = from_rust_model(rust_model, skip_debug=skip_debug)
+            # Seed the CP builder from the original class bytes so that
+            # raw attributes referencing CP indexes remain valid.
+            reader = ClassReader.from_bytes(data)
+            from ..classfile._rust_bridge import _convert_constant_pool_entry
+
+            py_pool = [
+                _convert_constant_pool_entry(entry) if entry is not None else None
+                for entry in reader.class_info.constant_pool
+            ]
+            model.constant_pool = ConstantPoolBuilder.from_pool(py_pool)
+            return model
+        except (ImportError, Exception):
+            pass
         reader = ClassReader.from_bytes(data)
         return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
 
