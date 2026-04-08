@@ -65,6 +65,18 @@ class RustPipelineBuilder:
         """Return the constructed pipeline."""
         return self._pipeline
 
+    def apply(self, model: object) -> None:
+        """Apply pipeline to a single RustClassModel (mutates in-place)."""
+        self._pipeline.apply(model)
+
+    def apply_all(self, models: list[object]) -> None:
+        """Apply pipeline to many RustClassModel objects (mutates in-place)."""
+        self._pipeline.apply_all(models)
+
+    def compile(self) -> object:
+        """Compile for hot-path repeated use (pre-compiles regexes)."""
+        return self._pipeline.compile()
+
     def __len__(self) -> int:
         return len(self._pipeline)
 

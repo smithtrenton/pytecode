@@ -7,8 +7,12 @@ use pyo3::prelude::*;
 use pytecode_engine::transform::matcher_spec::{
     ClassMatcherSpec, FieldMatcherSpec, MethodMatcherSpec,
 };
-use pytecode_engine::transform::pipeline_spec::{PipelineSpec, PipelineStep, TransformAction};
+use pytecode_engine::transform::pipeline_spec::{
+    CompiledPipeline, PipelineSpec, PipelineStep, TransformAction,
+};
 use pytecode_engine::transform::transform_spec::ClassTransformSpec;
+
+use crate::model::PyClassModel;
 
 // ---------------------------------------------------------------------------
 // PyClassMatcher
@@ -681,6 +685,28 @@ impl PyPipeline {
         });
     }
 
+    /// Apply pipeline to a single model (mutates in-place).
+    fn apply(&self, model: &mut PyClassModel) {
+        self.spec.apply(&mut model.inner);
+    }
+
+    /// Apply pipeline to many models (mutates in-place).
+    fn apply_all(&self, _py: Python<'_>, models: &Bound<'_, pyo3::types::PyList>) -> PyResult<()> {
+        let compiled = self.spec.compile();
+        for item in models.iter() {
+            let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
+            compiled.apply(&mut model.inner);
+        }
+        Ok(())
+    }
+
+    /// Compile the pipeline for repeated application (pre-compiles regexes).
+    fn compile(&self) -> PyCompiledPipeline {
+        PyCompiledPipeline {
+            inner: self.spec.compile(),
+        }
+    }
+
     /// Return the number of steps in this pipeline.
     fn __len__(&self) -> usize {
         self.spec.steps.len()
@@ -688,5 +714,40 @@ impl PyPipeline {
 
     fn __repr__(&self) -> String {
         format!("RustPipeline(steps={})", self.spec.steps.len())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyCompiledPipeline — wraps CompiledPipeline (pre-compiled regexes)
+// ---------------------------------------------------------------------------
+
+/// A compiled pipeline with pre-compiled regexes for hot-path evaluation.
+#[pyclass(name = "RustCompiledPipeline", module = "pytecode._rust")]
+pub struct PyCompiledPipeline {
+    inner: CompiledPipeline,
+}
+
+#[pymethods]
+impl PyCompiledPipeline {
+    /// Apply compiled pipeline to a single model (mutates in-place).
+    fn apply(&self, model: &mut PyClassModel) {
+        self.inner.apply(&mut model.inner);
+    }
+
+    /// Apply compiled pipeline to many models (mutates in-place).
+    fn apply_all(
+        &self,
+        _py: Python<'_>,
+        models: &Bound<'_, pyo3::types::PyList>,
+    ) -> PyResult<()> {
+        for item in models.iter() {
+            let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
+            self.inner.apply(&mut model.inner);
+        }
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        "RustCompiledPipeline()".to_string()
     }
 }

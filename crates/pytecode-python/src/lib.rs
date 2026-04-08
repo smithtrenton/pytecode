@@ -2227,6 +2227,7 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<transforms::PyMethodMatcher>()?;
     module.add_class::<transforms::PyClassTransform>()?;
     module.add_class::<transforms::PyPipeline>()?;
+    module.add_class::<transforms::PyCompiledPipeline>()?;
     module.add_function(wrap_pyfunction!(backend_info, module)?)?;
     model::register(py, module)?;
     analysis::register(py, module)?;
