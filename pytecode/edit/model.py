@@ -806,44 +806,41 @@ def _lift_nested_code_attributes(
 
     for attribute in code_attr.attributes:
         if isinstance(attribute, LineNumberTableAttr):
-            layout.append("line_numbers")
-            if skip_debug:
-                continue
-            line_numbers.extend(
-                LineNumberEntry(
-                    label=_label_for_offset(labels_by_offset, entry.start_pc),
-                    line_number=entry.line_number,
+            if not skip_debug:
+                layout.append("line_numbers")
+                line_numbers.extend(
+                    LineNumberEntry(
+                        label=_label_for_offset(labels_by_offset, entry.start_pc),
+                        line_number=entry.line_number,
+                    )
+                    for entry in attribute.line_number_table
                 )
-                for entry in attribute.line_number_table
-            )
         elif isinstance(attribute, LocalVariableTableAttr):
-            layout.append("local_variables")
-            if skip_debug:
-                continue
-            local_variables.extend(
-                LocalVariableEntry(
-                    start=_label_for_offset(labels_by_offset, entry.start_pc),
-                    end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
-                    name=cp.resolve_utf8(entry.name_index),
-                    descriptor=cp.resolve_utf8(entry.descriptor_index),
-                    slot=entry.index,
+            if not skip_debug:
+                layout.append("local_variables")
+                local_variables.extend(
+                    LocalVariableEntry(
+                        start=_label_for_offset(labels_by_offset, entry.start_pc),
+                        end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
+                        name=cp.resolve_utf8(entry.name_index),
+                        descriptor=cp.resolve_utf8(entry.descriptor_index),
+                        slot=entry.index,
+                    )
+                    for entry in attribute.local_variable_table
                 )
-                for entry in attribute.local_variable_table
-            )
         elif isinstance(attribute, LocalVariableTypeTableAttr):
-            layout.append("local_variable_types")
-            if skip_debug:
-                continue
-            local_variable_types.extend(
-                LocalVariableTypeEntry(
-                    start=_label_for_offset(labels_by_offset, entry.start_pc),
-                    end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
-                    name=cp.resolve_utf8(entry.name_index),
-                    signature=cp.resolve_utf8(entry.signature_index),
-                    slot=entry.index,
+            if not skip_debug:
+                layout.append("local_variable_types")
+                local_variable_types.extend(
+                    LocalVariableTypeEntry(
+                        start=_label_for_offset(labels_by_offset, entry.start_pc),
+                        end=_label_for_offset(labels_by_offset, entry.start_pc + entry.length),
+                        name=cp.resolve_utf8(entry.name_index),
+                        signature=cp.resolve_utf8(entry.signature_index),
+                        slot=entry.index,
+                    )
+                    for entry in attribute.local_variable_type_table
                 )
-                for entry in attribute.local_variable_type_table
-            )
         else:
             layout.append("other")
             attributes.append(clone_attribute(attribute))

@@ -469,7 +469,77 @@ class ConstantPoolBuilder:
             builder._key_to_index.setdefault(key, entry.index)
             if type(entry) is Utf8Info:
                 builder._utf8_to_index.setdefault(entry.str_bytes, entry.index)
+        builder._seed_semantic_maps()
         return builder
+
+    def _seed_semantic_maps(self) -> None:
+        """Populate semantic lookup maps from the seeded pool.
+
+        This resolves string values from CP entries so that subsequent
+        ``add_class``, ``add_methodref``, etc. calls can find existing entries
+        by their semantic content rather than raw CP indices.  This is critical
+        for byte-exact roundtrips when the original pool contains duplicate
+        ``ClassInfo`` entries (both pointing at the same ``Utf8``).
+        """
+
+        def _utf8_str(index: int) -> str | None:
+            if index <= 0 or index >= len(self._pool):
+                return None
+            entry = self._pool[index]
+            if isinstance(entry, Utf8Info):
+                return decode_modified_utf8(entry.str_bytes)
+            return None
+
+        for entry in self._pool:
+            if entry is None:
+                continue
+            entry_type = type(entry)
+            if entry_type is ClassInfo:
+                class_entry = cast(ClassInfo, entry)
+                name = _utf8_str(class_entry.name_index)
+                if name is not None:
+                    self._class_name_to_index.setdefault(name, entry.index)
+            elif entry_type is StringInfo:
+                string_entry = cast(StringInfo, entry)
+                value = _utf8_str(string_entry.string_index)
+                if value is not None:
+                    self._string_value_to_index.setdefault(value, entry.index)
+            elif entry_type is NameAndTypeInfo:
+                nat_entry = cast(NameAndTypeInfo, entry)
+                name = _utf8_str(nat_entry.name_index)
+                descriptor = _utf8_str(nat_entry.descriptor_index)
+                if name is not None and descriptor is not None:
+                    self._name_and_type_to_index.setdefault((name, descriptor), entry.index)
+            elif entry_type is FieldrefInfo:
+                ref = cast(FieldrefInfo, entry)
+                class_e = self._pool[ref.class_index] if 0 < ref.class_index < len(self._pool) else None
+                nat_e = self._pool[ref.name_and_type_index] if 0 < ref.name_and_type_index < len(self._pool) else None
+                if isinstance(class_e, ClassInfo) and isinstance(nat_e, NameAndTypeInfo):
+                    cn = _utf8_str(class_e.name_index)
+                    mn = _utf8_str(nat_e.name_index)
+                    desc = _utf8_str(nat_e.descriptor_index)
+                    if cn is not None and mn is not None and desc is not None:
+                        self._fieldref_to_index.setdefault((cn, mn, desc), entry.index)
+            elif entry_type is MethodrefInfo:
+                ref = cast(MethodrefInfo, entry)
+                class_e = self._pool[ref.class_index] if 0 < ref.class_index < len(self._pool) else None
+                nat_e = self._pool[ref.name_and_type_index] if 0 < ref.name_and_type_index < len(self._pool) else None
+                if isinstance(class_e, ClassInfo) and isinstance(nat_e, NameAndTypeInfo):
+                    cn = _utf8_str(class_e.name_index)
+                    mn = _utf8_str(nat_e.name_index)
+                    desc = _utf8_str(nat_e.descriptor_index)
+                    if cn is not None and mn is not None and desc is not None:
+                        self._methodref_to_index.setdefault((cn, mn, desc), entry.index)
+            elif entry_type is InterfaceMethodrefInfo:
+                ref = cast(InterfaceMethodrefInfo, entry)
+                class_e = self._pool[ref.class_index] if 0 < ref.class_index < len(self._pool) else None
+                nat_e = self._pool[ref.name_and_type_index] if 0 < ref.name_and_type_index < len(self._pool) else None
+                if isinstance(class_e, ClassInfo) and isinstance(nat_e, NameAndTypeInfo):
+                    cn = _utf8_str(class_e.name_index)
+                    mn = _utf8_str(nat_e.name_index)
+                    desc = _utf8_str(nat_e.descriptor_index)
+                    if cn is not None and mn is not None and desc is not None:
+                        self._interface_methodref_to_index.setdefault((cn, mn, desc), entry.index)
 
     def clone(self) -> ConstantPoolBuilder:
         """Return a fast defensive copy of this builder.

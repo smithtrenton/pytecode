@@ -8,7 +8,6 @@ For every test fixture class, this module:
 
 from __future__ import annotations
 
-import os
 import zipfile
 from pathlib import Path
 
@@ -97,9 +96,7 @@ def _compare_paths(class_bytes: bytes, label: str) -> None:
                 msg_parts.append(f"  model.{attr_name}: rust={rv!r}, py={pv!r}")
 
         if len(rust_model.methods) != len(py_model.methods):
-            msg_parts.append(
-                f"  method_count: rust={len(rust_model.methods)}, py={len(py_model.methods)}"
-            )
+            msg_parts.append(f"  method_count: rust={len(rust_model.methods)}, py={len(py_model.methods)}")
 
         pytest.fail("\n".join(msg_parts))
 
@@ -221,11 +218,10 @@ def test_ldc_values_unsigned() -> None:
 
 def test_operand_types_preserved() -> None:
     """BIPUSH/SIPUSH/NEWARRAY must preserve their operand types through bridge."""
-    from pytecode.classfile.instructions import ByteValue, NewArray, ShortValue
+    from pytecode.classfile.instructions import ByteValue, NewArray
 
     classes = _compiled_fixture_classes()
     has_byte = False
-    has_short = False
     has_newarray = False
     for class_path in classes:
         class_bytes = class_path.read_bytes()
@@ -236,11 +232,32 @@ def test_operand_types_preserved() -> None:
             for item in method.code.instructions:
                 if isinstance(item, ByteValue):
                     has_byte = True
-                elif isinstance(item, ShortValue):
-                    has_short = True
                 elif isinstance(item, NewArray):
                     has_newarray = True
 
     assert has_byte, "Expected at least one ByteValue (BIPUSH) in fixture classes"
     assert has_newarray, "Expected at least one NewArray in fixture classes"
-    # ShortValue (SIPUSH) may not appear in all fixture sets — soft check
+
+
+# ---------------------------------------------------------------------------
+# Byte-exact original roundtrip
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_classes_byte_exact_original_roundtrip() -> None:
+    """Every fixture class must produce byte-exact output matching the original bytes."""
+    classes = _compiled_fixture_classes()
+    failures: list[str] = []
+    for class_path in classes:
+        original = class_path.read_bytes()
+        reader = ClassReader.from_bytes(original)
+        model = ClassModel.from_classfile(reader.class_info)
+        output = model.to_bytes()
+        if output != original:
+            failures.append(
+                f"{class_path.name}: orig={len(original)} out={len(output)} diff={len(output) - len(original)}"
+            )
+    if failures:
+        pytest.fail(
+            f"{len(failures)}/{len(classes)} fixture classes differ from original:\n" + "\n".join(failures[:10])
+        )

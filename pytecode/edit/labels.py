@@ -1002,6 +1002,21 @@ def _lower_resolved_code(
             label_offsets,
             cp,
         )
+        # Preserve empty debug tables when the original layout included them
+        if "local_variables" in code._nested_attribute_layout and local_variable_attr is None:
+            local_variable_attr = LocalVariableTableAttr(
+                attribute_name_index=cp.add_utf8("LocalVariableTable"),
+                attribute_length=2,
+                local_variable_table_length=0,
+                local_variable_table=[],
+            )
+        if "local_variable_types" in code._nested_attribute_layout and local_variable_type_attr is None:
+            local_variable_type_attr = LocalVariableTypeTableAttr(
+                attribute_name_index=cp.add_utf8("LocalVariableTypeTable"),
+                attribute_length=2,
+                local_variable_type_table_length=0,
+                local_variable_type_table=[],
+            )
 
     attributes = _ordered_nested_code_attributes(
         code,
