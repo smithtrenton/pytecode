@@ -396,6 +396,24 @@ Exit criteria:
 - rewritten archives preserve non-class resources and produce stable output paths safely,
 - archive rewrite APIs compose cleanly with Phase 4 frame recomputation and debug-info controls.
 
+#### PyO3 bridge: transform layer intentionally not bridged
+
+The Rust transform/pipeline system (`Pipeline`, `Matcher<T>`, `on_classes`,
+`on_methods`, etc.) is **not** exposed to Python via PyO3.  This is a deliberate
+design decision:
+
+- Python transforms are user-defined closures (`Callable[[ClassModel], None]`).
+  The Python `Matcher[T]` wraps Python callables, and `Pipeline.apply()` calls
+  Python callbacks.  Moving these to Rust would require crossing the PyO3 FFI
+  boundary per matcher invocation and per transform callback, which benchmarks
+  show negates any Rust performance benefit.
+- The Python transform module already has a complete implementation (21 class
+  matchers, 16 field matchers, 19 method matchers, Pipeline, on_classes/fields/
+  methods/code) that mirrors the Rust API.
+- The Rust transform system serves pure-Rust workflows (CLI, archive rewrite,
+  batch analysis) where the full 19× speedup is realized because no Python
+  objects are created.
+
 ### Phase 6: polish, optimization, and packaging
 
 **Goal:** make the Rust library production-ready on its own.
