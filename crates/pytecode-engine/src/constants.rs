@@ -310,8 +310,20 @@ impl TypePathKind {
     }
 }
 
+pub const MIN_SUPPORTED_CLASS_MAJOR: u16 = 45;
+pub const MAX_SUPPORTED_CLASS_MAJOR: u16 = 69;
+
+pub const fn class_version_supported_by_java_se_25(major: u16, minor: u16) -> bool {
+    match major {
+        45..=55 => true,
+        56..=68 => minor == 0,
+        69 => minor == 0 || minor == u16::MAX,
+        _ => false,
+    }
+}
+
 pub fn validate_class_version(major: u16, minor: u16) -> crate::error::Result<()> {
-    if major >= 56 && minor != 0 && minor != u16::MAX {
+    if !class_version_supported_by_java_se_25(major, minor) {
         return Err(crate::error::EngineError::new(
             4,
             crate::error::EngineErrorKind::InvalidVersion { major, minor },

@@ -62,6 +62,21 @@ fn invalid_magic_and_version_return_structured_errors() {
     let invalid_version = minimal_classfile_with_version(56, 1);
     let err = parse_class(&invalid_version).unwrap_err();
     assert!(matches!(err.kind, EngineErrorKind::InvalidVersion { .. }));
+
+    let old_preview_version = minimal_classfile_with_version(68, u16::MAX);
+    let err = parse_class(&old_preview_version).unwrap_err();
+    assert!(matches!(err.kind, EngineErrorKind::InvalidVersion { .. }));
+
+    let future_version = minimal_classfile_with_version(70, 0);
+    let err = parse_class(&future_version).unwrap_err();
+    assert!(matches!(err.kind, EngineErrorKind::InvalidVersion { .. }));
+}
+
+#[test]
+fn historical_and_current_preview_versions_parse_when_supported() -> TestResult<()> {
+    parse_class(&minimal_classfile_with_version(55, 3))?;
+    parse_class(&minimal_classfile_with_version(69, u16::MAX))?;
+    Ok(())
 }
 
 #[test]

@@ -4,7 +4,9 @@ use pytecode_engine::analysis::{
     vtype_from_field_descriptor_str,
 };
 use pytecode_engine::constants::MethodAccessFlags;
-use pytecode_engine::model::{ClassModel, CodeItem, CodeModel, DebugInfoPolicy};
+use pytecode_engine::model::{
+    BranchInsn, ClassModel, CodeItem, CodeModel, DebugInfoPolicy, Label, VarInsn,
+};
 use pytecode_engine::parse_class;
 use pytecode_engine::raw::{AttributeInfo, ConstantPoolEntry, Instruction};
 use std::fs;
@@ -63,6 +65,39 @@ fn method_code_named<'a>(
 
 fn code_mut(method: &mut pytecode_engine::model::MethodModel) -> &mut CodeModel {
     method.code.as_mut().expect("method should have code")
+}
+
+fn install_jsr_subroutine(code: &mut CodeModel) {
+    let subroutine = Label::named("subroutine");
+    code.instructions = vec![
+        CodeItem::Branch(BranchInsn {
+            opcode: 0xA8,
+            target: subroutine.clone(),
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0x15,
+            slot: 0,
+        }),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xAC,
+            offset: 0,
+        }),
+        CodeItem::Label(subroutine),
+        CodeItem::Var(VarInsn {
+            opcode: 0x3A,
+            slot: 1,
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0xA9,
+            slot: 1,
+        }),
+    ];
+    code.exception_handlers.clear();
+    code.line_numbers.clear();
+    code.local_variables.clear();
+    code.local_variable_types.clear();
+    code.attributes
+        .retain(|attribute| !matches!(attribute, AttributeInfo::StackMapTable(_)));
 }
 
 fn has_code_attr_named(code: &pytecode_engine::raw::CodeAttribute, name: &str) -> bool {
@@ -214,6 +249,34 @@ fn recompute_frames_allows_phase3_edit_that_used_to_fail() -> TestResult<()> {
     let branch_code = method_code_attr_named(&parsed, "branch");
     assert!(has_code_attr_named(branch_code, "StackMapTable"));
     ClassModel::from_bytes(&lowered)?;
+    Ok(())
+}
+
+#[test]
+fn recompute_frames_supports_legacy_jsr_ret_subroutines() -> TestResult<()> {
+    let bytes = fixture_bytes("ControlFlowExample.java", "ControlFlowExample.class");
+    let mut model = ClassModel::from_bytes(&bytes)?;
+    let class_name = model.name.clone();
+    let code = code_mut(method_named(&mut model, "branch"));
+    install_jsr_subroutine(code);
+
+    let cfg = build_cfg(code)?;
+    assert!(cfg.nodes.iter().any(|node| matches!(
+        code.instructions[node.code_index],
+        CodeItem::Branch(BranchInsn { opcode: 0xA8, .. })
+    )));
+
+    let frame_result = recompute_frames(
+        code,
+        &class_name,
+        "branch",
+        "(I)I",
+        MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+        None,
+    )?;
+    assert_eq!(frame_result.max_stack, 1);
+    assert!(frame_result.max_locals >= 2);
+    assert!(!frame_result.frames.is_empty());
     Ok(())
 }
 

@@ -20,6 +20,7 @@ The original implementation roadmap is complete, so the docs are organized aroun
 | Intended layered architecture and extension boundaries | [architecture/target-architecture.md](architecture/target-architecture.md) |
 | Release-quality expectations and required validation checks | [project/quality-gates.md](project/quality-gates.md) |
 | Roadmap status and delivered milestone summary | [project/roadmap.md](project/roadmap.md) |
+| Rust JVMS 25 audit, remediation status, and scoped conformance notes | [project/rust-jvms-25-audit.md](project/rust-jvms-25-audit.md) |
 
 ## Design and research docs
 

@@ -41,6 +41,8 @@ pub enum EngineErrorKind {
     InvalidModifiedUtf8 { reason: String },
     #[error("invalid descriptor: {reason}")]
     InvalidDescriptor { reason: String },
+    #[error("invalid signature: {reason}")]
+    InvalidSignature { reason: String },
     #[error("invalid attribute: {reason}")]
     InvalidAttribute { reason: String },
     #[error("invalid symbolic model: {reason}")]

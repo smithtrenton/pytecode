@@ -211,7 +211,13 @@ impl ClassModel {
             .iter()
             .map(|method| {
                 lower_method_model(
-                    method, &self.name, &mut cp, debug_info, frame_mode, resolver,
+                    method,
+                    &self.name,
+                    self.version.0,
+                    &mut cp,
+                    debug_info,
+                    frame_mode,
+                    resolver,
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -658,6 +664,7 @@ fn lower_field_model(field: &FieldModel, cp: &mut ConstantPoolBuilder) -> Result
 fn lower_method_model(
     method: &MethodModel,
     class_name: &str,
+    class_major_version: u16,
     cp: &mut ConstantPoolBuilder,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
@@ -674,7 +681,14 @@ fn lower_method_model(
         .as_ref()
         .map(|code| {
             lower_code_model(
-                code, method, class_name, cp, debug_info, frame_mode, resolver,
+                code,
+                method,
+                class_name,
+                class_major_version,
+                cp,
+                debug_info,
+                frame_mode,
+                resolver,
             )
         })
         .transpose()?;
@@ -715,6 +729,7 @@ fn lower_code_model(
     code: &CodeModel,
     method: &MethodModel,
     class_name: &str,
+    class_major_version: u16,
     cp: &mut ConstantPoolBuilder,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
@@ -792,10 +807,18 @@ fn lower_code_model(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let stack_map_table = frame_result
-        .as_ref()
-        .map(|frames| lower_stack_map_table(frames, cp, &layout.item_offsets))
-        .transpose()?;
+    let stack_map_table = match frame_result.as_ref() {
+        Some(frames) if frame_result_contains_return_address(frames) => {
+            if class_major_version >= 50 {
+                return Err(model_error(
+                    "recomputed StackMapTable cannot encode returnAddress states for jsr/ret methods in class file version 50.0 or newer",
+                ));
+            }
+            None
+        }
+        Some(frames) => Some(lower_stack_map_table(frames, cp, &layout.item_offsets)?),
+        None => None,
+    };
     let attributes = lower_nested_attributes(
         code,
         cp,
@@ -1346,6 +1369,9 @@ fn raw_verification_type(
         VType::Double => Ok(crate::raw::VerificationTypeInfo::Double),
         VType::Long => Ok(crate::raw::VerificationTypeInfo::Long),
         VType::Null => Ok(crate::raw::VerificationTypeInfo::Null),
+        VType::ReturnAddress(_) => Err(model_error(
+            "StackMapTable cannot encode returnAddress verification types",
+        )),
         VType::UninitializedThis => Ok(crate::raw::VerificationTypeInfo::UninitializedThis),
         VType::Object(class_name) => Ok(crate::raw::VerificationTypeInfo::Object {
             cpool_index: cp.add_class(class_name)?,
@@ -1359,6 +1385,16 @@ fn raw_verification_type(
             })
         }
     }
+}
+
+fn frame_result_contains_return_address(frames: &FrameComputationResult) -> bool {
+    frames.frames.iter().any(|frame| {
+        frame
+            .locals
+            .iter()
+            .chain(&frame.stack)
+            .any(|value| matches!(value, VType::ReturnAddress(_)))
+    })
 }
 
 fn lower_line_number_table(

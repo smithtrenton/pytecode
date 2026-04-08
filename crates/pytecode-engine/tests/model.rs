@@ -1,7 +1,7 @@
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
 use pytecode_engine::model::{
-    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, MethodModel,
-    mark_class_debug_info_stale, mark_method_debug_info_stale,
+    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, Label,
+    MethodModel, VarInsn, mark_class_debug_info_stale, mark_method_debug_info_stale,
 };
 use pytecode_engine::modified_utf8::decode_modified_utf8;
 use pytecode_engine::raw::{AttributeInfo, ConstantPoolEntry, Instruction};
@@ -56,6 +56,12 @@ fn strip_code_attr_named(code: &mut CodeModel, name: &str) {
 }
 
 fn has_code_attr_named(code: &CodeModel, name: &str) -> bool {
+    code.attributes
+        .iter()
+        .any(|attribute| attribute_named(attribute, name))
+}
+
+fn raw_code_attr_named(code: &pytecode_engine::raw::CodeAttribute, name: &str) -> bool {
     code.attributes
         .iter()
         .any(|attribute| attribute_named(attribute, name))
@@ -119,11 +125,63 @@ fn raw_method_code(lowered_bytes: &[u8], method_name: &str) -> Vec<Instruction> 
         .unwrap_or_else(|| panic!("raw method {method_name} not found"))
 }
 
+fn method_code_attr_named<'a>(
+    classfile: &'a pytecode_engine::raw::ClassFile,
+    method_name: &str,
+) -> &'a pytecode_engine::raw::CodeAttribute {
+    classfile
+        .methods
+        .iter()
+        .find(|method| cp_utf8(&classfile.constant_pool, method.name_index) == method_name)
+        .and_then(|method| {
+            method
+                .attributes
+                .iter()
+                .find_map(|attribute| match attribute {
+                    AttributeInfo::Code(code) => Some(code),
+                    _ => None,
+                })
+        })
+        .unwrap_or_else(|| panic!("code attribute for method {method_name} not found"))
+}
+
 fn raw_nop() -> CodeItem {
     CodeItem::Raw(Instruction::Simple {
         opcode: 0x00,
         offset: 0,
     })
+}
+
+fn install_jsr_subroutine(code: &mut CodeModel) {
+    let subroutine = Label::named("subroutine");
+    code.instructions = vec![
+        CodeItem::Branch(BranchInsn {
+            opcode: 0xA8,
+            target: subroutine.clone(),
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0x15,
+            slot: 0,
+        }),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xAC,
+            offset: 0,
+        }),
+        CodeItem::Label(subroutine),
+        CodeItem::Var(VarInsn {
+            opcode: 0x3A,
+            slot: 1,
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0xA9,
+            slot: 1,
+        }),
+    ];
+    code.exception_handlers.clear();
+    code.line_numbers.clear();
+    code.local_variables.clear();
+    code.local_variable_types.clear();
+    strip_code_attr_named(code, "StackMapTable");
 }
 
 fn first_conditional_branch_target(code: &CodeModel) -> BranchInsn {
@@ -323,6 +381,56 @@ fn table_switch_padding_recomputes_after_code_motion() {
             .any(|instruction| matches!(instruction, Instruction::TableSwitch(_)))
     );
     ClassModel::from_bytes(&lowered).expect("edited switch should re-lift");
+}
+
+#[test]
+fn legacy_jsr_ret_methods_roundtrip_with_recomputed_frames_on_old_versions() {
+    let bytes = fixture_bytes("ControlFlowExample.java", "ControlFlowExample.class");
+    let mut model = ClassModel::from_bytes(&bytes).expect("fixture should lift");
+    model.version = (49, 0);
+    let code = code_mut(method_named(&mut model, "branch"));
+    install_jsr_subroutine(code);
+
+    let lowered = model
+        .to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)
+        .expect("legacy jsr/ret method should lower with recomputed frames");
+    let parsed = parse_class(&lowered).expect("lowered bytes should parse");
+    let branch_code = method_code_attr_named(&parsed, "branch");
+    assert!(!raw_code_attr_named(branch_code, "StackMapTable"));
+    assert!(branch_code.code.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Instruction::Branch(pytecode_engine::raw::Branch { opcode: 0xA8, .. })
+                | Instruction::BranchWide { opcode: 0xC9, .. }
+        )
+    }));
+    assert!(branch_code.code.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Instruction::LocalIndex { opcode: 0xA9, .. }
+                | Instruction::Wide(pytecode_engine::raw::WideInstruction { opcode: 0xA9, .. })
+        )
+    }));
+
+    let roundtripped = ClassModel::from_bytes(&lowered).expect("lowered bytes should re-lift");
+    let lifted_code = roundtripped
+        .methods
+        .iter()
+        .find(|method| method.name == "branch")
+        .and_then(|method| method.code.as_ref())
+        .expect("re-lifted branch method should have code");
+    assert!(
+        lifted_code
+            .instructions
+            .iter()
+            .any(|item| { matches!(item, CodeItem::Branch(BranchInsn { opcode: 0xA8, .. })) })
+    );
+    assert!(
+        lifted_code
+            .instructions
+            .iter()
+            .any(|item| { matches!(item, CodeItem::Var(VarInsn { opcode: 0xA9, .. })) })
+    );
 }
 
 #[test]

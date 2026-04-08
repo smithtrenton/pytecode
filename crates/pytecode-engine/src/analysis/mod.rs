@@ -47,6 +47,7 @@ pub enum VType {
     Long,
     Double,
     Null,
+    ReturnAddress(Vec<usize>),
     Object(String),
     UninitializedThis,
     Uninitialized {
@@ -225,6 +226,10 @@ pub fn vtype_from_field_descriptor_str(descriptor: &str) -> Result<VType, crate:
 pub fn merge_vtypes(left: &VType, right: &VType, resolver: Option<&dyn ClassResolver>) -> VType {
     if left == right {
         return left.clone();
+    }
+    if let (VType::ReturnAddress(left_targets), VType::ReturnAddress(right_targets)) = (left, right)
+    {
+        return VType::ReturnAddress(merge_return_targets(left_targets, right_targets));
     }
     if matches!(left, VType::Null) && is_reference(right) {
         return right.clone();
@@ -488,10 +493,18 @@ pub fn simulate(
             )?;
         }
 
-        let next_state = simulate_item(item, &state, class_name, code_index)?;
+        let next_state = simulate_item(
+            item,
+            &state,
+            class_name,
+            code_index,
+            (node_index + 1 < cfg.nodes.len()).then_some(node_index + 1),
+        )?;
         max_stack = max_stack.max(next_state.stack_depth());
         max_locals = max_locals.max(next_state.locals.len());
-        for successor in &cfg.nodes[node_index].normal_successors {
+        let normal_successors = dynamic_successors(item, &state)
+            .unwrap_or_else(|| cfg.nodes[node_index].normal_successors.clone());
+        for successor in &normal_successors {
             propagate(
                 *successor,
                 next_state.clone(),
@@ -640,6 +653,7 @@ fn simulate_item(
     state: &FrameState,
     class_name: &str,
     code_index: usize,
+    next_node: Option<usize>,
 ) -> Result<FrameState, AnalysisError> {
     match item {
         CodeItem::Raw(raw) => simulate_raw_opcode(raw.opcode(), state, raw, code_index),
@@ -652,7 +666,7 @@ fn simulate_item(
         CodeItem::Type(insn) => simulate_type(insn, state, code_index),
         CodeItem::Ldc(insn) => simulate_ldc(insn, state),
         CodeItem::MultiANewArray(insn) => simulate_multianewarray(insn, state),
-        CodeItem::Branch(branch) => simulate_branch(branch, state),
+        CodeItem::Branch(branch) => simulate_branch(branch, state, next_node),
         CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_) => {
             let (next, _) = state.pop(1)?;
             Ok(next)
@@ -687,11 +701,27 @@ fn simulate_var(var: &VarInsn, state: &FrameState) -> Result<FrameState, Analysi
             Ok(next.set_local(var.slot as usize, VType::Double))
         }
         0x3A => {
-            let (next, _) = state.pop(1)?;
-            let value = state.peek(0)?.clone();
+            let (next, popped) = state.pop(1)?;
+            let value = popped
+                .first()
+                .cloned()
+                .ok_or(AnalysisError::StackUnderflow {
+                    needed: 1,
+                    available: 0,
+                })?;
             Ok(next.set_local(var.slot as usize, value))
         }
-        0xA9 => Err(AnalysisError::UnsupportedInstruction { opcode: 0xA9 }),
+        0xA9 => {
+            let value = state.get_local(var.slot as usize)?;
+            if matches!(value, VType::ReturnAddress(targets) if !targets.is_empty()) {
+                Ok(state.clone())
+            } else {
+                Err(AnalysisError::InvalidLocal {
+                    index: var.slot as usize,
+                    reason: "ret requires returnAddress local".to_owned(),
+                })
+            }
+        }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
     }
 }
@@ -853,19 +883,36 @@ fn simulate_multianewarray(
     Ok(next.push([VType::Object(insn.descriptor.clone())]))
 }
 
-fn simulate_branch(branch: &BranchInsn, state: &FrameState) -> Result<FrameState, AnalysisError> {
+fn simulate_branch(
+    branch: &BranchInsn,
+    state: &FrameState,
+    next_node: Option<usize>,
+) -> Result<FrameState, AnalysisError> {
     let pops = match branch.opcode {
         0x99..=0x9E | 0xC6 | 0xC7 => 1,
         0x9F..=0xA6 => 2,
         0xA7 => 0,
-        0xA8 => {
-            return Err(AnalysisError::UnsupportedInstruction {
-                opcode: branch.opcode,
-            });
-        }
+        0xA8 => return simulate_jsr(state, next_node),
         opcode => return Err(AnalysisError::UnsupportedInstruction { opcode }),
     };
     Ok(state.pop(pops)?.0)
+}
+
+fn simulate_jsr(state: &FrameState, next_node: Option<usize>) -> Result<FrameState, AnalysisError> {
+    let return_target = next_node.ok_or_else(|| AnalysisError::InvalidControlFlow {
+        reason: "jsr/jsr_w requires a reachable continuation instruction".to_owned(),
+    })?;
+    Ok(state.push([VType::ReturnAddress(vec![return_target])]))
+}
+
+fn dynamic_successors(item: &CodeItem, state: &FrameState) -> Option<Vec<usize>> {
+    match item {
+        CodeItem::Var(var) if var.opcode == 0xA9 => match state.get_local(var.slot as usize) {
+            Ok(VType::ReturnAddress(targets)) => Some(targets.clone()),
+            _ => Some(Vec::new()),
+        },
+        _ => None,
+    }
 }
 
 fn simulate_raw_opcode(
@@ -1091,15 +1138,28 @@ fn terminates_block(item: &CodeItem) -> bool {
 fn is_terminal_item(item: &CodeItem) -> bool {
     matches!(
         item,
-        CodeItem::Raw(crate::raw::Instruction::Simple {
-            opcode: 0xAC..=0xB1 | 0xBF,
-            ..
-        })
+        CodeItem::Var(VarInsn { opcode: 0xA9, .. })
+            | CodeItem::Raw(crate::raw::Instruction::Simple {
+                opcode: 0xAC..=0xB1 | 0xBF,
+                ..
+            })
     )
 }
 
 fn is_unconditional_branch(opcode: u8) -> bool {
-    matches!(opcode, 0xA7)
+    matches!(opcode, 0xA7 | 0xA8)
+}
+
+fn merge_return_targets(left: &[usize], right: &[usize]) -> Vec<usize> {
+    let mut targets = left.to_vec();
+    for target in right {
+        if !targets.contains(target) {
+            targets.push(*target);
+        }
+    }
+    targets.sort_unstable();
+    targets.dedup();
+    targets
 }
 
 fn descriptor_component(descriptor: &FieldDescriptor) -> String {

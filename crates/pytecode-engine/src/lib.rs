@@ -10,6 +10,7 @@ pub mod model;
 pub mod modified_utf8;
 pub mod raw;
 pub mod reader;
+pub mod signatures;
 pub mod stages;
 pub mod transform;
 pub mod writer;
