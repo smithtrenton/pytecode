@@ -228,9 +228,13 @@ pub(crate) fn operand_kind(opcode: u8) -> Result<OperandKind> {
         0xC5 => OperandKind::MultiANewArray,
         0xAA => OperandKind::TableSwitch,
         0xAB => OperandKind::LookupSwitch,
-        0x00..=0x0F | 0x1A..=0x35 | 0x3B..=0x83 | 0x85..=0x98 | 0xAC..=0xB1 | 0xBE..=0xC3 => {
-            OperandKind::Simple
-        }
+        0x00..=0x0F
+        | 0x1A..=0x35
+        | 0x3B..=0x83
+        | 0x85..=0x98
+        | 0xAC..=0xB1
+        | 0xBE..=0xC3
+        | 0xCA => OperandKind::Simple,
         _ => {
             return Err(EngineError::new(
                 0,

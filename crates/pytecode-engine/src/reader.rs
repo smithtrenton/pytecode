@@ -69,7 +69,7 @@ impl<'a> ClassReader<'a> {
         if constant_pool_count == 0 {
             return Err(EngineError::new(
                 self.reader.offset(),
-                EngineErrorKind::InvalidWriterState {
+                EngineErrorKind::InvalidAttribute {
                     reason: "constant_pool_count must be at least 1".to_owned(),
                 },
             ));
@@ -335,6 +335,17 @@ impl<'a> ClassReader<'a> {
                 let max_stack = payload_reader.read_u2()?;
                 let max_locals = payload_reader.read_u2()?;
                 let code_length = payload_reader.read_u4()?;
+                if code_length >= 65536 {
+                    return Err(EngineError::new(
+                        payload_reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "code_length {} exceeds JVMS maximum of 65535",
+                                code_length
+                            ),
+                        },
+                    ));
+                }
                 let code_bytes = payload_reader.read_bytes(code_length as usize)?;
                 let code = read_code_bytes(code_bytes)?;
                 let exception_table_length = payload_reader.read_u2()? as usize;
@@ -989,10 +1000,24 @@ impl<'a> ClassReader<'a> {
                 name_index: self.reader.read_u2()?,
                 descriptor_index: self.reader.read_u2()?,
             }),
-            ConstantPoolTag::MethodHandle => ConstantPoolEntry::MethodHandle(MethodHandleInfo {
-                reference_kind: self.reader.read_u1()?,
-                reference_index: self.reader.read_u2()?,
-            }),
+            ConstantPoolTag::MethodHandle => {
+                let reference_kind = self.reader.read_u1()?;
+                if !(1..=9).contains(&reference_kind) {
+                    return Err(EngineError::new(
+                        self.reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "MethodHandle reference_kind {} must be in range 1-9",
+                                reference_kind
+                            ),
+                        },
+                    ));
+                }
+                ConstantPoolEntry::MethodHandle(MethodHandleInfo {
+                    reference_kind,
+                    reference_index: self.reader.read_u2()?,
+                })
+            }
             ConstantPoolTag::MethodType => ConstantPoolEntry::MethodType(MethodTypeInfo {
                 descriptor_index: self.reader.read_u2()?,
             }),
@@ -1088,18 +1113,45 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 value: reader.read_i1()?,
             },
             crate::raw::instructions::OperandKind::InvokeDynamic => {
+                let index = reader.read_u2()?;
+                let reserved = reader.read_u2()?;
+                if reserved != 0 {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "invokedynamic reserved bytes must be zero, got {}",
+                                reserved
+                            ),
+                        },
+                    ));
+                }
                 Instruction::InvokeDynamic(InvokeDynamicInsn {
                     offset,
-                    index: reader.read_u2()?,
-                    reserved: reader.read_u2()?,
+                    index,
+                    reserved,
                 })
             }
             crate::raw::instructions::OperandKind::InvokeInterface => {
+                let index = reader.read_u2()?;
+                let count = reader.read_u1()?;
+                let reserved = reader.read_u1()?;
+                if reserved != 0 {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "invokeinterface reserved byte must be zero, got {}",
+                                reserved
+                            ),
+                        },
+                    ));
+                }
                 Instruction::InvokeInterface(InvokeInterfaceInsn {
                     offset,
-                    index: reader.read_u2()?,
-                    count: reader.read_u1()?,
-                    reserved: reader.read_u1()?,
+                    index,
+                    count,
+                    reserved,
                 })
             }
             crate::raw::instructions::OperandKind::NewArray => {
@@ -1116,7 +1168,19 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 let padding = (4 - ((offset + 1) % 4)) % 4;
                 reader.read_bytes(padding as usize)?;
                 let default_offset = reader.read_i4()?;
-                let pair_count = reader.read_u4()? as usize;
+                let pair_count = reader.read_u4()?;
+                if pair_count > 65536 {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "lookupswitch npairs {} exceeds maximum of 65536",
+                                pair_count
+                            ),
+                        },
+                    ));
+                }
+                let pair_count = pair_count as usize;
                 let pairs = (0..pair_count)
                     .map(|_| {
                         Ok(MatchOffsetPair {
@@ -1140,6 +1204,13 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 let count = high
                     .checked_sub(low)
                     .and_then(|delta| delta.checked_add(1))
+                    .and_then(|c| {
+                        if (0..=65536).contains(&c) {
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
                     .ok_or_else(|| {
                         EngineError::new(
                             reader.offset(),

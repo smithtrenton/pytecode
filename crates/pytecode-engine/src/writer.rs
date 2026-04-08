@@ -46,7 +46,18 @@ pub fn write_class(classfile: &ClassFile) -> Result<Vec<u8>> {
     writer.write_u2(classfile.minor_version);
     writer.write_u2(classfile.major_version);
 
-    writer.write_u2(classfile.constant_pool.len() as u16);
+    let cp_len = u16::try_from(classfile.constant_pool.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidWriterState {
+                reason: format!(
+                    "constant pool count {} exceeds u16::MAX",
+                    classfile.constant_pool.len()
+                ),
+            },
+        )
+    })?;
+    writer.write_u2(cp_len);
     for entry in iter_constant_pool_entries(&classfile.constant_pool)? {
         write_constant_pool_entry(&mut writer, entry);
     }
@@ -54,17 +65,44 @@ pub fn write_class(classfile: &ClassFile) -> Result<Vec<u8>> {
     writer.write_u2(classfile.access_flags.bits());
     writer.write_u2(classfile.this_class);
     writer.write_u2(classfile.super_class);
-    writer.write_u2(classfile.interfaces.len() as u16);
+    let interfaces_len = u16::try_from(classfile.interfaces.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidWriterState {
+                reason: format!(
+                    "interfaces count {} exceeds u16::MAX",
+                    classfile.interfaces.len()
+                ),
+            },
+        )
+    })?;
+    writer.write_u2(interfaces_len);
     for interface in &classfile.interfaces {
         writer.write_u2(*interface);
     }
 
-    writer.write_u2(classfile.fields.len() as u16);
+    let fields_len = u16::try_from(classfile.fields.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidWriterState {
+                reason: format!("fields count {} exceeds u16::MAX", classfile.fields.len()),
+            },
+        )
+    })?;
+    writer.write_u2(fields_len);
     for field in &classfile.fields {
         write_field_info(&mut writer, field)?;
     }
 
-    writer.write_u2(classfile.methods.len() as u16);
+    let methods_len = u16::try_from(classfile.methods.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidWriterState {
+                reason: format!("methods count {} exceeds u16::MAX", classfile.methods.len()),
+            },
+        )
+    })?;
+    writer.write_u2(methods_len);
     for method in &classfile.methods {
         write_method_info(&mut writer, method)?;
     }
@@ -270,7 +308,18 @@ fn write_attribute(writer: &mut ByteWriter, attribute: &AttributeInfo) -> Result
     }
     let payload_bytes = payload.into_bytes();
     writer.write_u2(attribute.attribute_name_index());
-    writer.write_u4(payload_bytes.len() as u32);
+    let payload_len = u32::try_from(payload_bytes.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidWriterState {
+                reason: format!(
+                    "attribute payload length {} exceeds u32::MAX",
+                    payload_bytes.len()
+                ),
+            },
+        )
+    })?;
+    writer.write_u4(payload_len);
     writer.write_bytes(&payload_bytes);
     Ok(())
 }
