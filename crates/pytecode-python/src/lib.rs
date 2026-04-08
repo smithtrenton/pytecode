@@ -11,6 +11,7 @@ use std::path::PathBuf;
 mod analysis;
 mod attributes;
 mod model;
+mod transforms;
 
 create_exception!(
     pytecode,
@@ -2221,6 +2222,9 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyClassFile>()?;
     module.add_class::<PyClassReader>()?;
     module.add_class::<PyClassWriter>()?;
+    module.add_class::<transforms::PyClassMatcher>()?;
+    module.add_class::<transforms::PyFieldMatcher>()?;
+    module.add_class::<transforms::PyMethodMatcher>()?;
     module.add_function(wrap_pyfunction!(backend_info, module)?)?;
     model::register(py, module)?;
     analysis::register(py, module)?;

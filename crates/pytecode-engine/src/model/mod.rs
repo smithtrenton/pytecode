@@ -103,6 +103,23 @@ impl std::fmt::Display for NestedCodeAttributeLayout {
 }
 
 impl CodeModel {
+    /// Create a new empty `CodeModel` for testing or programmatic construction.
+    pub fn new(max_stack: u16, max_locals: u16, debug_info_state: DebugInfoState) -> Self {
+        Self {
+            max_stack,
+            max_locals,
+            instructions: Vec::new(),
+            exception_handlers: Vec::new(),
+            line_numbers: Vec::new(),
+            local_variables: Vec::new(),
+            local_variable_types: Vec::new(),
+            attributes: Vec::new(),
+            debug_info_state,
+            nested_attribute_layout: Vec::new(),
+            original_code_shape: None,
+        }
+    }
+
     pub fn nested_attribute_layout(&self) -> &[NestedCodeAttributeLayout] {
         &self.nested_attribute_layout
     }
@@ -118,6 +135,30 @@ enum MethodAttributeLayout {
 struct OriginalCodeShape {
     instructions: Vec<CodeItem>,
     exception_handlers: Vec<ExceptionHandler>,
+}
+
+impl MethodModel {
+    /// Create a new `MethodModel` for testing or programmatic construction.
+    pub fn new(
+        access_flags: MethodAccessFlags,
+        name: String,
+        descriptor: String,
+        code: Option<CodeModel>,
+        attributes: Vec<AttributeInfo>,
+    ) -> Self {
+        let mut attribute_layout = Vec::new();
+        if code.is_some() {
+            attribute_layout.push(MethodAttributeLayout::Code);
+        }
+        Self {
+            access_flags,
+            name,
+            descriptor,
+            code,
+            attributes,
+            attribute_layout,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1340,9 +1381,7 @@ fn lower_nested_attributes(
     {
         attributes.push(attribute);
     }
-    if !stack_map_placed
-        && let Some(attribute) = stack_map_table
-    {
+    if !stack_map_placed && let Some(attribute) = stack_map_table {
         attributes.push(attribute);
     }
     Ok(attributes)

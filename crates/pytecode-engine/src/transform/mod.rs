@@ -1,3 +1,5 @@
+pub mod matcher_spec;
+
 use crate::Result;
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
 use crate::model::{ClassModel, CodeModel, FieldModel, MethodModel};
