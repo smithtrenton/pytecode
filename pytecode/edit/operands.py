@@ -226,7 +226,7 @@ class LdcInt:
     """Integer constant for ``ldc`` / ``ldc_w`` (CONSTANT_Integer, §4.4.4).
 
     Attributes:
-        value: The signed 32-bit integer constant.
+        value: The raw unsigned 32-bit value (JVMS u4 ``bytes`` field).
     """
 
     value: int
@@ -252,7 +252,7 @@ class LdcLong:
     """Long constant for ``ldc2_w`` (CONSTANT_Long, §4.4.5).
 
     Attributes:
-        value: The signed 64-bit integer constant.
+        value: The raw unsigned 64-bit value (JVMS u4 ``high_bytes`` << 32 | u4 ``low_bytes``).
     """
 
     value: int

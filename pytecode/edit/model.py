@@ -322,7 +322,7 @@ class ClassModel:
             ]
             model.constant_pool = ConstantPoolBuilder.from_pool(py_pool)
             return model
-        except (ImportError, Exception):
+        except ImportError, Exception:
             pass
         reader = ClassReader.from_bytes(data)
         return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
@@ -911,9 +911,7 @@ def _resolve_ldc_value(cp: ConstantPoolBuilder, index: int) -> LdcValue:
     if isinstance(entry, FloatInfo):
         return LdcFloat(entry.value_bytes)
     if isinstance(entry, LongInfo):
-        unsigned = (entry.high_bytes << 32) | (entry.low_bytes & 0xFFFFFFFF)
-        value = unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
-        return LdcLong(value)
+        return LdcLong((entry.high_bytes << 32) | (entry.low_bytes & 0xFFFFFFFF))
     if isinstance(entry, DoubleInfo):
         return LdcDouble(entry.high_bytes, entry.low_bytes)
     if isinstance(entry, StringInfo):

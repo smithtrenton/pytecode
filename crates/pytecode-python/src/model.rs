@@ -126,8 +126,24 @@ fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
             dict.set_item("label", wrap_label(py, label)?)?;
         }
         CodeItem::Raw(insn) => {
-            dict.set_item("type", "raw")?;
             dict.set_item("opcode", insn.opcode())?;
+            match insn {
+                pytecode_engine::raw::Instruction::Byte { value, .. } => {
+                    dict.set_item("type", "byte")?;
+                    dict.set_item("value", *value)?;
+                }
+                pytecode_engine::raw::Instruction::Short { value, .. } => {
+                    dict.set_item("type", "short")?;
+                    dict.set_item("value", *value)?;
+                }
+                pytecode_engine::raw::Instruction::NewArray(na) => {
+                    dict.set_item("type", "newarray")?;
+                    dict.set_item("atype", na.atype as u8)?;
+                }
+                _ => {
+                    dict.set_item("type", "raw")?;
+                }
+            }
         }
         CodeItem::Field(f) => {
             dict.set_item("type", "field")?;
@@ -367,6 +383,15 @@ impl PyCodeModel {
             DebugInfoState::Stale => "stale",
         }
     }
+
+    #[getter]
+    fn nested_attribute_layout(&self) -> Vec<String> {
+        self.inner
+            .nested_attribute_layout()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -488,13 +513,13 @@ impl PyConstantPoolBuilder {
             .map_err(crate::engine_error_to_py)
     }
 
-    fn add_integer(&mut self, value: i32) -> PyResult<u16> {
+    fn add_integer(&mut self, value: u32) -> PyResult<u16> {
         self.inner
             .add_integer(value)
             .map_err(crate::engine_error_to_py)
     }
 
-    fn add_long(&mut self, value: i64) -> PyResult<u16> {
+    fn add_long(&mut self, value: u64) -> PyResult<u16> {
         self.inner
             .add_long(value)
             .map_err(crate::engine_error_to_py)

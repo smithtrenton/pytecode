@@ -272,9 +272,9 @@ impl ConstantPoolBuilder {
         self.add_entry(ConstantPoolEntry::Utf8(Utf8Info { bytes }))
     }
 
-    pub fn add_integer(&mut self, value: i32) -> Result<u16> {
+    pub fn add_integer(&mut self, value: u32) -> Result<u16> {
         self.add_entry(ConstantPoolEntry::Integer(IntegerInfo {
-            value_bytes: value as u32,
+            value_bytes: value,
         }))
     }
 
@@ -284,11 +284,10 @@ impl ConstantPoolBuilder {
         }))
     }
 
-    pub fn add_long(&mut self, value: i64) -> Result<u16> {
-        let raw = value as u64;
+    pub fn add_long(&mut self, value: u64) -> Result<u16> {
         self.add_entry(ConstantPoolEntry::Long(LongInfo {
-            high_bytes: (raw >> 32) as u32,
-            low_bytes: raw as u32,
+            high_bytes: (value >> 32) as u32,
+            low_bytes: value as u32,
         }))
     }
 

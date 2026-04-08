@@ -20,7 +20,14 @@ from ..classfile.attributes import (
     UnimplementedAttr,
 )
 from ..classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
-from ..classfile.instructions import InsnInfo, InsnInfoType
+from ..classfile.instructions import (
+    ArrayType,
+    ByteValue,
+    InsnInfo,
+    InsnInfoType,
+    NewArray,
+    ShortValue,
+)
 from .constant_pool_builder import ConstantPoolBuilder
 from .debug_info import DebugInfoState
 from .labels import (
@@ -215,6 +222,27 @@ def _convert_code_item(
         opcode: int = item["opcode"]
         return InsnInfo(type=InsnInfoType(opcode), bytecode_offset=-1)
 
+    if kind == "byte":
+        return ByteValue(
+            type=InsnInfoType(item["opcode"]),
+            bytecode_offset=-1,
+            value=item["value"],
+        )
+
+    if kind == "short":
+        return ShortValue(
+            type=InsnInfoType(item["opcode"]),
+            bytecode_offset=-1,
+            value=item["value"],
+        )
+
+    if kind == "newarray":
+        return NewArray(
+            type=InsnInfoType.NEWARRAY,
+            bytecode_offset=-1,
+            atype=ArrayType(item["atype"]),
+        )
+
     if kind == "field":
         return FieldInsn(
             InsnInfoType(item["opcode"]),
@@ -279,10 +307,7 @@ def _convert_code_item(
     if kind == "lookupswitch":
         return LookupSwitchInsn(
             default_target=_convert_rust_label(item["default_target"], label_map),
-            pairs=[
-                (pair[0], _convert_rust_label(pair[1], label_map))
-                for pair in item["pairs"]
-            ],
+            pairs=[(pair[0], _convert_rust_label(pair[1], label_map)) for pair in item["pairs"]],
         )
 
     if kind == "tableswitch":
@@ -290,9 +315,7 @@ def _convert_code_item(
             default_target=_convert_rust_label(item["default_target"], label_map),
             low=item["low"],
             high=item["high"],
-            targets=[
-                _convert_rust_label(t, label_map) for t in item["targets"]
-            ],
+            targets=[_convert_rust_label(t, label_map) for t in item["targets"]],
         )
 
     raise ValueError(f"unknown code item type: {kind!r}")
@@ -302,9 +325,7 @@ def _convert_code_model(rust_code: Any, label_map: dict[Any, Label]) -> Any:
     """Convert a RustCodeModel to a Python CodeModel dict of args."""
     from .model import CodeModel
 
-    instructions = [
-        _convert_code_item(item, label_map) for item in rust_code.instructions
-    ]
+    instructions = [_convert_code_item(item, label_map) for item in rust_code.instructions]
     exception_handlers = [
         ExceptionHandler(
             start=_convert_rust_label(eh.start, label_map),
@@ -341,10 +362,17 @@ def _convert_code_model(rust_code: Any, label_map: dict[Any, Label]) -> Any:
         )
         for lvt in rust_code.local_variable_types
     ]
-    debug_state = (
-        DebugInfoState.FRESH
-        if rust_code.debug_info_state == "fresh"
-        else DebugInfoState.STALE
+    debug_state = DebugInfoState.FRESH if rust_code.debug_info_state == "fresh" else DebugInfoState.STALE
+    # Rust reports "stack_map_table" in layout; Python lowerer treats it as "other"
+    _LAYOUT_MAP: dict[str, str] = {
+        "line_numbers": "line_numbers",
+        "local_variables": "local_variables",
+        "local_variable_types": "local_variable_types",
+        "stack_map_table": "other",
+        "other": "other",
+    }
+    layout: tuple[str, ...] = tuple(
+        _LAYOUT_MAP[s] if s in _LAYOUT_MAP else s for s in rust_code.nested_attribute_layout
     )
     return CodeModel(
         max_stack=rust_code.max_stack,
@@ -355,6 +383,7 @@ def _convert_code_model(rust_code: Any, label_map: dict[Any, Label]) -> Any:
         local_variables=local_variables,
         local_variable_types=local_variable_types,
         attributes=[_convert_attribute(a) for a in rust_code.attributes],
+        _nested_attribute_layout=layout,
         debug_info_state=debug_state,
     )
 

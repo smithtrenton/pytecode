@@ -1157,9 +1157,8 @@ def _lower_ldc_value(value: LdcValue, cp: ConstantPoolBuilder) -> int:
     if isinstance(value, LdcFloat):
         return cp.add_float(value.raw_bits)
     if isinstance(value, LdcLong):
-        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
-        high = (unsigned >> 32) & 0xFFFFFFFF
-        low = unsigned & 0xFFFFFFFF
+        high = (value.value >> 32) & 0xFFFFFFFF
+        low = value.value & 0xFFFFFFFF
         return cp.add_long(high, low)
     if isinstance(value, LdcDouble):
         return cp.add_double(value.high_bytes, value.low_bytes)
@@ -1180,9 +1179,8 @@ def _find_existing_ldc_index(value: LdcValue, cp: ConstantPoolBuilder) -> int | 
     if isinstance(value, LdcFloat):
         return cp.find_float(value.raw_bits)
     if isinstance(value, LdcLong):
-        unsigned = value.value & 0xFFFFFFFFFFFFFFFF
-        high = (unsigned >> 32) & 0xFFFFFFFF
-        low = unsigned & 0xFFFFFFFF
+        high = (value.value >> 32) & 0xFFFFFFFF
+        low = value.value & 0xFFFFFFFF
         return cp.find_long(high, low)
     if isinstance(value, LdcDouble):
         return cp.find_double(value.high_bytes, value.low_bytes)

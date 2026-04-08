@@ -146,3 +146,4 @@ dmypy.json
 
 # uv
 uv.lock
+pytecode/_rust.pdb

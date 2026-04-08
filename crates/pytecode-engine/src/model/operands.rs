@@ -58,9 +58,9 @@ pub struct InvokeDynamicInsn {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LdcValue {
-    Int(i32),
+    Int(u32),
     FloatBits(u32),
-    Long(i64),
+    Long(u64),
     DoubleBits(u64),
     String(String),
     Class(String),

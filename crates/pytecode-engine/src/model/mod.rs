@@ -82,11 +82,30 @@ pub enum FrameComputationMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NestedCodeAttributeLayout {
+pub enum NestedCodeAttributeLayout {
     Other,
     LineNumbers,
     LocalVariables,
     LocalVariableTypes,
+    StackMapTable,
+}
+
+impl std::fmt::Display for NestedCodeAttributeLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Other => write!(f, "other"),
+            Self::LineNumbers => write!(f, "line_numbers"),
+            Self::LocalVariables => write!(f, "local_variables"),
+            Self::LocalVariableTypes => write!(f, "local_variable_types"),
+            Self::StackMapTable => write!(f, "stack_map_table"),
+        }
+    }
+}
+
+impl CodeModel {
+    pub fn nested_attribute_layout(&self) -> &[NestedCodeAttributeLayout] {
+        &self.nested_attribute_layout
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,6 +366,10 @@ fn lift_code_model(code: &CodeAttribute, cp: &ConstantPoolBuilder) -> Result<Cod
                 local_variable_types = entries;
                 layout.push(NestedCodeAttributeLayout::LocalVariableTypes);
             }
+            ParsedDebugAttribute::StackMapTable(attribute) => {
+                attributes.push(attribute);
+                layout.push(NestedCodeAttributeLayout::StackMapTable);
+            }
             ParsedDebugAttribute::Other(attribute) => {
                 attributes.push(attribute);
                 layout.push(NestedCodeAttributeLayout::Other);
@@ -365,7 +388,6 @@ fn lift_code_model(code: &CodeAttribute, cp: &ConstantPoolBuilder) -> Result<Cod
         label_for_existing_offset(&mut labels_by_offset, &entry.start);
         label_for_existing_offset(&mut labels_by_offset, &entry.end);
     }
-    label_for_offset(&mut labels_by_offset, end_offset);
 
     let mut instructions = Vec::new();
     for instruction in &code.code {
@@ -585,11 +607,11 @@ fn lower_cp_index_item(opcode: u8, index: u16, cp: &ConstantPoolBuilder) -> Resu
 fn lift_ldc_value(index: u16, cp: &ConstantPoolBuilder) -> Result<LdcValue> {
     let entry = cp.entry(index)?;
     match entry {
-        ConstantPoolEntry::Integer(info) => Ok(LdcValue::Int(info.value_bytes as i32)),
+        ConstantPoolEntry::Integer(info) => Ok(LdcValue::Int(info.value_bytes)),
         ConstantPoolEntry::Float(info) => Ok(LdcValue::FloatBits(info.value_bytes)),
         ConstantPoolEntry::Long(info) => {
             let raw = ((info.high_bytes as u64) << 32) | (info.low_bytes as u64);
-            Ok(LdcValue::Long(raw as i64))
+            Ok(LdcValue::Long(raw))
         }
         ConstantPoolEntry::Double(info) => {
             let raw = ((info.high_bytes as u64) << 32) | (info.low_bytes as u64);
@@ -1259,6 +1281,7 @@ fn lower_nested_attributes(
                 && stack_map_attr_name(attribute).is_some())
         })
         .cloned();
+    let mut stack_map_placed = false;
     let mut attributes = Vec::new();
     for item in &code.nested_attribute_layout {
         match item {
@@ -1279,6 +1302,16 @@ fn lower_nested_attributes(
             }
             NestedCodeAttributeLayout::LocalVariableTypes => {
                 if let Some(attribute) = local_variable_type_attr.clone() {
+                    attributes.push(attribute);
+                }
+            }
+            NestedCodeAttributeLayout::StackMapTable => {
+                if frame_mode == FrameComputationMode::Recompute {
+                    if let Some(ref attribute) = stack_map_table {
+                        attributes.push(attribute.clone());
+                        stack_map_placed = true;
+                    }
+                } else if let Some(attribute) = other_iter.next() {
                     attributes.push(attribute);
                 }
             }
@@ -1307,7 +1340,9 @@ fn lower_nested_attributes(
     {
         attributes.push(attribute);
     }
-    if let Some(attribute) = stack_map_table {
+    if !stack_map_placed
+        && let Some(attribute) = stack_map_table
+    {
         attributes.push(attribute);
     }
     Ok(attributes)
@@ -1520,6 +1555,7 @@ enum ParsedDebugAttribute {
     LineNumbers(Vec<LineNumberEntry>),
     LocalVariables(Vec<LocalVariableEntry>),
     LocalVariableTypes(Vec<LocalVariableTypeEntry>),
+    StackMapTable(AttributeInfo),
     Other(AttributeInfo),
 }
 
@@ -1588,8 +1624,14 @@ fn parse_debug_attribute(
             "LocalVariableTypeTable" => Ok(ParsedDebugAttribute::LocalVariableTypes(
                 parse_local_variable_type_table(&unknown.info, cp, labels_by_offset)?,
             )),
+            "StackMapTable" | "StackMap" => {
+                Ok(ParsedDebugAttribute::StackMapTable(attribute.clone()))
+            }
             _ => Ok(ParsedDebugAttribute::Other(attribute.clone())),
         },
+        _ if stack_map_attr_name(attribute).is_some() => {
+            Ok(ParsedDebugAttribute::StackMapTable(attribute.clone()))
+        }
         _ => Ok(ParsedDebugAttribute::Other(attribute.clone())),
     }
 }
