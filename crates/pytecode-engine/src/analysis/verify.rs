@@ -5,10 +5,12 @@ use crate::constants::{
 };
 use crate::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
 use crate::error::EngineErrorKind;
-use crate::model::{ClassModel, CodeModel};
+use crate::model::{
+    ClassModel, CodeItem, CodeModel, DebugInfoState, FieldModel, Label, MethodModel,
+};
 use crate::raw::{AttributeInfo, ClassFile, ConstantPoolEntry};
 use crate::signatures::{parse_class_signature, parse_field_signature, parse_method_signature};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -59,7 +61,21 @@ impl Diagnostic {
             location,
         }
     }
+
+    fn warning(category: Category, message: impl Into<String>, location: Location) -> Self {
+        Self {
+            severity: Severity::Warning,
+            category,
+            message: message.into(),
+            location,
+        }
+    }
 }
+
+/// Returned when `fail_fast` is enabled and the first ERROR-severity
+/// diagnostic is encountered.
+#[derive(Debug)]
+pub struct FailFastError(pub Diagnostic);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AttributeOwner {
@@ -92,7 +108,81 @@ impl AttributeOwner {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Name validation helpers (shared between classfile and classmodel verifiers)
+// ---------------------------------------------------------------------------
+
+fn is_valid_internal_name(name: &str) -> bool {
+    if name.is_empty() || name.starts_with('/') || name.ends_with('/') || name.contains("//") {
+        return false;
+    }
+    !name.contains(['.', ';', '['])
+}
+
+fn is_valid_unqualified_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    !name.contains(['.', ';', '[', '/'])
+}
+
+fn is_valid_method_name(name: &str) -> bool {
+    if name == "<init>" || name == "<clinit>" {
+        return true;
+    }
+    if name.is_empty() {
+        return false;
+    }
+    !name.contains(['.', ';', '[', '/', '<', '>'])
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic collector with optional fail-fast support
+// ---------------------------------------------------------------------------
+
+struct DiagnosticCollector {
+    diagnostics: Vec<Diagnostic>,
+    fail_fast: bool,
+    had_error: bool,
+}
+
+impl DiagnosticCollector {
+    fn new(fail_fast: bool) -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            fail_fast,
+            had_error: false,
+        }
+    }
+
+    /// Push a diagnostic. Returns `Err(())` if fail-fast is enabled and this
+    /// was the first ERROR, signalling the caller to stop immediately.
+    fn push(&mut self, d: Diagnostic) -> Result<(), ()> {
+        let is_error = d.severity == Severity::Error;
+        self.diagnostics.push(d);
+        if is_error {
+            self.had_error = true;
+            if self.fail_fast {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
+    fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.diagnostics
+    }
+}
+
 pub fn verify_classfile(classfile: &ClassFile) -> Vec<Diagnostic> {
+    verify_classfile_inner(classfile, false)
+}
+
+pub fn verify_classfile_with_options(classfile: &ClassFile, fail_fast: bool) -> Vec<Diagnostic> {
+    verify_classfile_inner(classfile, fail_fast)
+}
+
+fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let class_name = cp_class_name(classfile, classfile.this_class).ok();
     let class_location = Location {
@@ -277,88 +367,607 @@ pub fn verify_classmodel(
     model: &ClassModel,
     resolver: Option<&dyn ClassResolver>,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+    verify_classmodel_inner(model, resolver, false)
+}
+
+pub fn verify_classmodel_with_options(
+    model: &ClassModel,
+    resolver: Option<&dyn ClassResolver>,
+    fail_fast: bool,
+) -> Vec<Diagnostic> {
+    verify_classmodel_inner(model, resolver, fail_fast)
+}
+
+fn verify_classmodel_inner(
+    model: &ClassModel,
+    resolver: Option<&dyn ClassResolver>,
+    fail_fast: bool,
+) -> Vec<Diagnostic> {
+    let mut dc = DiagnosticCollector::new(fail_fast);
     let class_location = Location {
         class_name: Some(model.name.clone()),
         ..Location::default()
     };
-    if model.name.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            Category::ClassStructure,
-            "class name must not be empty",
+    let is_interface = model.access_flags.contains(ClassAccessFlags::INTERFACE);
+
+    // ── Name validation ──────────────────────────────────────────────────
+    if verify_model_names(model, &class_location, &mut dc).is_err() {
+        return dc.into_diagnostics();
+    }
+
+    // ── Class-level access flags ─────────────────────────────────────────
+    if verify_model_class_flags(model.access_flags, &class_location, &mut dc).is_err() {
+        return dc.into_diagnostics();
+    }
+
+    // ── Debug info staleness (class-level) ───────────────────────────────
+    if model.debug_info_state == DebugInfoState::Stale {
+        let _ = dc.push(Diagnostic::warning(
+            Category::Attribute,
+            "Class debug metadata is marked stale and will be stripped during lowering",
             class_location.clone(),
         ));
     }
-    if model.access_flags.contains(ClassAccessFlags::INTERFACE)
-        && !model.access_flags.contains(ClassAccessFlags::ABSTRACT)
-    {
-        diagnostics.push(Diagnostic::error(
-            Category::AccessFlags,
-            "interface must also be abstract",
-            class_location.clone(),
-        ));
+
+    // ── Duplicate detection ──────────────────────────────────────────────
+    if verify_model_duplicates(model, &class_location, &mut dc).is_err() {
+        return dc.into_diagnostics();
     }
+
+    // ── Field validation ─────────────────────────────────────────────────
     for field in &model.fields {
-        if !is_valid_field_descriptor(&field.descriptor) {
-            diagnostics.push(Diagnostic::error(
-                Category::Descriptor,
-                "invalid field descriptor",
-                Location {
-                    class_name: Some(model.name.clone()),
-                    field_name: Some(field.name.clone()),
-                    ..Location::default()
-                },
-            ));
+        if verify_model_field(field, model, is_interface, &mut dc).is_err() {
+            return dc.into_diagnostics();
         }
     }
+
+    // ── Method validation ────────────────────────────────────────────────
     for method in &model.methods {
-        let location = Location {
-            class_name: Some(model.name.clone()),
-            method_name: Some(method.name.clone()),
-            method_descriptor: Some(method.descriptor.clone()),
-            ..Location::default()
-        };
-        if !is_valid_method_descriptor(&method.descriptor) {
-            diagnostics.push(Diagnostic::error(
-                Category::Descriptor,
-                "invalid method descriptor",
-                location.clone(),
-            ));
-        }
-        if method.access_flags.contains(MethodAccessFlags::ABSTRACT) && method.code.is_some() {
-            diagnostics.push(Diagnostic::error(
-                Category::Method,
-                "abstract method must not carry code",
-                location.clone(),
-            ));
-        }
-        if let Some(code) = &method.code {
-            diagnostics.extend(verify_code_model(code, model, method, resolver));
+        if verify_model_method(method, model, is_interface, resolver, &mut dc).is_err() {
+            return dc.into_diagnostics();
         }
     }
-    diagnostics
+
+    dc.into_diagnostics()
 }
+
+// ---------------------------------------------------------------------------
+// Model name validation
+// ---------------------------------------------------------------------------
+
+fn verify_model_names(
+    model: &ClassModel,
+    loc: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if !is_valid_internal_name(&model.name) {
+        dc.push(Diagnostic::error(
+            Category::ClassStructure,
+            format!("Invalid class name: {:?}", model.name),
+            loc.clone(),
+        ))?;
+    }
+
+    if let Some(ref super_name) = model.super_name {
+        if !is_valid_internal_name(super_name) {
+            dc.push(Diagnostic::error(
+                Category::ClassStructure,
+                format!("Invalid super class name: {:?}", super_name),
+                loc.clone(),
+            ))?;
+        }
+    } else if model.name != "java/lang/Object" {
+        dc.push(Diagnostic::warning(
+            Category::ClassStructure,
+            "No superclass (only valid for java/lang/Object)",
+            loc.clone(),
+        ))?;
+    }
+
+    let mut seen = HashSet::new();
+    for iface in &model.interfaces {
+        if !is_valid_internal_name(iface) {
+            dc.push(Diagnostic::error(
+                Category::ClassStructure,
+                format!("Invalid interface name: {:?}", iface),
+                loc.clone(),
+            ))?;
+        }
+        if !seen.insert(iface.as_str()) {
+            dc.push(Diagnostic::error(
+                Category::ClassStructure,
+                format!("Duplicate interface: {:?}", iface),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Model class access-flag validation
+// ---------------------------------------------------------------------------
+
+fn verify_model_class_flags(
+    flags: ClassAccessFlags,
+    loc: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if flags.contains(ClassAccessFlags::INTERFACE) {
+        if !flags.contains(ClassAccessFlags::ABSTRACT) {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                "INTERFACE class must also be ABSTRACT",
+                loc.clone(),
+            ))?;
+        }
+        if flags.contains(ClassAccessFlags::FINAL) {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                "INTERFACE class must not be FINAL",
+                loc.clone(),
+            ))?;
+        }
+        if flags.contains(ClassAccessFlags::ENUM) {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                "INTERFACE class must not be ENUM",
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    if flags.contains(ClassAccessFlags::ANNOTATION) && !flags.contains(ClassAccessFlags::INTERFACE)
+    {
+        dc.push(Diagnostic::error(
+            Category::AccessFlags,
+            "ANNOTATION class must also be INTERFACE",
+            loc.clone(),
+        ))?;
+    }
+
+    if flags.contains(ClassAccessFlags::MODULE) {
+        let non_module =
+            flags.bits() & !(ClassAccessFlags::MODULE.bits() | ClassAccessFlags::SYNTHETIC.bits());
+        if non_module != 0 {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                format!("MODULE class has unexpected flags: 0x{non_module:04X}"),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    if flags.contains(ClassAccessFlags::FINAL)
+        && flags.contains(ClassAccessFlags::ABSTRACT)
+        && !flags.contains(ClassAccessFlags::INTERFACE)
+    {
+        dc.push(Diagnostic::error(
+            Category::AccessFlags,
+            "Class cannot be both FINAL and ABSTRACT",
+            loc.clone(),
+        ))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate field/method detection
+// ---------------------------------------------------------------------------
+
+fn verify_model_duplicates(
+    model: &ClassModel,
+    loc: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    let mut field_sigs: HashSet<(&str, &str)> = HashSet::new();
+    for field in &model.fields {
+        let key = (field.name.as_str(), field.descriptor.as_str());
+        if !field_sigs.insert(key) {
+            dc.push(Diagnostic::error(
+                Category::ClassStructure,
+                format!("Duplicate field: {} {}", field.name, field.descriptor),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    let mut method_sigs: HashSet<(&str, &str)> = HashSet::new();
+    for method in &model.methods {
+        let key = (method.name.as_str(), method.descriptor.as_str());
+        if !method_sigs.insert(key) {
+            dc.push(Diagnostic::error(
+                Category::ClassStructure,
+                format!("Duplicate method: {}{}", method.name, method.descriptor),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-field validation
+// ---------------------------------------------------------------------------
+
+fn verify_model_field(
+    field: &FieldModel,
+    model: &ClassModel,
+    is_interface: bool,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    let loc = Location {
+        class_name: Some(model.name.clone()),
+        field_name: Some(field.name.clone()),
+        ..Location::default()
+    };
+
+    if !is_valid_unqualified_name(&field.name) {
+        dc.push(Diagnostic::error(
+            Category::Field,
+            format!("Invalid field name: {:?}", field.name),
+            loc.clone(),
+        ))?;
+    }
+
+    if !is_valid_field_descriptor(&field.descriptor) {
+        dc.push(Diagnostic::error(
+            Category::Descriptor,
+            format!("Invalid field descriptor: {:?}", field.descriptor),
+            loc.clone(),
+        ))?;
+    }
+
+    if field_visibility_count(field.access_flags) > 1 {
+        dc.push(Diagnostic::error(
+            Category::AccessFlags,
+            format!("Field {:?} has multiple visibility modifiers", field.name),
+            loc.clone(),
+        ))?;
+    }
+
+    if field.access_flags.contains(FieldAccessFlags::FINAL)
+        && field.access_flags.contains(FieldAccessFlags::VOLATILE)
+    {
+        dc.push(Diagnostic::error(
+            Category::AccessFlags,
+            format!("Field {:?} cannot be both FINAL and VOLATILE", field.name),
+            loc.clone(),
+        ))?;
+    }
+
+    if is_interface {
+        let required =
+            FieldAccessFlags::PUBLIC | FieldAccessFlags::STATIC | FieldAccessFlags::FINAL;
+        if !field.access_flags.contains(required) {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                format!(
+                    "Interface field {:?} must be PUBLIC STATIC FINAL",
+                    field.name
+                ),
+                loc,
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-method validation
+// ---------------------------------------------------------------------------
+
+fn verify_model_method(
+    method: &MethodModel,
+    model: &ClassModel,
+    is_interface: bool,
+    resolver: Option<&dyn ClassResolver>,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    let loc = Location {
+        class_name: Some(model.name.clone()),
+        method_name: Some(method.name.clone()),
+        method_descriptor: Some(method.descriptor.clone()),
+        ..Location::default()
+    };
+
+    // Name validation
+    if !is_valid_method_name(&method.name) {
+        dc.push(Diagnostic::error(
+            Category::Method,
+            format!("Invalid method name: {:?}", method.name),
+            loc.clone(),
+        ))?;
+    }
+
+    // Descriptor validation
+    if !is_valid_method_descriptor(&method.descriptor) {
+        dc.push(Diagnostic::error(
+            Category::Descriptor,
+            format!("Invalid method descriptor: {:?}", method.descriptor),
+            loc.clone(),
+        ))?;
+    }
+
+    // Method access flags
+    verify_model_method_flags(
+        method.access_flags,
+        &method.name,
+        is_interface,
+        model.version.0,
+        &loc,
+        dc,
+    )?;
+
+    // <clinit> descriptor check
+    if method.name == "<clinit>" && method.descriptor != "()V" {
+        dc.push(Diagnostic::error(
+            Category::Method,
+            format!(
+                "<clinit> must have descriptor ()V, got {:?}",
+                method.descriptor
+            ),
+            loc.clone(),
+        ))?;
+    }
+
+    // Code presence / absence
+    let is_abstract = method.access_flags.contains(MethodAccessFlags::ABSTRACT);
+    let is_native = method.access_flags.contains(MethodAccessFlags::NATIVE);
+
+    if is_abstract || is_native {
+        if method.code.is_some() {
+            let label = if is_abstract { "ABSTRACT" } else { "NATIVE" };
+            dc.push(Diagnostic::error(
+                Category::Method,
+                format!("{} method {:?} must not have code", label, method.name),
+                loc.clone(),
+            ))?;
+        }
+    } else if method.code.is_none() {
+        dc.push(Diagnostic::error(
+            Category::Method,
+            format!("Method {:?} must have code", method.name),
+            loc.clone(),
+        ))?;
+    }
+
+    // Code model validation
+    if let Some(code) = &method.code {
+        verify_code_model(code, model, method, resolver, dc)?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Method access-flag validation
+// ---------------------------------------------------------------------------
+
+fn verify_model_method_flags(
+    flags: MethodAccessFlags,
+    name: &str,
+    is_interface: bool,
+    major: u16,
+    loc: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if method_visibility_count(flags) > 1 {
+        dc.push(Diagnostic::error(
+            Category::AccessFlags,
+            format!("Method {:?} has multiple visibility modifiers", name),
+            loc.clone(),
+        ))?;
+    }
+
+    if flags.contains(MethodAccessFlags::ABSTRACT) {
+        let forbidden = MethodAccessFlags::PRIVATE
+            | MethodAccessFlags::STATIC
+            | MethodAccessFlags::FINAL
+            | MethodAccessFlags::SYNCHRONIZED
+            | MethodAccessFlags::NATIVE
+            | MethodAccessFlags::STRICT;
+        let bad = flags & forbidden;
+        if !bad.is_empty() {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                format!(
+                    "ABSTRACT method {:?} has illegal flags: 0x{:04X}",
+                    name,
+                    bad.bits()
+                ),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    if is_interface && name != "<clinit>" {
+        if major < 52 {
+            if (!flags.contains(MethodAccessFlags::PUBLIC)
+                || !flags.contains(MethodAccessFlags::ABSTRACT))
+                && name != "<init>"
+            {
+                dc.push(Diagnostic::error(
+                    Category::AccessFlags,
+                    format!(
+                        "Interface method {:?} must be PUBLIC ABSTRACT (pre-Java 8)",
+                        name
+                    ),
+                    loc.clone(),
+                ))?;
+            }
+        } else if !flags.contains(MethodAccessFlags::PUBLIC)
+            && name != "<init>"
+            && (major < 53 || !flags.contains(MethodAccessFlags::PRIVATE))
+        {
+            dc.push(Diagnostic::error(
+                Category::AccessFlags,
+                format!(
+                    "Interface method {:?} must be PUBLIC (or PRIVATE for Java 9+)",
+                    name
+                ),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    if name == "<init>" {
+        let forbidden_init = MethodAccessFlags::STATIC
+            | MethodAccessFlags::FINAL
+            | MethodAccessFlags::SYNCHRONIZED
+            | MethodAccessFlags::NATIVE
+            | MethodAccessFlags::ABSTRACT
+            | MethodAccessFlags::BRIDGE;
+        let bad = flags & forbidden_init;
+        if !bad.is_empty() {
+            dc.push(Diagnostic::error(
+                Category::Method,
+                format!("<init> has illegal flags: 0x{:04X}", bad.bits()),
+                loc.clone(),
+            ))?;
+        }
+    }
+
+    if name == "<clinit>" && !flags.contains(MethodAccessFlags::STATIC) {
+        dc.push(Diagnostic::error(
+            Category::Method,
+            "<clinit> must be STATIC",
+            loc.clone(),
+        ))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Code model validation
+// ---------------------------------------------------------------------------
 
 fn verify_code_model(
     code: &CodeModel,
     model: &ClassModel,
-    method: &crate::model::MethodModel,
+    method: &MethodModel,
     resolver: Option<&dyn ClassResolver>,
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
     let location = Location {
         class_name: Some(model.name.clone()),
         method_name: Some(method.name.clone()),
         method_descriptor: Some(method.descriptor.clone()),
         ..Location::default()
     };
+
+    // Debug info staleness
+    if code.debug_info_state == DebugInfoState::Stale {
+        dc.push(Diagnostic::warning(
+            Category::Code,
+            "Code debug metadata is marked stale and will be stripped during lowering",
+            location.clone(),
+        ))?;
+    }
+
+    // Empty instruction list
+    if code.instructions.is_empty() {
+        dc.push(Diagnostic::warning(
+            Category::Code,
+            "Code has empty instruction list",
+            location.clone(),
+        ))?;
+        return Ok(());
+    }
+
+    // Collect label identities in the instruction stream
+    let labels_in_stream: HashSet<&Label> = code
+        .instructions
+        .iter()
+        .filter_map(|item| match item {
+            CodeItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect();
+
+    let check_label =
+        |label: &Label, context: &str, dc: &mut DiagnosticCollector| -> Result<(), ()> {
+            if !labels_in_stream.contains(label) {
+                dc.push(Diagnostic::error(
+                    Category::Code,
+                    format!("{context} references label not in instruction stream"),
+                    location.clone(),
+                ))?;
+            }
+            Ok(())
+        };
+
+    // Exception handler labels
+    for eh in &code.exception_handlers {
+        check_label(&eh.start, "Exception handler start", dc)?;
+        check_label(&eh.end, "Exception handler end", dc)?;
+        check_label(&eh.handler, "Exception handler handler", dc)?;
+    }
+
+    // Line number entry labels
+    for ln in &code.line_numbers {
+        check_label(&ln.label, "Line number entry", dc)?;
+    }
+
+    // Local variable start/end labels
+    for lv in &code.local_variables {
+        check_label(
+            &lv.start,
+            &format!("Local variable '{}' start", lv.name),
+            dc,
+        )?;
+        check_label(&lv.end, &format!("Local variable '{}' end", lv.name), dc)?;
+    }
+
+    // Local variable type start/end labels
+    for lvt in &code.local_variable_types {
+        check_label(
+            &lvt.start,
+            &format!("Local variable type '{}' start", lvt.name),
+            dc,
+        )?;
+        check_label(
+            &lvt.end,
+            &format!("Local variable type '{}' end", lvt.name),
+            dc,
+        )?;
+    }
+
+    // Branch / switch target labels
+    for item in &code.instructions {
+        match item {
+            CodeItem::Branch(branch) => {
+                check_label(&branch.target, "Branch target", dc)?;
+            }
+            CodeItem::LookupSwitch(ls) => {
+                check_label(&ls.default_target, "lookupswitch default", dc)?;
+                for (match_val, label) in &ls.pairs {
+                    check_label(label, &format!("lookupswitch case {match_val}"), dc)?;
+                }
+            }
+            CodeItem::TableSwitch(ts) => {
+                check_label(&ts.default_target, "tableswitch default", dc)?;
+                for label in &ts.targets {
+                    check_label(label, "tableswitch case", dc)?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Existing CFG + frame validation
     if build_cfg(code).is_err() {
-        diagnostics.push(Diagnostic::error(
+        dc.push(Diagnostic::error(
             Category::Code,
             "code contains unresolved control-flow labels",
             location.clone(),
-        ));
-        return diagnostics;
+        ))?;
+        return Ok(());
     }
     if let Err(error) = recompute_frames(
         code,
@@ -368,13 +977,14 @@ fn verify_code_model(
         method.access_flags,
         resolver,
     ) {
-        diagnostics.push(Diagnostic::error(
+        dc.push(Diagnostic::error(
             Category::Code,
             analysis_error_message(&error),
             location,
-        ));
+        ))?;
     }
-    diagnostics
+
+    Ok(())
 }
 
 fn analysis_error_message(error: &AnalysisError) -> String {

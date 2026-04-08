@@ -191,7 +191,7 @@ fn parse_type_parameters_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeP
 }
 
 fn parse_type_parameter_at(bytes: &[u8], index: &mut usize) -> Result<TypeParameter> {
-    let identifier = parse_identifier_at(bytes, index, &[b':'])?;
+    let identifier = parse_identifier_at(bytes, index, b":")?;
     expect_byte(bytes, index, b':')?;
     let class_bound = if starts_reference_type_signature(peek(bytes, *index)) {
         Some(parse_reference_type_signature_at(bytes, index)?)
@@ -246,11 +246,11 @@ fn parse_reference_type_signature_at(
 fn parse_class_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<ClassTypeSignature> {
     expect_byte(bytes, index, b'L')?;
     let mut package_specifier = Vec::new();
-    let mut current = parse_identifier_at(bytes, index, &[b'/', b';', b'<', b'.'])?;
+    let mut current = parse_identifier_at(bytes, index, b"/;<.")?;
     while peek(bytes, *index) == Some(b'/') {
         package_specifier.push(current);
         *index += 1;
-        current = parse_identifier_at(bytes, index, &[b'/', b';', b'<', b'.'])?;
+        current = parse_identifier_at(bytes, index, b"/;<.")?;
     }
     let simple_class = SimpleClassTypeSignature {
         identifier: current,
@@ -260,7 +260,7 @@ fn parse_class_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<Clas
     while peek(bytes, *index) == Some(b'.') {
         *index += 1;
         suffixes.push(SimpleClassTypeSignature {
-            identifier: parse_identifier_at(bytes, index, &[b';', b'<', b'.'])?,
+            identifier: parse_identifier_at(bytes, index, b";<.")?,
             type_arguments: parse_optional_type_arguments_at(bytes, index)?,
         });
     }
@@ -321,7 +321,7 @@ fn parse_type_variable_signature_at(
     index: &mut usize,
 ) -> Result<TypeVariableSignature> {
     expect_byte(bytes, index, b'T')?;
-    let identifier = parse_identifier_at(bytes, index, &[b';'])?;
+    let identifier = parse_identifier_at(bytes, index, b";")?;
     expect_byte(bytes, index, b';')?;
     Ok(TypeVariableSignature { identifier })
 }

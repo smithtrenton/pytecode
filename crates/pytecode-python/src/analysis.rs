@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pytecode_engine::analysis::{
-    Category, Diagnostic, Severity, verify_classfile, verify_classmodel,
+    Category, Diagnostic, Severity, verify_classfile, verify_classfile_with_options,
+    verify_classmodel, verify_classmodel_with_options,
 };
 
 use crate::model::{PyClassModel, PyMappingClassResolver};
@@ -97,9 +98,14 @@ impl PyDiagnostic {
 // ---------------------------------------------------------------------------
 
 #[pyfunction]
-fn rust_verify_classfile(data: &[u8]) -> PyResult<Vec<PyDiagnostic>> {
+#[pyo3(signature = (data, *, fail_fast = false))]
+fn rust_verify_classfile(data: &[u8], fail_fast: bool) -> PyResult<Vec<PyDiagnostic>> {
     let classfile = pytecode_engine::parse_class(data).map_err(crate::engine_error_to_py)?;
-    let diagnostics = verify_classfile(&classfile);
+    let diagnostics = if fail_fast {
+        verify_classfile_with_options(&classfile, true)
+    } else {
+        verify_classfile(&classfile)
+    };
     Ok(diagnostics
         .into_iter()
         .map(|d| PyDiagnostic { inner: d })
@@ -107,14 +113,24 @@ fn rust_verify_classfile(data: &[u8]) -> PyResult<Vec<PyDiagnostic>> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (model, resolver = None, *, fail_fast = false))]
 fn rust_verify_classmodel(
     model: &PyClassModel,
     resolver: Option<&PyMappingClassResolver>,
+    fail_fast: bool,
 ) -> PyResult<Vec<PyDiagnostic>> {
-    let diagnostics = verify_classmodel(
-        &model.inner,
-        resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
-    );
+    let diagnostics = if fail_fast {
+        verify_classmodel_with_options(
+            &model.inner,
+            resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+            true,
+        )
+    } else {
+        verify_classmodel(
+            &model.inner,
+            resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+        )
+    };
     Ok(diagnostics
         .into_iter()
         .map(|d| PyDiagnostic { inner: d })

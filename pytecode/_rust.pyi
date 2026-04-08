@@ -587,10 +587,12 @@ class RustDiagnostic:
     @property
     def code_index(self) -> int | None: ...
 
-def rust_verify_classfile(data: bytes) -> list[RustDiagnostic]: ...
+def rust_verify_classfile(data: bytes, *, fail_fast: bool = False) -> list[RustDiagnostic]: ...
 def rust_verify_classmodel(
     model: RustClassModel,
     resolver: RustMappingClassResolver | None = None,
+    *,
+    fail_fast: bool = False,
 ) -> list[RustDiagnostic]: ...
 
 # =============================================================================

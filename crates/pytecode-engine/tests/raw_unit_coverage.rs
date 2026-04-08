@@ -148,11 +148,7 @@ fn minimal_classfile_with_options(options: MinimalClassfileOptions) -> Vec<u8> {
 /// given bytecode.  `extra_cp_bytes` / `extra_cp_count` allow adding entries
 /// beyond the base 4 that every minimal classfile already has, plus the 3
 /// required for the method (name, descriptor, "Code").
-fn classfile_with_code(
-    code_bytes: &[u8],
-    extra_cp_bytes: Vec<u8>,
-    extra_cp_count: u16,
-) -> Vec<u8> {
+fn classfile_with_code(code_bytes: &[u8], extra_cp_bytes: Vec<u8>, extra_cp_count: u16) -> Vec<u8> {
     // The first 3 extra CP entries are always: "m" (index 5), "()V" (index 6),
     // "Code" (index 7).  Caller-provided extras start at index 8.
     let mut cp_bytes = Vec::new();
@@ -244,7 +240,10 @@ fn cp_utf8_multibyte_mutf8() -> TestResult<()> {
         ..MinimalClassfileOptions::default()
     });
     let parsed = parse_class(&raw)?;
-    assert!(matches!(&parsed.constant_pool[5], Some(ConstantPoolEntry::Utf8(_))));
+    assert!(matches!(
+        &parsed.constant_pool[5],
+        Some(ConstantPoolEntry::Utf8(_))
+    ));
     assert_eq!(write_class(&parsed)?, raw);
     Ok(())
 }
@@ -271,7 +270,11 @@ fn cp_integer_values() -> TestResult<()> {
 
 #[test]
 fn cp_float_values() -> TestResult<()> {
-    for bits in [0u32, 0x7FC0_0000 /* NaN */, 0x7F80_0000 /* +Inf */] {
+    for bits in [
+        0u32,
+        0x7FC0_0000, /* NaN */
+        0x7F80_0000, /* +Inf */
+    ] {
         let mut entry = vec![4u8];
         entry.extend_from_slice(&u4(bits));
         let raw = minimal_classfile_with_options(MinimalClassfileOptions {
@@ -1114,15 +1117,11 @@ fn opcode_tableswitch_padding_offsets() -> TestResult<()> {
     for pad_prefix_len in 0..4u32 {
         let mut code = Vec::new();
         // nop padding to shift the tableswitch to the right offset
-        for _ in 0..pad_prefix_len {
-            code.push(0x00); // nop
-        }
+        code.extend(std::iter::repeat_n(0x00u8, pad_prefix_len as usize));
         code.push(0xAA); // tableswitch
         // padding to 4-byte alignment
         let padding = (4 - ((pad_prefix_len + 1) % 4)) % 4;
-        for _ in 0..padding {
-            code.push(0);
-        }
+        code.extend(std::iter::repeat_n(0x00u8, padding as usize));
         // default offset
         code.extend_from_slice(&(8i32).to_be_bytes());
         // low = 0
@@ -1218,9 +1217,27 @@ fn opcode_lookupswitch_multiple_pairs() -> TestResult<()> {
     match &instructions[0] {
         Instruction::LookupSwitch(ls) => {
             assert_eq!(ls.pairs.len(), 3);
-            assert_eq!(ls.pairs[0], MatchOffsetPair { match_value: 0, offset: 5 });
-            assert_eq!(ls.pairs[1], MatchOffsetPair { match_value: 10, offset: 10 });
-            assert_eq!(ls.pairs[2], MatchOffsetPair { match_value: 20, offset: 15 });
+            assert_eq!(
+                ls.pairs[0],
+                MatchOffsetPair {
+                    match_value: 0,
+                    offset: 5
+                }
+            );
+            assert_eq!(
+                ls.pairs[1],
+                MatchOffsetPair {
+                    match_value: 10,
+                    offset: 10
+                }
+            );
+            assert_eq!(
+                ls.pairs[2],
+                MatchOffsetPair {
+                    match_value: 20,
+                    offset: 15
+                }
+            );
         }
         other => panic!("expected LookupSwitch, got {other:?}"),
     }
@@ -1324,10 +1341,7 @@ fn opcode_wide_iinc() -> TestResult<()> {
 #[test]
 fn malformed_truncated_at_magic() {
     let err = parse_class(&[0xCA, 0xFE]).unwrap_err();
-    assert!(matches!(
-        err.kind,
-        EngineErrorKind::UnexpectedEof { .. }
-    ));
+    assert!(matches!(err.kind, EngineErrorKind::UnexpectedEof { .. }));
 }
 
 #[test]
@@ -1335,10 +1349,7 @@ fn malformed_truncated_at_version() {
     let mut data = MAGIC.to_be_bytes().to_vec();
     data.extend_from_slice(&u2(0)); // minor only
     let err = parse_class(&data).unwrap_err();
-    assert!(matches!(
-        err.kind,
-        EngineErrorKind::UnexpectedEof { .. }
-    ));
+    assert!(matches!(err.kind, EngineErrorKind::UnexpectedEof { .. }));
 }
 
 #[test]
@@ -1348,10 +1359,7 @@ fn malformed_truncated_at_cp() {
     data.extend_from_slice(&u2(52));
     data.extend_from_slice(&u2(10)); // cp_count = 10, but no entries follow
     let err = parse_class(&data).unwrap_err();
-    assert!(matches!(
-        err.kind,
-        EngineErrorKind::UnexpectedEof { .. }
-    ));
+    assert!(matches!(err.kind, EngineErrorKind::UnexpectedEof { .. }));
 }
 
 #[test]
@@ -1365,10 +1373,7 @@ fn malformed_truncated_at_methods() {
     // Right after access_flags + this_class + super_class
     let data = &raw[..raw.len() - 4]; // cut off methods_count + class_attrs
     let err = parse_class(data).unwrap_err();
-    assert!(matches!(
-        err.kind,
-        EngineErrorKind::UnexpectedEof { .. }
-    ));
+    assert!(matches!(err.kind, EngineErrorKind::UnexpectedEof { .. }));
 }
 
 #[test]
@@ -1571,7 +1576,10 @@ fn newarray_boolean() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Boolean, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Boolean,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1582,7 +1590,10 @@ fn newarray_char() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Char, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Char,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1593,7 +1604,10 @@ fn newarray_float() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Float, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Float,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1604,7 +1618,10 @@ fn newarray_double() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Double, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Double,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1615,7 +1632,10 @@ fn newarray_byte() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Byte, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Byte,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1626,7 +1646,10 @@ fn newarray_short() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Short, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Short,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1637,7 +1660,10 @@ fn newarray_int() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Int, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Int,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1648,7 +1674,10 @@ fn newarray_long() -> TestResult<()> {
     let insns = parse_instructions(&raw)?;
     assert!(matches!(
         &insns[0],
-        Instruction::NewArray(NewArrayInsn { atype: ArrayType::Long, .. })
+        Instruction::NewArray(NewArrayInsn {
+            atype: ArrayType::Long,
+            ..
+        })
     ));
     Ok(())
 }
@@ -1661,17 +1690,15 @@ fn newarray_long() -> TestResult<()> {
 fn mixed_instructions_roundtrip() -> TestResult<()> {
     // A realistic snippet: iconst_0, istore_1, iload_1, bipush 10, if_icmplt +7,
     // iinc 1 1, goto -8, return
-    let mut code = Vec::new();
-    code.push(0x03); // iconst_0
-    code.push(0x3C); // istore_1
-    code.push(0x1B); // iload_1
-    code.push(0x10);
-    code.push(10); // bipush 10
-    code.push(0xA1); // if_icmplt
+    let mut code = vec![
+        0x03, // iconst_0
+        0x3C, // istore_1
+        0x1B, // iload_1
+        0x10, 10,   // bipush 10
+        0xA1, // if_icmplt
+    ];
     code.extend_from_slice(&u2(7)); // branch offset
-    code.push(0x84);
-    code.push(1);
-    code.push(1); // iinc 1, 1
+    code.extend_from_slice(&[0x84, 1, 1]); // iinc 1, 1
     code.push(0xA7); // goto
     code.extend_from_slice(&(-8i16).to_be_bytes()); // branch back
     code.push(0xB1); // return
@@ -1723,13 +1750,11 @@ fn tableswitch_at_offset_1_roundtrip() -> TestResult<()> {
 #[test]
 fn empty_input_returns_eof_error() {
     let err = parse_class(&[]).unwrap_err();
-    assert!(matches!(
-        err.kind,
-        EngineErrorKind::UnexpectedEof { .. }
-    ));
+    assert!(matches!(err.kind, EngineErrorKind::UnexpectedEof { .. }));
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn cp_all_17_types_in_one_classfile() -> TestResult<()> {
     // Stress test: pack all 17 CP entry types into one classfile and roundtrip.
     let mut cp = Vec::new();
@@ -1743,7 +1768,7 @@ fn cp_all_17_types_in_one_classfile() -> TestResult<()> {
     cp.extend_from_slice(&u4(42));
     // [7] Float
     cp.push(4);
-    cp.extend_from_slice(&u4(f32::to_bits(3.14)));
+    cp.extend_from_slice(&u4(f32::to_bits(3.14_f32)));
     // [8] Long (takes 2 slots -> [8],[9])
     cp.push(5);
     cp.extend_from_slice(&u4(0));
@@ -1816,24 +1841,72 @@ fn cp_all_17_types_in_one_classfile() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
 
     // Verify a few entries
-    assert!(matches!(&parsed.constant_pool[5], Some(ConstantPoolEntry::Utf8(_))));
-    assert!(matches!(&parsed.constant_pool[6], Some(ConstantPoolEntry::Integer(_))));
-    assert!(matches!(&parsed.constant_pool[7], Some(ConstantPoolEntry::Float(_))));
-    assert!(matches!(&parsed.constant_pool[8], Some(ConstantPoolEntry::Long(_))));
+    assert!(matches!(
+        &parsed.constant_pool[5],
+        Some(ConstantPoolEntry::Utf8(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[6],
+        Some(ConstantPoolEntry::Integer(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[7],
+        Some(ConstantPoolEntry::Float(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[8],
+        Some(ConstantPoolEntry::Long(_))
+    ));
     assert!(parsed.constant_pool[9].is_none()); // gap
-    assert!(matches!(&parsed.constant_pool[10], Some(ConstantPoolEntry::Double(_))));
+    assert!(matches!(
+        &parsed.constant_pool[10],
+        Some(ConstantPoolEntry::Double(_))
+    ));
     assert!(parsed.constant_pool[11].is_none()); // gap
-    assert!(matches!(&parsed.constant_pool[12], Some(ConstantPoolEntry::Class(_))));
-    assert!(matches!(&parsed.constant_pool[13], Some(ConstantPoolEntry::String(_))));
-    assert!(matches!(&parsed.constant_pool[17], Some(ConstantPoolEntry::FieldRef(_))));
-    assert!(matches!(&parsed.constant_pool[18], Some(ConstantPoolEntry::MethodRef(_))));
-    assert!(matches!(&parsed.constant_pool[19], Some(ConstantPoolEntry::InterfaceMethodRef(_))));
-    assert!(matches!(&parsed.constant_pool[20], Some(ConstantPoolEntry::MethodHandle(_))));
-    assert!(matches!(&parsed.constant_pool[21], Some(ConstantPoolEntry::MethodType(_))));
-    assert!(matches!(&parsed.constant_pool[22], Some(ConstantPoolEntry::Dynamic(_))));
-    assert!(matches!(&parsed.constant_pool[23], Some(ConstantPoolEntry::InvokeDynamic(_))));
-    assert!(matches!(&parsed.constant_pool[25], Some(ConstantPoolEntry::Module(_))));
-    assert!(matches!(&parsed.constant_pool[27], Some(ConstantPoolEntry::Package(_))));
+    assert!(matches!(
+        &parsed.constant_pool[12],
+        Some(ConstantPoolEntry::Class(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[13],
+        Some(ConstantPoolEntry::String(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[17],
+        Some(ConstantPoolEntry::FieldRef(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[18],
+        Some(ConstantPoolEntry::MethodRef(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[19],
+        Some(ConstantPoolEntry::InterfaceMethodRef(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[20],
+        Some(ConstantPoolEntry::MethodHandle(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[21],
+        Some(ConstantPoolEntry::MethodType(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[22],
+        Some(ConstantPoolEntry::Dynamic(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[23],
+        Some(ConstantPoolEntry::InvokeDynamic(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[25],
+        Some(ConstantPoolEntry::Module(_))
+    ));
+    assert!(matches!(
+        &parsed.constant_pool[27],
+        Some(ConstantPoolEntry::Package(_))
+    ));
 
     assert_eq!(write_class(&parsed)?, raw);
     Ok(())

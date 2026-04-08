@@ -6,7 +6,10 @@ pub use hierarchy::{
     ResolvedMethod, common_superclass, find_overridden_methods, is_subtype, iter_superclasses,
     iter_supertypes,
 };
-pub use verify::{Category, Diagnostic, Location, Severity, verify_classfile, verify_classmodel};
+pub use verify::{
+    Category, Diagnostic, FailFastError, Location, Severity, verify_classfile,
+    verify_classfile_with_options, verify_classmodel, verify_classmodel_with_options,
+};
 
 use crate::constants::MethodAccessFlags;
 use crate::descriptors::{

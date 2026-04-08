@@ -725,6 +725,7 @@ fn lower_method_model(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_code_model(
     code: &CodeModel,
     method: &MethodModel,
