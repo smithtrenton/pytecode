@@ -5,7 +5,7 @@ use crate::raw::{
     MethodTypeInfo, ModuleInfo, NameAndTypeInfo, PackageInfo, StringInfo, Utf8Info,
 };
 use crate::{EngineError, EngineErrorKind, Result};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 const CP_MAX_SINGLE_INDEX: usize = 65_534;
 const CP_MAX_DOUBLE_INDEX: usize = 65_533;
@@ -14,7 +14,7 @@ const UTF8_MAX_BYTES: usize = 65_535;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstantPoolBuilder {
     entries: Vec<Option<ConstantPoolEntry>>,
-    key_to_index: HashMap<PoolKey, u16>,
+    key_to_index: FxHashMap<PoolKey, u16>,
 }
 
 impl Default for ConstantPoolBuilder {
@@ -27,14 +27,14 @@ impl ConstantPoolBuilder {
     pub fn new() -> Self {
         Self {
             entries: vec![None],
-            key_to_index: HashMap::new(),
+            key_to_index: FxHashMap::default(),
         }
     }
 
     pub fn from_pool(pool: &[Option<ConstantPoolEntry>]) -> Self {
         let mut builder = Self {
             entries: pool.to_vec(),
-            key_to_index: HashMap::new(),
+            key_to_index: FxHashMap::default(),
         };
         for (index, entry) in builder.entries.iter().enumerate().skip(1) {
             let Some(entry) = entry else {
@@ -231,7 +231,8 @@ impl ConstantPoolBuilder {
         }
 
         let next_index = self.entries.len();
-        if entry.is_wide() {
+        let is_wide = entry.is_wide();
+        if is_wide {
             if next_index > CP_MAX_DOUBLE_INDEX {
                 return Err(EngineError::new(
                     0,
@@ -250,9 +251,9 @@ impl ConstantPoolBuilder {
         }
 
         let index = next_index as u16;
-        self.entries.push(Some(entry.clone()));
+        self.entries.push(Some(entry));
         self.key_to_index.insert(key, index);
-        if entry.is_wide() {
+        if is_wide {
             self.entries.push(None);
         }
         Ok(index)
@@ -404,7 +405,7 @@ impl ConstantPoolBuilder {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PoolKey {
-    Utf8(Vec<u8>),
+    Utf8(Box<[u8]>),
     Integer(u32),
     Float(u32),
     Long(u32, u32),
@@ -426,7 +427,7 @@ enum PoolKey {
 impl PoolKey {
     fn from_entry(entry: &ConstantPoolEntry) -> Self {
         match entry {
-            ConstantPoolEntry::Utf8(info) => Self::Utf8(info.bytes.clone()),
+            ConstantPoolEntry::Utf8(info) => Self::Utf8(info.bytes.clone().into_boxed_slice()),
             ConstantPoolEntry::Integer(info) => Self::Integer(info.value_bytes),
             ConstantPoolEntry::Float(info) => Self::Float(info.value_bytes),
             ConstantPoolEntry::Long(info) => Self::Long(info.high_bytes, info.low_bytes),

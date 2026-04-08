@@ -11,40 +11,49 @@ impl<'a> ByteReader<'a> {
         Self { bytes, offset: 0 }
     }
 
+    #[inline]
     pub(crate) fn offset(&self) -> usize {
         self.offset
     }
 
+    #[inline]
     pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.offset)
     }
 
+    #[inline]
     pub(crate) fn read_u1(&mut self) -> Result<u8> {
         Ok(self.read_bytes(1)?[0])
     }
 
+    #[inline]
     pub(crate) fn read_i1(&mut self) -> Result<i8> {
         Ok(self.read_u1()? as i8)
     }
 
+    #[inline]
     pub(crate) fn read_u2(&mut self) -> Result<u16> {
         let bytes = self.read_bytes(2)?;
         Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
+    #[inline]
     pub(crate) fn read_i2(&mut self) -> Result<i16> {
         Ok(self.read_u2()? as i16)
     }
 
+    #[inline]
     pub(crate) fn read_u4(&mut self) -> Result<u32> {
         let bytes = self.read_bytes(4)?;
         Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
+    #[inline]
     pub(crate) fn read_i4(&mut self) -> Result<i32> {
         Ok(self.read_u4()? as i32)
     }
 
+    #[inline]
     pub(crate) fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         if self.remaining() < len {
             return Err(EngineError::new(
@@ -68,7 +77,9 @@ pub(crate) struct ByteWriter {
 
 impl ByteWriter {
     pub(crate) fn new() -> Self {
-        Self { bytes: Vec::new() }
+        Self {
+            bytes: Vec::with_capacity(32 * 1024),
+        }
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
@@ -77,30 +88,37 @@ impl ByteWriter {
         }
     }
 
+    #[inline]
     pub(crate) fn write_u1(&mut self, value: u8) {
         self.bytes.push(value);
     }
 
+    #[inline]
     pub(crate) fn write_i1(&mut self, value: i8) {
         self.write_u1(value as u8);
     }
 
+    #[inline]
     pub(crate) fn write_u2(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 
+    #[inline]
     pub(crate) fn write_i2(&mut self, value: i16) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 
+    #[inline]
     pub(crate) fn write_u4(&mut self, value: u32) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 
+    #[inline]
     pub(crate) fn write_i4(&mut self, value: i32) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 
+    #[inline]
     pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }

@@ -3,6 +3,7 @@ use pytecode_engine::model::{DebugInfoPolicy, FrameComputationMode};
 use pytecode_engine::raw::RawClassStub;
 use pytecode_engine::transform::ApplyClassTransform;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -340,14 +341,13 @@ fn write_entry(
         return Ok(());
     }
 
-    let mut bytes = entry.bytes.clone();
-    if is_class_filename(entry) {
+    let bytes: Cow<'_, [u8]> = if is_class_filename(entry) {
         let should_relower = transform.is_some()
             || options.frame_mode == FrameComputationMode::Recompute
             || options.debug_info != DebugInfoPolicy::Preserve
             || options.resolver.is_some();
         if should_relower {
-            let mut model = pytecode_engine::model::ClassModel::from_bytes(&bytes)?;
+            let mut model = pytecode_engine::model::ClassModel::from_bytes(&entry.bytes)?;
             if let Some(transform) = transform {
                 transform.apply(&mut model)?;
             }
@@ -356,9 +356,13 @@ fn write_entry(
                 options.frame_mode,
                 options.resolver,
             )?;
-            bytes = pytecode_engine::write_class(&classfile)?;
+            Cow::Owned(pytecode_engine::write_class(&classfile)?)
+        } else {
+            Cow::Borrowed(&entry.bytes)
         }
-    }
+    } else {
+        Cow::Borrowed(&entry.bytes)
+    };
 
     writer.start_file(archive_name(&entry.filename), file_options(entry))?;
     writer.write_all(&bytes)?;
