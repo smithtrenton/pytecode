@@ -17,6 +17,7 @@ pub use operands::{
 
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MAGIC, MethodAccessFlags};
 use crate::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
+use crate::indexes::{ClassIndex, CpIndex, Utf8Index};
 use crate::raw::{
     AttributeInfo, Branch, ClassFile, CodeAttribute, ConstantPoolEntry, FieldInfo, Instruction,
     InvokeDynamicInsn as RawInvokeDynamicInsn, InvokeInterfaceInsn as RawInvokeInterfaceInsn,
@@ -214,7 +215,7 @@ impl ClassModel {
     pub fn from_classfile(classfile: &ClassFile) -> Result<Self> {
         let cp = ConstantPoolBuilder::from_pool(&classfile.constant_pool);
         let name = cp.resolve_class_name(classfile.this_class)?;
-        let super_name = if classfile.super_class == 0 {
+        let super_name = if classfile.super_class.value() == 0 {
             None
         } else {
             Some(cp.resolve_class_name(classfile.super_class)?)
@@ -273,7 +274,7 @@ impl ClassModel {
         let this_class = cp.add_class(&self.name)?;
         let super_class = match &self.super_name {
             Some(super_name) => cp.add_class(super_name)?,
-            None => 0,
+            None => ClassIndex::default(),
         };
         let interfaces = self
             .interfaces
@@ -477,7 +478,7 @@ fn lift_code_model(code: &CodeAttribute, cp: &ConstantPoolBuilder) -> Result<Cod
                     .get(&(handler.handler_pc as u32))
                     .cloned()
                     .ok_or_else(|| model_error("missing handler label"))?,
-                catch_type: if handler.catch_type == 0 {
+                catch_type: if handler.catch_type.value() == 0 {
                     None
                 } else {
                     Some(cp.resolve_class_name(handler.catch_type)?)
@@ -527,7 +528,7 @@ fn lift_instruction(
             slot: *index as u16,
         })),
         Instruction::ConstantPoolIndex1 { opcode, index, .. } => {
-            lower_cp_index_item(*opcode, *index as u16, cp)
+            lower_cp_index_item(*opcode, CpIndex::from(*index as u16), cp)
         }
         Instruction::ConstantPoolIndexWide(insn) => {
             lower_cp_index_item(insn.opcode, insn.index, cp)
@@ -555,7 +556,7 @@ fn lift_instruction(
             value: *value as i16,
         })),
         Instruction::InvokeDynamic(insn) => {
-            let entry = cp.entry(insn.index)?;
+            let entry = cp.entry(insn.index.value())?;
             let ConstantPoolEntry::InvokeDynamic(info) = entry else {
                 return Err(model_error(
                     "invokedynamic constant-pool entry is not InvokeDynamic",
@@ -629,7 +630,7 @@ fn lift_instruction(
     }
 }
 
-fn lower_cp_index_item(opcode: u8, index: u16, cp: &ConstantPoolBuilder) -> Result<CodeItem> {
+fn lower_cp_index_item(opcode: u8, index: CpIndex, cp: &ConstantPoolBuilder) -> Result<CodeItem> {
     use CodeItem as Item;
     match opcode {
         0x12..=0x14 => Ok(Item::Ldc(LdcInsn {
@@ -656,7 +657,7 @@ fn lower_cp_index_item(opcode: u8, index: u16, cp: &ConstantPoolBuilder) -> Resu
         }
         0xBB | 0xBD | 0xC0 | 0xC1 => Ok(Item::Type(TypeInsn {
             opcode,
-            descriptor: cp.resolve_class_name(index)?,
+            descriptor: cp.resolve_class_name(ClassIndex::from(index.value()))?,
         })),
         _ => Err(model_error(format!(
             "unsupported constant-pool-backed opcode 0x{opcode:02x}"
@@ -664,8 +665,8 @@ fn lower_cp_index_item(opcode: u8, index: u16, cp: &ConstantPoolBuilder) -> Resu
     }
 }
 
-fn lift_ldc_value(index: u16, cp: &ConstantPoolBuilder) -> Result<LdcValue> {
-    let entry = cp.entry(index)?;
+fn lift_ldc_value(index: CpIndex, cp: &ConstantPoolBuilder) -> Result<LdcValue> {
+    let entry = cp.entry(index.value())?;
     match entry {
         ConstantPoolEntry::Integer(info) => Ok(LdcValue::Int(info.value_bytes)),
         ConstantPoolEntry::Float(info) => Ok(LdcValue::FloatBits(info.value_bytes)),
@@ -685,7 +686,7 @@ fn lift_ldc_value(index: u16, cp: &ConstantPoolBuilder) -> Result<LdcValue> {
             cp.resolve_utf8(info.descriptor_index)?,
         )),
         ConstantPoolEntry::MethodHandle(info) => {
-            let referenced = cp.entry(info.reference_index)?;
+            let referenced = cp.entry(info.reference_index.value())?;
             let (owner, name, descriptor, is_interface) = match referenced {
                 ConstantPoolEntry::FieldRef(_) => {
                     let (owner, name, descriptor) = cp.resolve_field_ref(info.reference_index)?;
@@ -877,9 +878,9 @@ fn lower_code_model(
                 .get(&handler.handler)
                 .ok_or_else(|| model_error("exception handler label missing"))?
                 as u16;
-            let catch_type = match &handler.catch_type {
+            let catch_type: ClassIndex = match &handler.catch_type {
                 Some(name) => cp.add_class(name)?,
-                None => 0,
+                None => ClassIndex::default(),
             };
             Ok(crate::raw::ExceptionHandler {
                 start_pc,
@@ -1065,7 +1066,11 @@ fn instruction_size(
             }
             value => {
                 let index = add_ldc_value(cp, value)?;
-                if index <= u8::MAX as u16 { 2 } else { 3 }
+                if index.value() <= u8::MAX as u16 {
+                    2
+                } else {
+                    3
+                }
             }
         },
     })
@@ -1117,7 +1122,7 @@ fn lower_instruction_sequence(
                 crate::raw::ConstantPoolIndexWide {
                     opcode: insn.opcode,
                     offset,
-                    index: cp.add_class(&insn.descriptor)?,
+                    index: cp.add_class(&insn.descriptor)?.into(),
                 },
             )]
         }
@@ -1254,10 +1259,10 @@ fn lower_ldc_instruction(
                 index,
             })
         }
-        _ if index <= u8::MAX as u16 => Instruction::ConstantPoolIndex1 {
+        _ if index.value() <= u8::MAX as u16 => Instruction::ConstantPoolIndex1 {
             opcode: 0x12,
             offset,
-            index: index as u8,
+            index: index.value() as u8,
         },
         _ => Instruction::ConstantPoolIndexWide(crate::raw::ConstantPoolIndexWide {
             opcode: 0x13,
@@ -1267,14 +1272,14 @@ fn lower_ldc_instruction(
     })
 }
 
-fn add_ldc_value(cp: &mut ConstantPoolBuilder, value: &LdcValue) -> Result<u16> {
+fn add_ldc_value(cp: &mut ConstantPoolBuilder, value: &LdcValue) -> Result<CpIndex> {
     match value {
         LdcValue::Int(value) => cp.add_integer(*value),
         LdcValue::FloatBits(raw_bits) => cp.add_float_bits(*raw_bits),
         LdcValue::Long(value) => cp.add_long(*value),
         LdcValue::DoubleBits(raw_bits) => cp.add_double_bits(*raw_bits),
         LdcValue::String(value) => cp.add_string(value),
-        LdcValue::Class(value) => cp.add_class(value),
+        LdcValue::Class(value) => Ok(cp.add_class(value)?.into()),
         LdcValue::MethodType(value) => cp.add_method_type(value),
         LdcValue::MethodHandle(value) => {
             let reference_index = if value.is_interface {
@@ -1743,8 +1748,8 @@ fn parse_local_variable_table(
         entries.push(LocalVariableEntry {
             start: label_for_offset(labels_by_offset, start_pc),
             end: label_for_offset(labels_by_offset, start_pc + length),
-            name: cp.resolve_utf8(name_index)?,
-            descriptor: cp.resolve_utf8(descriptor_index)?,
+            name: cp.resolve_utf8(Utf8Index::from(name_index))?,
+            descriptor: cp.resolve_utf8(Utf8Index::from(descriptor_index))?,
             index,
         });
     }
@@ -1769,8 +1774,8 @@ fn parse_local_variable_type_table(
         entries.push(LocalVariableTypeEntry {
             start: label_for_offset(labels_by_offset, start_pc),
             end: label_for_offset(labels_by_offset, start_pc + length),
-            name: cp.resolve_utf8(name_index)?,
-            signature: cp.resolve_utf8(signature_index)?,
+            name: cp.resolve_utf8(Utf8Index::from(name_index))?,
+            signature: cp.resolve_utf8(Utf8Index::from(signature_index))?,
             index,
         });
     }

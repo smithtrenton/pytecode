@@ -6,15 +6,14 @@ use crate::raw::attributes::{
     CodeAttribute, ConstantValueAttribute, DeprecatedAttribute, ElementValueInfo, ElementValueTag,
     EnclosingMethodAttribute, ExceptionsAttribute, InnerClassesAttribute, LineNumberTableAttribute,
     LocalVariableTableAttribute, LocalVariableTypeTableAttribute, MethodParametersAttribute,
-    ModuleAttribute, ModuleInfo as ModuleAttributeInfo, ModuleMainClassAttribute,
-    ModulePackagesAttribute, NestHostAttribute, NestMembersAttribute, ParameterAnnotationInfo,
-    PermittedSubclassesAttribute, RecordAttribute, RecordComponentInfo,
-    RuntimeInvisibleAnnotationsAttribute, RuntimeInvisibleParameterAnnotationsAttribute,
-    RuntimeInvisibleTypeAnnotationsAttribute, RuntimeVisibleAnnotationsAttribute,
-    RuntimeVisibleParameterAnnotationsAttribute, RuntimeVisibleTypeAnnotationsAttribute,
-    SignatureAttribute, SourceDebugExtensionAttribute, SourceFileAttribute, StackMapFrameInfo,
-    StackMapTableAttribute, SyntheticAttribute, TargetInfo, TypeAnnotationInfo, TypePathInfo,
-    UnknownAttribute, VerificationTypeInfo,
+    ModuleAttribute, ModuleAttributeModuleInfo, ModuleMainClassAttribute, ModulePackagesAttribute,
+    NestHostAttribute, NestMembersAttribute, ParameterAnnotationInfo, PermittedSubclassesAttribute,
+    RecordAttribute, RecordComponentInfo, RuntimeInvisibleAnnotationsAttribute,
+    RuntimeInvisibleParameterAnnotationsAttribute, RuntimeInvisibleTypeAnnotationsAttribute,
+    RuntimeVisibleAnnotationsAttribute, RuntimeVisibleParameterAnnotationsAttribute,
+    RuntimeVisibleTypeAnnotationsAttribute, SignatureAttribute, SourceDebugExtensionAttribute,
+    SourceFileAttribute, StackMapFrameInfo, StackMapTableAttribute, SyntheticAttribute, TargetInfo,
+    TypeAnnotationInfo, TypePathInfo, UnknownAttribute, VerificationTypeInfo,
 };
 use crate::raw::constant_pool::ConstantPoolEntry;
 use crate::raw::info::{ClassFile, FieldInfo, MethodInfo};
@@ -63,8 +62,8 @@ pub fn write_class(classfile: &ClassFile) -> Result<Vec<u8>> {
     }
 
     writer.write_u2(classfile.access_flags.bits());
-    writer.write_u2(classfile.this_class);
-    writer.write_u2(classfile.super_class);
+    writer.write_u2(classfile.this_class.into());
+    writer.write_u2(classfile.super_class.into());
     let interfaces_len = u16::try_from(classfile.interfaces.len()).map_err(|_| {
         EngineError::new(
             0,
@@ -78,7 +77,7 @@ pub fn write_class(classfile: &ClassFile) -> Result<Vec<u8>> {
     })?;
     writer.write_u2(interfaces_len);
     for interface in &classfile.interfaces {
-        writer.write_u2(*interface);
+        writer.write_u2((*interface).into());
     }
 
     let fields_len = u16::try_from(classfile.fields.len()).map_err(|_| {
@@ -181,53 +180,53 @@ fn write_constant_pool_entry(writer: &mut ByteWriter, entry: &ConstantPoolEntry)
             writer.write_u4(info.high_bytes);
             writer.write_u4(info.low_bytes);
         }
-        ConstantPoolEntry::Class(info) => writer.write_u2(info.name_index),
-        ConstantPoolEntry::String(info) => writer.write_u2(info.string_index),
+        ConstantPoolEntry::Class(info) => writer.write_u2(info.name_index.into()),
+        ConstantPoolEntry::String(info) => writer.write_u2(info.string_index.into()),
         ConstantPoolEntry::FieldRef(info) => {
-            writer.write_u2(info.class_index);
-            writer.write_u2(info.name_and_type_index);
+            writer.write_u2(info.class_index.into());
+            writer.write_u2(info.name_and_type_index.into());
         }
         ConstantPoolEntry::MethodRef(info) => {
-            writer.write_u2(info.class_index);
-            writer.write_u2(info.name_and_type_index);
+            writer.write_u2(info.class_index.into());
+            writer.write_u2(info.name_and_type_index.into());
         }
         ConstantPoolEntry::InterfaceMethodRef(info) => {
-            writer.write_u2(info.class_index);
-            writer.write_u2(info.name_and_type_index);
+            writer.write_u2(info.class_index.into());
+            writer.write_u2(info.name_and_type_index.into());
         }
         ConstantPoolEntry::NameAndType(info) => {
-            writer.write_u2(info.name_index);
-            writer.write_u2(info.descriptor_index);
+            writer.write_u2(info.name_index.into());
+            writer.write_u2(info.descriptor_index.into());
         }
         ConstantPoolEntry::MethodHandle(info) => {
             writer.write_u1(info.reference_kind);
-            writer.write_u2(info.reference_index);
+            writer.write_u2(info.reference_index.into());
         }
-        ConstantPoolEntry::MethodType(info) => writer.write_u2(info.descriptor_index),
+        ConstantPoolEntry::MethodType(info) => writer.write_u2(info.descriptor_index.into()),
         ConstantPoolEntry::Dynamic(info) => {
-            writer.write_u2(info.bootstrap_method_attr_index);
-            writer.write_u2(info.name_and_type_index);
+            writer.write_u2(info.bootstrap_method_attr_index.into());
+            writer.write_u2(info.name_and_type_index.into());
         }
         ConstantPoolEntry::InvokeDynamic(info) => {
-            writer.write_u2(info.bootstrap_method_attr_index);
-            writer.write_u2(info.name_and_type_index);
+            writer.write_u2(info.bootstrap_method_attr_index.into());
+            writer.write_u2(info.name_and_type_index.into());
         }
-        ConstantPoolEntry::Module(info) => writer.write_u2(info.name_index),
-        ConstantPoolEntry::Package(info) => writer.write_u2(info.name_index),
+        ConstantPoolEntry::Module(info) => writer.write_u2(info.name_index.into()),
+        ConstantPoolEntry::Package(info) => writer.write_u2(info.name_index.into()),
     }
 }
 
 fn write_field_info(writer: &mut ByteWriter, field: &FieldInfo) -> Result<()> {
     writer.write_u2(field.access_flags.bits());
-    writer.write_u2(field.name_index);
-    writer.write_u2(field.descriptor_index);
+    writer.write_u2(field.name_index.into());
+    writer.write_u2(field.descriptor_index.into());
     write_attributes(writer, &field.attributes)
 }
 
 fn write_method_info(writer: &mut ByteWriter, method: &MethodInfo) -> Result<()> {
     writer.write_u2(method.access_flags.bits());
-    writer.write_u2(method.name_index);
-    writer.write_u2(method.descriptor_index);
+    writer.write_u2(method.name_index.into());
+    writer.write_u2(method.descriptor_index.into());
     write_attributes(writer, &method.attributes)
 }
 
@@ -307,7 +306,7 @@ fn write_attribute(writer: &mut ByteWriter, attribute: &AttributeInfo) -> Result
         AttributeInfo::Unknown(attr) => write_unknown_attribute(&mut payload, attr),
     }
     let payload_bytes = payload.into_bytes();
-    writer.write_u2(attribute.attribute_name_index());
+    writer.write_u2(attribute.attribute_name_index().into());
     let payload_len = u32::try_from(payload_bytes.len()).map_err(|_| {
         EngineError::new(
             0,
@@ -325,15 +324,15 @@ fn write_attribute(writer: &mut ByteWriter, attribute: &AttributeInfo) -> Result
 }
 
 fn write_constant_value_attribute(writer: &mut ByteWriter, attribute: &ConstantValueAttribute) {
-    writer.write_u2(attribute.constantvalue_index);
+    writer.write_u2(attribute.constantvalue_index.into());
 }
 
 fn write_signature_attribute(writer: &mut ByteWriter, attribute: &SignatureAttribute) {
-    writer.write_u2(attribute.signature_index);
+    writer.write_u2(attribute.signature_index.into());
 }
 
 fn write_source_file_attribute(writer: &mut ByteWriter, attribute: &SourceFileAttribute) {
-    writer.write_u2(attribute.sourcefile_index);
+    writer.write_u2(attribute.sourcefile_index.into());
 }
 
 fn write_source_debug_attribute(
@@ -467,7 +466,7 @@ fn write_stack_map_frame(writer: &mut ByteWriter, frame: &StackMapFrameInfo) -> 
 fn write_verification_type_info(writer: &mut ByteWriter, value: &VerificationTypeInfo) {
     writer.write_u1(value.tag() as u8);
     match value {
-        VerificationTypeInfo::Object { cpool_index } => writer.write_u2(*cpool_index),
+        VerificationTypeInfo::Object { cpool_index } => writer.write_u2((*cpool_index).into()),
         VerificationTypeInfo::Uninitialized { offset } => writer.write_u2(*offset),
         _ => {}
     }
@@ -476,23 +475,23 @@ fn write_verification_type_info(writer: &mut ByteWriter, value: &VerificationTyp
 fn write_exceptions_attribute(writer: &mut ByteWriter, attribute: &ExceptionsAttribute) {
     writer.write_u2(attribute.exception_index_table.len() as u16);
     for index in &attribute.exception_index_table {
-        writer.write_u2(*index);
+        writer.write_u2((*index).into());
     }
 }
 
 fn write_inner_classes_attribute(writer: &mut ByteWriter, attribute: &InnerClassesAttribute) {
     writer.write_u2(attribute.classes.len() as u16);
     for entry in &attribute.classes {
-        writer.write_u2(entry.inner_class_info_index);
-        writer.write_u2(entry.outer_class_info_index);
-        writer.write_u2(entry.inner_name_index);
+        writer.write_u2(entry.inner_class_info_index.into());
+        writer.write_u2(entry.outer_class_info_index.into());
+        writer.write_u2(entry.inner_name_index.into());
         writer.write_u2(entry.inner_class_access_flags.bits());
     }
 }
 
 fn write_enclosing_method_attribute(writer: &mut ByteWriter, attribute: &EnclosingMethodAttribute) {
-    writer.write_u2(attribute.class_index);
-    writer.write_u2(attribute.method_index);
+    writer.write_u2(attribute.class_index.into());
+    writer.write_u2(attribute.method_index.into());
 }
 
 fn write_code_attribute(writer: &mut ByteWriter, attribute: &CodeAttribute) -> Result<()> {
@@ -510,7 +509,7 @@ fn write_code_attribute(writer: &mut ByteWriter, attribute: &CodeAttribute) -> R
         writer.write_u2(handler.start_pc);
         writer.write_u2(handler.end_pc);
         writer.write_u2(handler.handler_pc);
-        writer.write_u2(handler.catch_type);
+        writer.write_u2(handler.catch_type.into());
     }
     write_attributes(writer, &attribute.attributes)
 }
@@ -534,8 +533,8 @@ fn write_local_variable_table_attribute(
     for entry in &attribute.local_variable_table {
         writer.write_u2(entry.start_pc);
         writer.write_u2(entry.length);
-        writer.write_u2(entry.name_index);
-        writer.write_u2(entry.descriptor_index);
+        writer.write_u2(entry.name_index.into());
+        writer.write_u2(entry.descriptor_index.into());
         writer.write_u2(entry.index);
     }
 }
@@ -548,8 +547,8 @@ fn write_local_variable_type_table_attribute(
     for entry in &attribute.local_variable_type_table {
         writer.write_u2(entry.start_pc);
         writer.write_u2(entry.length);
-        writer.write_u2(entry.name_index);
-        writer.write_u2(entry.signature_index);
+        writer.write_u2(entry.name_index.into());
+        writer.write_u2(entry.signature_index.into());
         writer.write_u2(entry.index);
     }
 }
@@ -560,19 +559,19 @@ fn write_method_parameters_attribute(
 ) {
     writer.write_u1(attribute.parameters.len() as u8);
     for parameter in &attribute.parameters {
-        writer.write_u2(parameter.name_index);
+        writer.write_u2(parameter.name_index.into());
         writer.write_u2(parameter.access_flags.bits());
     }
 }
 
 fn write_nest_host_attribute(writer: &mut ByteWriter, attribute: &NestHostAttribute) {
-    writer.write_u2(attribute.host_class_index);
+    writer.write_u2(attribute.host_class_index.into());
 }
 
 fn write_nest_members_attribute(writer: &mut ByteWriter, attribute: &NestMembersAttribute) {
     writer.write_u2(attribute.classes.len() as u16);
     for class_index in &attribute.classes {
-        writer.write_u2(*class_index);
+        writer.write_u2((*class_index).into());
     }
 }
 
@@ -631,10 +630,10 @@ fn write_bootstrap_methods_attribute(
 ) {
     writer.write_u2(attribute.bootstrap_methods.len() as u16);
     for bootstrap_method in &attribute.bootstrap_methods {
-        writer.write_u2(bootstrap_method.bootstrap_method_ref);
+        writer.write_u2(bootstrap_method.bootstrap_method_ref.into());
         writer.write_u2(bootstrap_method.bootstrap_arguments.len() as u16);
         for argument in &bootstrap_method.bootstrap_arguments {
-            writer.write_u2(*argument);
+            writer.write_u2((*argument).into());
         }
     }
 }
@@ -643,49 +642,49 @@ fn write_module_attribute(writer: &mut ByteWriter, attribute: &ModuleAttribute) 
     write_module_info(writer, &attribute.module);
 }
 
-fn write_module_info(writer: &mut ByteWriter, module: &ModuleAttributeInfo) {
-    writer.write_u2(module.module_name_index);
+fn write_module_info(writer: &mut ByteWriter, module: &ModuleAttributeModuleInfo) {
+    writer.write_u2(module.module_name_index.into());
     writer.write_u2(module.module_flags.bits());
-    writer.write_u2(module.module_version_index);
+    writer.write_u2(module.module_version_index.into());
 
     writer.write_u2(module.requires.len() as u16);
     for requires in &module.requires {
-        writer.write_u2(requires.requires_index);
+        writer.write_u2(requires.requires_index.into());
         writer.write_u2(requires.requires_flags.bits());
-        writer.write_u2(requires.requires_version_index);
+        writer.write_u2(requires.requires_version_index.into());
     }
 
     writer.write_u2(module.exports.len() as u16);
     for exports in &module.exports {
-        writer.write_u2(exports.exports_index);
+        writer.write_u2(exports.exports_index.into());
         writer.write_u2(exports.exports_flags.bits());
         writer.write_u2(exports.exports_to_index.len() as u16);
         for target in &exports.exports_to_index {
-            writer.write_u2(*target);
+            writer.write_u2((*target).into());
         }
     }
 
     writer.write_u2(module.opens.len() as u16);
     for opens in &module.opens {
-        writer.write_u2(opens.opens_index);
+        writer.write_u2(opens.opens_index.into());
         writer.write_u2(opens.opens_flags.bits());
         writer.write_u2(opens.opens_to_index.len() as u16);
         for target in &opens.opens_to_index {
-            writer.write_u2(*target);
+            writer.write_u2((*target).into());
         }
     }
 
     writer.write_u2(module.uses_index.len() as u16);
     for use_index in &module.uses_index {
-        writer.write_u2(*use_index);
+        writer.write_u2((*use_index).into());
     }
 
     writer.write_u2(module.provides.len() as u16);
     for provides in &module.provides {
-        writer.write_u2(provides.provides_index);
+        writer.write_u2(provides.provides_index.into());
         writer.write_u2(provides.provides_with_index.len() as u16);
         for implementation in &provides.provides_with_index {
-            writer.write_u2(*implementation);
+            writer.write_u2((*implementation).into());
         }
     }
 }
@@ -693,7 +692,7 @@ fn write_module_info(writer: &mut ByteWriter, module: &ModuleAttributeInfo) {
 fn write_module_packages_attribute(writer: &mut ByteWriter, attribute: &ModulePackagesAttribute) {
     writer.write_u2(attribute.package_index.len() as u16);
     for package_index in &attribute.package_index {
-        writer.write_u2(*package_index);
+        writer.write_u2((*package_index).into());
     }
 }
 
@@ -701,7 +700,7 @@ fn write_module_main_class_attribute(
     writer: &mut ByteWriter,
     attribute: &ModuleMainClassAttribute,
 ) {
-    writer.write_u2(attribute.main_class_index);
+    writer.write_u2(attribute.main_class_index.into());
 }
 
 fn write_record_attribute(writer: &mut ByteWriter, attribute: &RecordAttribute) -> Result<()> {
@@ -716,8 +715,8 @@ fn write_record_component_info(
     writer: &mut ByteWriter,
     component: &RecordComponentInfo,
 ) -> Result<()> {
-    writer.write_u2(component.name_index);
-    writer.write_u2(component.descriptor_index);
+    writer.write_u2(component.name_index.into());
+    writer.write_u2(component.descriptor_index.into());
     write_attributes(writer, &component.attributes)
 }
 
@@ -727,7 +726,7 @@ fn write_permitted_subclasses_attribute(
 ) {
     writer.write_u2(attribute.classes.len() as u16);
     for class_index in &attribute.classes {
-        writer.write_u2(*class_index);
+        writer.write_u2((*class_index).into());
     }
 }
 
@@ -760,10 +759,10 @@ fn write_type_annotation_info(
     writer.write_u1(annotation.target_type as u8);
     write_target_info(writer, &annotation.target_info);
     write_type_path_info(writer, &annotation.target_path);
-    writer.write_u2(annotation.type_index);
+    writer.write_u2(annotation.type_index.into());
     writer.write_u2(annotation.element_value_pairs.len() as u16);
     for pair in &annotation.element_value_pairs {
-        writer.write_u2(pair.element_name_index);
+        writer.write_u2(pair.element_name_index.into());
         write_element_value_info(writer, &pair.element_value)?;
     }
     Ok(())
@@ -840,10 +839,10 @@ fn write_parameter_annotations(
 }
 
 fn write_annotation_info(writer: &mut ByteWriter, annotation: &AnnotationInfo) -> Result<()> {
-    writer.write_u2(annotation.type_index);
+    writer.write_u2(annotation.type_index.into());
     writer.write_u2(annotation.element_value_pairs.len() as u16);
     for pair in &annotation.element_value_pairs {
-        writer.write_u2(pair.element_name_index);
+        writer.write_u2(pair.element_name_index.into());
         write_element_value_info(writer, &pair.element_value)?;
     }
     Ok(())
@@ -865,7 +864,7 @@ fn write_element_value_info(writer: &mut ByteWriter, value: &ElementValueInfo) -
             | ElementValueTag::Boolean
             | ElementValueTag::String => {
                 writer.write_u1(*tag as u8);
-                writer.write_u2(*const_value_index);
+                writer.write_u2((*const_value_index).into());
             }
             _ => {
                 return Err(invalid_writer_state(format!(
@@ -879,12 +878,12 @@ fn write_element_value_info(writer: &mut ByteWriter, value: &ElementValueInfo) -
             const_name_index,
         } => {
             writer.write_u1(ElementValueTag::Enum as u8);
-            writer.write_u2(*type_name_index);
-            writer.write_u2(*const_name_index);
+            writer.write_u2((*type_name_index).into());
+            writer.write_u2((*const_name_index).into());
         }
         ElementValueInfo::Class { class_info_index } => {
             writer.write_u1(ElementValueTag::Class as u8);
-            writer.write_u2(*class_info_index);
+            writer.write_u2((*class_info_index).into());
         }
         ElementValueInfo::Annotation(annotation) => {
             writer.write_u1(ElementValueTag::Annotation as u8);
@@ -927,7 +926,7 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) {
         }
         Instruction::ConstantPoolIndexWide(ConstantPoolIndexWide { opcode, index, .. }) => {
             writer.write_u1(*opcode);
-            writer.write_u2(*index);
+            writer.write_u2((*index).into());
         }
         Instruction::Byte { opcode, value, .. } => {
             writer.write_u1(*opcode);
@@ -962,7 +961,7 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) {
             index, reserved, ..
         }) => {
             writer.write_u1(0xBA);
-            writer.write_u2(*index);
+            writer.write_u2((*index).into());
             writer.write_u2(*reserved);
         }
         Instruction::InvokeInterface(InvokeInterfaceInsn {
@@ -972,7 +971,7 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) {
             ..
         }) => {
             writer.write_u1(0xB9);
-            writer.write_u2(*index);
+            writer.write_u2((*index).into());
             writer.write_u1(*count);
             writer.write_u1(*reserved);
         }
@@ -984,7 +983,7 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) {
             index, dimensions, ..
         } => {
             writer.write_u1(0xC5);
-            writer.write_u2(*index);
+            writer.write_u2((*index).into());
             writer.write_u1(*dimensions);
         }
         Instruction::LookupSwitch(LookupSwitchInsn {

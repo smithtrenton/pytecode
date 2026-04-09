@@ -394,7 +394,7 @@ fn wrap_element_value_info(py: Python<'_>, value: &raw::ElementValueInfo) -> PyR
             const_value_index,
         } => {
             let tag = (*tag as u8 as char).to_string();
-            let value = wrap_const_value_info(py, *const_value_index)?;
+            let value = wrap_const_value_info(py, (*const_value_index).into())?;
             call_attr_class!(py, "ElementValueInfo", tag, value)
         }
         raw::ElementValueInfo::Enum {
@@ -785,7 +785,7 @@ macro_rules! define_numeric_cp_wrapper {
             $(
                 #[getter]
                 fn $field(&self) -> $ty {
-                    self.inner.$field
+                    self.inner.$field.into()
                 }
             )*
         }
@@ -995,11 +995,11 @@ impl PyInsnInfo {
         match &self.inner {
             raw::Instruction::LocalIndex { index, .. }
             | raw::Instruction::ConstantPoolIndex1 { index, .. } => Some(u16::from(*index)),
-            raw::Instruction::ConstantPoolIndexWide(inner) => Some(inner.index),
+            raw::Instruction::ConstantPoolIndexWide(inner) => Some(inner.index.into()),
             raw::Instruction::IInc { index, .. } => Some(u16::from(*index)),
-            raw::Instruction::InvokeDynamic(inner) => Some(inner.index),
-            raw::Instruction::InvokeInterface(inner) => Some(inner.index),
-            raw::Instruction::MultiANewArray { index, .. } => Some(*index),
+            raw::Instruction::InvokeDynamic(inner) => Some(inner.index.into()),
+            raw::Instruction::InvokeInterface(inner) => Some(inner.index.into()),
+            raw::Instruction::MultiANewArray { index, .. } => Some((*index).into()),
             raw::Instruction::Wide(inner) => Some(inner.index),
             _ => None,
         }
@@ -1153,7 +1153,7 @@ impl PyExceptionInfo {
 
     #[getter]
     fn catch_type(&self) -> u16 {
-        self.inner.catch_type
+        self.inner.catch_type.into()
     }
 }
 
@@ -1167,7 +1167,7 @@ pub struct PyConstantValueAttr {
 impl PyConstantValueAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1177,7 +1177,7 @@ impl PyConstantValueAttr {
 
     #[getter]
     fn constantvalue_index(&self) -> u16 {
-        self.inner.constantvalue_index
+        self.inner.constantvalue_index.into()
     }
 }
 
@@ -1191,7 +1191,7 @@ pub struct PySignatureAttr {
 impl PySignatureAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1201,7 +1201,7 @@ impl PySignatureAttr {
 
     #[getter]
     fn signature_index(&self) -> u16 {
-        self.inner.signature_index
+        self.inner.signature_index.into()
     }
 }
 
@@ -1215,7 +1215,7 @@ pub struct PySourceFileAttr {
 impl PySourceFileAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1225,7 +1225,7 @@ impl PySourceFileAttr {
 
     #[getter]
     fn sourcefile_index(&self) -> u16 {
-        self.inner.sourcefile_index
+        self.inner.sourcefile_index.into()
     }
 }
 
@@ -1239,7 +1239,7 @@ pub struct PySourceDebugExtensionAttr {
 impl PySourceDebugExtensionAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1263,7 +1263,7 @@ pub struct PyExceptionsAttr {
 impl PyExceptionsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1278,7 +1278,11 @@ impl PyExceptionsAttr {
 
     #[getter]
     fn exception_index_table(&self) -> Vec<u16> {
-        self.inner.exception_index_table.clone()
+        self.inner
+            .exception_index_table
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1292,7 +1296,7 @@ pub struct PyCodeAttr {
 impl PyCodeAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1370,7 +1374,7 @@ pub struct PyUnimplementedAttr {
 impl PyUnimplementedAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1907,12 +1911,12 @@ impl PyFieldInfo {
 
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
     fn descriptor_index(&self) -> u16 {
-        self.inner.descriptor_index
+        self.inner.descriptor_index.into()
     }
 
     #[getter]
@@ -1945,12 +1949,12 @@ impl PyMethodInfo {
 
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
     fn descriptor_index(&self) -> u16 {
-        self.inner.descriptor_index
+        self.inner.descriptor_index.into()
     }
 
     #[getter]
@@ -2018,12 +2022,12 @@ impl PyClassFile {
 
     #[getter]
     fn this_class(&self) -> u16 {
-        self.inner.this_class
+        self.inner.this_class.into()
     }
 
     #[getter]
     fn super_class(&self) -> u16 {
-        self.inner.super_class
+        self.inner.super_class.into()
     }
 
     #[getter]
@@ -2038,7 +2042,7 @@ impl PyClassFile {
 
     #[getter]
     fn interfaces(&self) -> Vec<u16> {
-        self.inner.interfaces.clone()
+        self.inner.interfaces.iter().map(|x| (*x).into()).collect()
     }
 
     #[getter]

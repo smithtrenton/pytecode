@@ -666,8 +666,7 @@ impl PyPipeline {
                     let py_model = PyClassModel {
                         inner: std::mem::take(model),
                     };
-                    let cell =
-                        Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
@@ -714,8 +713,7 @@ impl PyPipeline {
                     let py_model = PyClassModel {
                         inner: std::mem::take(model),
                     };
-                    let cell =
-                        Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
@@ -761,8 +759,7 @@ impl PyPipeline {
                     let py_model = PyClassModel {
                         inner: std::mem::take(model),
                     };
-                    let cell =
-                        Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
@@ -822,11 +819,7 @@ impl PyCompiledPipeline {
     }
 
     /// Apply compiled pipeline to many models (mutates in-place).
-    fn apply_all(
-        &self,
-        _py: Python<'_>,
-        models: &Bound<'_, pyo3::types::PyList>,
-    ) -> PyResult<()> {
+    fn apply_all(&self, _py: Python<'_>, models: &Bound<'_, pyo3::types::PyList>) -> PyResult<()> {
         for item in models.iter() {
             let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
             self.inner.apply(&mut model.inner);

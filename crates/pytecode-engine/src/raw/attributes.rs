@@ -3,41 +3,42 @@ use crate::constants::{
     ModuleRequiresAccessFlag, NestedClassAccessFlag, TargetInfoType, TargetType, TypePathKind,
     VerificationType,
 };
+use crate::indexes::{ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex, Utf8Index};
 use crate::raw::instructions::Instruction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstantValueAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub constantvalue_index: u16,
+    pub constantvalue_index: CpIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub signature_index: u16,
+    pub signature_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFileAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub sourcefile_index: u16,
+    pub sourcefile_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDebugExtensionAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub debug_extension: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExceptionsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub exception_index_table: Vec<u16>,
+    pub exception_index_table: Vec<ClassIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,12 +46,12 @@ pub struct ExceptionHandler {
     pub start_pc: u16,
     pub end_pc: u16,
     pub handler_pc: u16,
-    pub catch_type: u16,
+    pub catch_type: ClassIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub max_stack: u16,
     pub max_locals: u16,
@@ -62,169 +63,169 @@ pub struct CodeAttribute {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackMapTableAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub entries: Vec<StackMapFrameInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntheticAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineNumberTableAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub line_number_table: Vec<LineNumberInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalVariableTableAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub local_variable_table: Vec<LocalVariableInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalVariableTypeTableAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub local_variable_type_table: Vec<LocalVariableTypeInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeprecatedAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerClassesAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub classes: Vec<InnerClassInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnclosingMethodAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub class_index: u16,
-    pub method_index: u16,
+    pub class_index: ClassIndex,
+    pub method_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodParametersAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub parameters: Vec<MethodParameterInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestHostAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub host_class_index: u16,
+    pub host_class_index: ClassIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestMembersAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub classes: Vec<u16>,
+    pub classes: Vec<ClassIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeVisibleAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub annotations: Vec<AnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeInvisibleAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub annotations: Vec<AnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeVisibleParameterAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub parameter_annotations: Vec<ParameterAnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeInvisibleParameterAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub parameter_annotations: Vec<ParameterAnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnotationDefaultAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub default_value: ElementValueInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeVisibleTypeAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub annotations: Vec<TypeAnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeInvisibleTypeAnnotationsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub annotations: Vec<TypeAnnotationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapMethodsAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub bootstrap_methods: Vec<BootstrapMethodInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub module: ModuleInfo,
+    pub module: ModuleAttributeModuleInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModulePackagesAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub package_index: Vec<u16>,
+    pub package_index: Vec<PackageIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleMainClassAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub main_class_index: u16,
+    pub main_class_index: ClassIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub components: Vec<RecordComponentInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermittedSubclassesAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
-    pub classes: Vec<u16>,
+    pub classes: Vec<ClassIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,7 +237,7 @@ pub enum VerificationTypeInfo {
     Long,
     Null,
     UninitializedThis,
-    Object { cpool_index: u16 },
+    Object { cpool_index: ClassIndex },
     Uninitialized { offset: u16 },
 }
 
@@ -348,14 +349,14 @@ impl ElementValueTag {
 pub enum ElementValueInfo {
     Const {
         tag: ElementValueTag,
-        const_value_index: u16,
+        const_value_index: CpIndex,
     },
     Enum {
-        type_name_index: u16,
-        const_name_index: u16,
+        type_name_index: Utf8Index,
+        const_name_index: Utf8Index,
     },
     Class {
-        class_info_index: u16,
+        class_info_index: Utf8Index,
     },
     Annotation(AnnotationInfo),
     Array {
@@ -377,13 +378,13 @@ impl ElementValueInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElementValuePairInfo {
-    pub element_name_index: u16,
+    pub element_name_index: Utf8Index,
     pub element_value: ElementValueInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnnotationInfo {
-    pub type_index: u16,
+    pub type_index: Utf8Index,
     pub element_value_pairs: Vec<ElementValuePairInfo>,
 }
 
@@ -466,15 +467,15 @@ pub struct TypeAnnotationInfo {
     pub target_type: TargetType,
     pub target_info: TargetInfo,
     pub target_path: TypePathInfo,
-    pub type_index: u16,
+    pub type_index: Utf8Index,
     pub element_value_pairs: Vec<ElementValuePairInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerClassInfo {
-    pub inner_class_info_index: u16,
-    pub outer_class_info_index: u16,
-    pub inner_name_index: u16,
+    pub inner_class_info_index: ClassIndex,
+    pub outer_class_info_index: ClassIndex,
+    pub inner_name_index: Utf8Index,
     pub inner_class_access_flags: NestedClassAccessFlag,
 }
 
@@ -488,8 +489,8 @@ pub struct LineNumberInfo {
 pub struct LocalVariableInfo {
     pub start_pc: u16,
     pub length: u16,
-    pub name_index: u16,
-    pub descriptor_index: u16,
+    pub name_index: Utf8Index,
+    pub descriptor_index: Utf8Index,
     pub index: u16,
 }
 
@@ -497,72 +498,72 @@ pub struct LocalVariableInfo {
 pub struct LocalVariableTypeInfo {
     pub start_pc: u16,
     pub length: u16,
-    pub name_index: u16,
-    pub signature_index: u16,
+    pub name_index: Utf8Index,
+    pub signature_index: Utf8Index,
     pub index: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapMethodInfo {
-    pub bootstrap_method_ref: u16,
-    pub bootstrap_arguments: Vec<u16>,
+    pub bootstrap_method_ref: CpIndex,
+    pub bootstrap_arguments: Vec<CpIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodParameterInfo {
-    pub name_index: u16,
+    pub name_index: Utf8Index,
     pub access_flags: MethodParameterAccessFlag,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequiresInfo {
-    pub requires_index: u16,
+    pub requires_index: ModuleIndex,
     pub requires_flags: ModuleRequiresAccessFlag,
-    pub requires_version_index: u16,
+    pub requires_version_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportInfo {
-    pub exports_index: u16,
+    pub exports_index: PackageIndex,
     pub exports_flags: ModuleExportsAccessFlag,
-    pub exports_to_index: Vec<u16>,
+    pub exports_to_index: Vec<ModuleIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpensInfo {
-    pub opens_index: u16,
+    pub opens_index: PackageIndex,
     pub opens_flags: ModuleOpensAccessFlag,
-    pub opens_to_index: Vec<u16>,
+    pub opens_to_index: Vec<ModuleIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvidesInfo {
-    pub provides_index: u16,
-    pub provides_with_index: Vec<u16>,
+    pub provides_index: ClassIndex,
+    pub provides_with_index: Vec<ClassIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleInfo {
-    pub module_name_index: u16,
+pub struct ModuleAttributeModuleInfo {
+    pub module_name_index: ModuleIndex,
     pub module_flags: ModuleAccessFlag,
-    pub module_version_index: u16,
+    pub module_version_index: Utf8Index,
     pub requires: Vec<RequiresInfo>,
     pub exports: Vec<ExportInfo>,
     pub opens: Vec<OpensInfo>,
-    pub uses_index: Vec<u16>,
+    pub uses_index: Vec<ClassIndex>,
     pub provides: Vec<ProvidesInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordComponentInfo {
-    pub name_index: u16,
-    pub descriptor_index: u16,
+    pub name_index: Utf8Index,
+    pub descriptor_index: Utf8Index,
     pub attributes: Vec<AttributeInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownAttribute {
-    pub attribute_name_index: u16,
+    pub attribute_name_index: Utf8Index,
     pub attribute_length: u32,
     pub name: String,
     pub info: Vec<u8>,
@@ -604,7 +605,7 @@ pub enum AttributeInfo {
 }
 
 impl AttributeInfo {
-    pub fn attribute_name_index(&self) -> u16 {
+    pub fn attribute_name_index(&self) -> Utf8Index {
         match self {
             Self::ConstantValue(attr) => attr.attribute_name_index,
             Self::Signature(attr) => attr.attribute_name_index,

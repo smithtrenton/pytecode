@@ -1,6 +1,7 @@
 use pytecode_archive::{JarFile, RewriteOptions};
 use pytecode_engine::constants::{MAGIC, MethodAccessFlags};
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
+use pytecode_engine::indexes::*;
 use pytecode_engine::model::{ClassModel, CodeItem, FrameComputationMode};
 use pytecode_engine::modified_utf8::decode_modified_utf8;
 use pytecode_engine::parse_class;
@@ -46,8 +47,8 @@ fn make_jar(path: &Path, entries: &[(&str, &[u8])]) -> TestResult<()> {
     Ok(())
 }
 
-fn cp_utf8(classfile: &pytecode_engine::raw::ClassFile, index: u16) -> String {
-    match classfile.constant_pool[index as usize]
+fn cp_utf8(classfile: &pytecode_engine::raw::ClassFile, index: Utf8Index) -> String {
+    match classfile.constant_pool[index.value() as usize]
         .as_ref()
         .expect("cp entry should exist")
     {

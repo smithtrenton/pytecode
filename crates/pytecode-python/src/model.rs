@@ -224,7 +224,7 @@ fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
                     dict.set_item("value_type", "dynamic")?;
                     dict.set_item(
                         "bootstrap_method_attr_index",
-                        dv.bootstrap_method_attr_index,
+                        dv.bootstrap_method_attr_index.value(),
                     )?;
                     dict.set_item("name", &dv.name)?;
                     dict.set_item("descriptor", &dv.descriptor)?;
@@ -235,7 +235,7 @@ fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
             dict.set_item("type", "invokedynamic")?;
             dict.set_item(
                 "bootstrap_method_attr_index",
-                id.bootstrap_method_attr_index,
+                id.bootstrap_method_attr_index.value(),
             )?;
             dict.set_item("name", &id.name)?;
             dict.set_item("descriptor", &id.descriptor)?;
@@ -498,54 +498,63 @@ impl PyConstantPoolBuilder {
     fn add_utf8(&mut self, value: &str) -> PyResult<u16> {
         self.inner
             .add_utf8(value)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_class(&mut self, name: &str) -> PyResult<u16> {
         self.inner
             .add_class(name)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_string(&mut self, value: &str) -> PyResult<u16> {
         self.inner
             .add_string(value)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_integer(&mut self, value: u32) -> PyResult<u16> {
         self.inner
             .add_integer(value)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_long(&mut self, value: u64) -> PyResult<u16> {
         self.inner
             .add_long(value)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_float_bits(&mut self, raw_bits: u32) -> PyResult<u16> {
         self.inner
             .add_float_bits(raw_bits)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_double_bits(&mut self, raw_bits: u64) -> PyResult<u16> {
         self.inner
             .add_double_bits(raw_bits)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_field_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
         self.inner
             .add_field_ref(owner, name, descriptor)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
         self.inner
             .add_method_ref(owner, name, descriptor)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
@@ -557,18 +566,24 @@ impl PyConstantPoolBuilder {
     ) -> PyResult<u16> {
         self.inner
             .add_interface_method_ref(owner, name, descriptor)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_method_type(&mut self, descriptor: &str) -> PyResult<u16> {
         self.inner
             .add_method_type(descriptor)
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn add_method_handle(&mut self, reference_kind: u8, reference_index: u16) -> PyResult<u16> {
         self.inner
-            .add_method_handle(reference_kind, reference_index)
+            .add_method_handle(
+                reference_kind,
+                pytecode_engine::indexes::CpIndex::from(reference_index),
+            )
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
@@ -579,19 +594,24 @@ impl PyConstantPoolBuilder {
         descriptor: &str,
     ) -> PyResult<u16> {
         self.inner
-            .add_invoke_dynamic(bootstrap_idx, name, descriptor)
+            .add_invoke_dynamic(
+                pytecode_engine::indexes::BootstrapMethodIndex::from(bootstrap_idx),
+                name,
+                descriptor,
+            )
+            .map(|idx| idx.into())
             .map_err(crate::engine_error_to_py)
     }
 
     fn resolve_utf8(&self, index: u16) -> PyResult<String> {
         self.inner
-            .resolve_utf8(index)
+            .resolve_utf8(pytecode_engine::indexes::Utf8Index::from(index))
             .map_err(crate::engine_error_to_py)
     }
 
     fn resolve_class_name(&self, index: u16) -> PyResult<String> {
         self.inner
-            .resolve_class_name(index)
+            .resolve_class_name(pytecode_engine::indexes::ClassIndex::from(index))
             .map_err(crate::engine_error_to_py)
     }
 

@@ -1,4 +1,5 @@
 use crate::descriptors::{parameter_slot_count, parse_method_descriptor};
+use crate::indexes::BootstrapMethodIndex;
 use crate::{EngineError, EngineErrorKind, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +52,7 @@ pub struct MultiANewArrayInsn {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeDynamicInsn {
-    pub bootstrap_method_attr_index: u16,
+    pub bootstrap_method_attr_index: BootstrapMethodIndex,
     pub name: String,
     pub descriptor: String,
 }
@@ -80,7 +81,7 @@ pub struct MethodHandleValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicValue {
-    pub bootstrap_method_attr_index: u16,
+    pub bootstrap_method_attr_index: BootstrapMethodIndex,
     pub name: String,
     pub descriptor: String,
 }

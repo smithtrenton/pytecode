@@ -4,6 +4,7 @@ use pytecode_engine::analysis::{
     vtype_from_field_descriptor_str,
 };
 use pytecode_engine::constants::MethodAccessFlags;
+use pytecode_engine::indexes::*;
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, DebugInfoPolicy, Label, VarInsn,
 };
@@ -110,8 +111,8 @@ fn has_code_attr_named(code: &pytecode_engine::raw::CodeAttribute, name: &str) -
         })
 }
 
-fn cp_utf8(classfile: &pytecode_engine::raw::ClassFile, index: u16) -> String {
-    match classfile.constant_pool[index as usize]
+fn cp_utf8(classfile: &pytecode_engine::raw::ClassFile, index: Utf8Index) -> String {
+    match classfile.constant_pool[index.value() as usize]
         .as_ref()
         .expect("cp entry should exist")
     {

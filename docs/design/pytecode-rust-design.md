@@ -167,7 +167,7 @@ The raw model should stay close to the JVM classfile format:
 Recommended design:
 
 - use enums for closed sets like constant-pool tags, attributes, and instructions,
-- use typed newtypes for indexes like `CpIndex`, `MethodIndex`, `FieldIndex` (not yet implemented — raw `u16` is used throughout; this is a future safety improvement),
+- use typed newtypes for constant pool indexes (`CpIndex`, `Utf8Index`, `ClassIndex`, `NameAndTypeIndex`, `FieldRefIndex`, `MethodRefIndex`, `ModuleIndex`, `PackageIndex`, `BootstrapMethodIndex`) — all `#[repr(transparent)]` over `u16` for zero-cost compile-time type safety,
 - preserve unknown attributes as opaque byte payloads,
 - keep imported ordering and slot layout where roundtrip fidelity depends on it.
 

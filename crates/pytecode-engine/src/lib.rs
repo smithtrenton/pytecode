@@ -6,6 +6,7 @@ pub mod constants;
 pub mod descriptors;
 pub mod error;
 pub mod fixtures;
+pub mod indexes;
 pub mod model;
 pub mod modified_utf8;
 pub mod raw;
@@ -16,5 +17,9 @@ pub mod transform;
 pub mod writer;
 
 pub use error::{EngineError, EngineErrorKind, Result};
+pub use indexes::{
+    BootstrapMethodIndex, ClassIndex, CpIndex, FieldRefIndex, MethodRefIndex, ModuleIndex,
+    NameAndTypeIndex, PackageIndex, Utf8Index,
+};
 pub use reader::{ClassReader, parse_class, parse_class_bytes};
 pub use writer::{ClassWriter, write_class};

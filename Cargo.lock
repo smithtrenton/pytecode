@@ -397,6 +397,7 @@ name = "pytecode-engine"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "pyo3",
  "regex",
  "rustc-hash",
  "serde",

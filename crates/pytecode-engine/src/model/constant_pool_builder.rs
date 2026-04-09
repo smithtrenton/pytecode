@@ -1,3 +1,7 @@
+use crate::indexes::{
+    BootstrapMethodIndex, ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex,
+    Utf8Index,
+};
 use crate::modified_utf8::{decode_modified_utf8, encode_modified_utf8};
 use crate::raw::{
     ClassInfo, ConstantPoolEntry, DoubleInfo, DynamicInfo, FieldRefInfo, FloatInfo, IntegerInfo,
@@ -83,34 +87,34 @@ impl ConstantPoolBuilder {
             .ok_or_else(|| EngineError::new(0, EngineErrorKind::InvalidConstantPoolIndex { index }))
     }
 
-    pub fn resolve_utf8(&self, index: u16) -> Result<String> {
-        let entry = self.entry(index)?;
+    pub fn resolve_utf8(&self, index: Utf8Index) -> Result<String> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::Utf8(info) => decode_modified_utf8(&info.bytes),
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not Utf8"),
+                    reason: format!("constant-pool entry {} is not Utf8", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_class_name(&self, index: u16) -> Result<String> {
-        let entry = self.entry(index)?;
+    pub fn resolve_class_name(&self, index: ClassIndex) -> Result<String> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::Class(info) => self.resolve_utf8(info.name_index),
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not Class"),
+                    reason: format!("constant-pool entry {} is not Class", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_name_and_type(&self, index: u16) -> Result<(String, String)> {
-        let entry = self.entry(index)?;
+    pub fn resolve_name_and_type(&self, index: NameAndTypeIndex) -> Result<(String, String)> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::NameAndType(info) => Ok((
                 self.resolve_utf8(info.name_index)?,
@@ -119,14 +123,14 @@ impl ConstantPoolBuilder {
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not NameAndType"),
+                    reason: format!("constant-pool entry {} is not NameAndType", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_field_ref(&self, index: u16) -> Result<(String, String, String)> {
-        let entry = self.entry(index)?;
+    pub fn resolve_field_ref(&self, index: CpIndex) -> Result<(String, String, String)> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::FieldRef(info) => {
                 let owner = self.resolve_class_name(info.class_index)?;
@@ -136,14 +140,14 @@ impl ConstantPoolBuilder {
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not FieldRef"),
+                    reason: format!("constant-pool entry {} is not FieldRef", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_method_ref(&self, index: u16) -> Result<(String, String, String)> {
-        let entry = self.entry(index)?;
+    pub fn resolve_method_ref(&self, index: CpIndex) -> Result<(String, String, String)> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::MethodRef(info) => {
                 let owner = self.resolve_class_name(info.class_index)?;
@@ -153,14 +157,14 @@ impl ConstantPoolBuilder {
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not MethodRef"),
+                    reason: format!("constant-pool entry {} is not MethodRef", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_any_method_ref(&self, index: u16) -> Result<(String, String, String, bool)> {
-        let entry = self.entry(index)?;
+    pub fn resolve_any_method_ref(&self, index: CpIndex) -> Result<(String, String, String, bool)> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::MethodRef(_) => {
                 let (owner, name, descriptor) = self.resolve_method_ref(index)?;
@@ -174,15 +178,16 @@ impl ConstantPoolBuilder {
                 0,
                 EngineErrorKind::InvalidModelState {
                     reason: format!(
-                        "constant-pool entry {index} is not MethodRef or InterfaceMethodRef"
+                        "constant-pool entry {} is not MethodRef or InterfaceMethodRef",
+                        index
                     ),
                 },
             )),
         }
     }
 
-    pub fn resolve_interface_method_ref(&self, index: u16) -> Result<(String, String, String)> {
-        let entry = self.entry(index)?;
+    pub fn resolve_interface_method_ref(&self, index: CpIndex) -> Result<(String, String, String)> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::InterfaceMethodRef(info) => {
                 let owner = self.resolve_class_name(info.class_index)?;
@@ -192,33 +197,33 @@ impl ConstantPoolBuilder {
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not InterfaceMethodRef"),
+                    reason: format!("constant-pool entry {} is not InterfaceMethodRef", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_method_type(&self, index: u16) -> Result<String> {
-        let entry = self.entry(index)?;
+    pub fn resolve_method_type(&self, index: CpIndex) -> Result<String> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::MethodType(info) => self.resolve_utf8(info.descriptor_index),
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not MethodType"),
+                    reason: format!("constant-pool entry {} is not MethodType", index),
                 },
             )),
         }
     }
 
-    pub fn resolve_string(&self, index: u16) -> Result<String> {
-        let entry = self.entry(index)?;
+    pub fn resolve_string(&self, index: CpIndex) -> Result<String> {
+        let entry = self.entry(index.value())?;
         match entry {
             ConstantPoolEntry::String(info) => self.resolve_utf8(info.string_index),
             _ => Err(EngineError::new(
                 0,
                 EngineErrorKind::InvalidModelState {
-                    reason: format!("constant-pool entry {index} is not String"),
+                    reason: format!("constant-pool entry {} is not String", index),
                 },
             )),
         }
@@ -259,7 +264,7 @@ impl ConstantPoolBuilder {
         Ok(index)
     }
 
-    pub fn add_utf8(&mut self, value: &str) -> Result<u16> {
+    pub fn add_utf8(&mut self, value: &str) -> Result<Utf8Index> {
         let bytes = encode_modified_utf8(value);
         if bytes.len() > UTF8_MAX_BYTES {
             return Err(EngineError::new(
@@ -270,69 +275,79 @@ impl ConstantPoolBuilder {
             ));
         }
         self.add_entry(ConstantPoolEntry::Utf8(Utf8Info { bytes }))
+            .map(Utf8Index::from)
     }
 
-    pub fn add_integer(&mut self, value: u32) -> Result<u16> {
+    pub fn add_integer(&mut self, value: u32) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Integer(IntegerInfo {
             value_bytes: value,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_float_bits(&mut self, raw_bits: u32) -> Result<u16> {
+    pub fn add_float_bits(&mut self, raw_bits: u32) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Float(FloatInfo {
             value_bytes: raw_bits,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_long(&mut self, value: u64) -> Result<u16> {
+    pub fn add_long(&mut self, value: u64) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Long(LongInfo {
             high_bytes: (value >> 32) as u32,
             low_bytes: value as u32,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_double_bits(&mut self, raw_bits: u64) -> Result<u16> {
+    pub fn add_double_bits(&mut self, raw_bits: u64) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Double(DoubleInfo {
             high_bytes: (raw_bits >> 32) as u32,
             low_bytes: raw_bits as u32,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_class(&mut self, class_name: &str) -> Result<u16> {
+    pub fn add_class(&mut self, class_name: &str) -> Result<ClassIndex> {
         let name_index = self.add_utf8(class_name)?;
         self.add_entry(ConstantPoolEntry::Class(ClassInfo { name_index }))
+            .map(ClassIndex::from)
     }
 
-    pub fn add_string(&mut self, value: &str) -> Result<u16> {
+    pub fn add_string(&mut self, value: &str) -> Result<CpIndex> {
         let string_index = self.add_utf8(value)?;
         self.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
+            .map(CpIndex::from)
     }
 
-    pub fn add_name_and_type(&mut self, name: &str, descriptor: &str) -> Result<u16> {
+    pub fn add_name_and_type(&mut self, name: &str, descriptor: &str) -> Result<NameAndTypeIndex> {
         let name_index = self.add_utf8(name)?;
         let descriptor_index = self.add_utf8(descriptor)?;
         self.add_entry(ConstantPoolEntry::NameAndType(NameAndTypeInfo {
             name_index,
             descriptor_index,
         }))
+        .map(NameAndTypeIndex::from)
     }
 
-    pub fn add_field_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<u16> {
+    pub fn add_field_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<CpIndex> {
         let class_index = self.add_class(owner)?;
         let name_and_type_index = self.add_name_and_type(name, descriptor)?;
         self.add_entry(ConstantPoolEntry::FieldRef(FieldRefInfo {
             class_index,
             name_and_type_index,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<u16> {
+    pub fn add_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<CpIndex> {
         let class_index = self.add_class(owner)?;
         let name_and_type_index = self.add_name_and_type(name, descriptor)?;
         self.add_entry(ConstantPoolEntry::MethodRef(MethodRefInfo {
             class_index,
             name_and_type_index,
         }))
+        .map(CpIndex::from)
     }
 
     pub fn add_interface_method_ref(
@@ -340,7 +355,7 @@ impl ConstantPoolBuilder {
         owner: &str,
         name: &str,
         descriptor: &str,
-    ) -> Result<u16> {
+    ) -> Result<CpIndex> {
         let class_index = self.add_class(owner)?;
         let name_and_type_index = self.add_name_and_type(name, descriptor)?;
         self.add_entry(ConstantPoolEntry::InterfaceMethodRef(
@@ -349,56 +364,67 @@ impl ConstantPoolBuilder {
                 name_and_type_index,
             },
         ))
+        .map(CpIndex::from)
     }
 
-    pub fn add_method_type(&mut self, descriptor: &str) -> Result<u16> {
+    pub fn add_method_type(&mut self, descriptor: &str) -> Result<CpIndex> {
         let descriptor_index = self.add_utf8(descriptor)?;
         self.add_entry(ConstantPoolEntry::MethodType(MethodTypeInfo {
             descriptor_index,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_method_handle(&mut self, reference_kind: u8, reference_index: u16) -> Result<u16> {
+    pub fn add_method_handle(
+        &mut self,
+        reference_kind: u8,
+        reference_index: CpIndex,
+    ) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::MethodHandle(MethodHandleInfo {
             reference_kind,
             reference_index,
         }))
+        .map(CpIndex::from)
     }
 
     pub fn add_dynamic(
         &mut self,
-        bootstrap_method_attr_index: u16,
+        bootstrap_method_attr_index: BootstrapMethodIndex,
         name: &str,
         descriptor: &str,
-    ) -> Result<u16> {
+    ) -> Result<CpIndex> {
         let name_and_type_index = self.add_name_and_type(name, descriptor)?;
         self.add_entry(ConstantPoolEntry::Dynamic(DynamicInfo {
             bootstrap_method_attr_index,
             name_and_type_index,
         }))
+        .map(CpIndex::from)
     }
 
     pub fn add_invoke_dynamic(
         &mut self,
-        bootstrap_method_attr_index: u16,
+        bootstrap_method_attr_index: BootstrapMethodIndex,
         name: &str,
         descriptor: &str,
-    ) -> Result<u16> {
+    ) -> Result<CpIndex> {
         let name_and_type_index = self.add_name_and_type(name, descriptor)?;
         self.add_entry(ConstantPoolEntry::InvokeDynamic(InvokeDynamicInfo {
             bootstrap_method_attr_index,
             name_and_type_index,
         }))
+        .map(CpIndex::from)
     }
 
-    pub fn add_module(&mut self, name: &str) -> Result<u16> {
+    pub fn add_module(&mut self, name: &str) -> Result<ModuleIndex> {
         let name_index = self.add_utf8(name)?;
         self.add_entry(ConstantPoolEntry::Module(ModuleInfo { name_index }))
+            .map(ModuleIndex::from)
     }
 
-    pub fn add_package(&mut self, name: &str) -> Result<u16> {
+    pub fn add_package(&mut self, name: &str) -> Result<PackageIndex> {
         let name_index = self.add_utf8(name)?;
         self.add_entry(ConstantPoolEntry::Package(PackageInfo { name_index }))
+            .map(PackageIndex::from)
     }
 }
 
@@ -431,32 +457,34 @@ impl PoolKey {
             ConstantPoolEntry::Float(info) => Self::Float(info.value_bytes),
             ConstantPoolEntry::Long(info) => Self::Long(info.high_bytes, info.low_bytes),
             ConstantPoolEntry::Double(info) => Self::Double(info.high_bytes, info.low_bytes),
-            ConstantPoolEntry::Class(info) => Self::Class(info.name_index),
-            ConstantPoolEntry::String(info) => Self::String(info.string_index),
+            ConstantPoolEntry::Class(info) => Self::Class(info.name_index.value()),
+            ConstantPoolEntry::String(info) => Self::String(info.string_index.value()),
             ConstantPoolEntry::FieldRef(info) => {
-                Self::FieldRef(info.class_index, info.name_and_type_index)
+                Self::FieldRef(info.class_index.value(), info.name_and_type_index.value())
             }
             ConstantPoolEntry::MethodRef(info) => {
-                Self::MethodRef(info.class_index, info.name_and_type_index)
+                Self::MethodRef(info.class_index.value(), info.name_and_type_index.value())
             }
             ConstantPoolEntry::InterfaceMethodRef(info) => {
-                Self::InterfaceMethodRef(info.class_index, info.name_and_type_index)
+                Self::InterfaceMethodRef(info.class_index.value(), info.name_and_type_index.value())
             }
             ConstantPoolEntry::NameAndType(info) => {
-                Self::NameAndType(info.name_index, info.descriptor_index)
+                Self::NameAndType(info.name_index.value(), info.descriptor_index.value())
             }
             ConstantPoolEntry::MethodHandle(info) => {
-                Self::MethodHandle(info.reference_kind, info.reference_index)
+                Self::MethodHandle(info.reference_kind, info.reference_index.value())
             }
-            ConstantPoolEntry::MethodType(info) => Self::MethodType(info.descriptor_index),
-            ConstantPoolEntry::Dynamic(info) => {
-                Self::Dynamic(info.bootstrap_method_attr_index, info.name_and_type_index)
-            }
-            ConstantPoolEntry::InvokeDynamic(info) => {
-                Self::InvokeDynamic(info.bootstrap_method_attr_index, info.name_and_type_index)
-            }
-            ConstantPoolEntry::Module(info) => Self::Module(info.name_index),
-            ConstantPoolEntry::Package(info) => Self::Package(info.name_index),
+            ConstantPoolEntry::MethodType(info) => Self::MethodType(info.descriptor_index.value()),
+            ConstantPoolEntry::Dynamic(info) => Self::Dynamic(
+                info.bootstrap_method_attr_index.value(),
+                info.name_and_type_index.value(),
+            ),
+            ConstantPoolEntry::InvokeDynamic(info) => Self::InvokeDynamic(
+                info.bootstrap_method_attr_index.value(),
+                info.name_and_type_index.value(),
+            ),
+            ConstantPoolEntry::Module(info) => Self::Module(info.name_index.value()),
+            ConstantPoolEntry::Package(info) => Self::Package(info.name_index.value()),
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::error::{EngineError, EngineErrorKind, Result};
+use crate::indexes::{ClassIndex, CpIndex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -35,7 +36,7 @@ impl TryFrom<u8> for ArrayType {
 pub struct ConstantPoolIndexWide {
     pub opcode: u8,
     pub offset: u32,
-    pub index: u16,
+    pub index: CpIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,14 +49,14 @@ pub struct Branch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeDynamicInsn {
     pub offset: u32,
-    pub index: u16,
+    pub index: CpIndex,
     pub reserved: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeInterfaceInsn {
     pub offset: u32,
-    pub index: u16,
+    pub index: CpIndex,
     pub count: u8,
     pub reserved: u8,
 }
@@ -139,7 +140,7 @@ pub enum Instruction {
     NewArray(NewArrayInsn),
     MultiANewArray {
         offset: u32,
-        index: u16,
+        index: ClassIndex,
         dimensions: u8,
     },
     LookupSwitch(LookupSwitchInsn),

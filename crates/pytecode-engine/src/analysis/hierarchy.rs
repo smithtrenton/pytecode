@@ -1,5 +1,6 @@
 use super::AnalysisError;
 use crate::constants::{ClassAccessFlags, MethodAccessFlags};
+use crate::indexes::{ClassIndex, Utf8Index};
 use crate::model::{ClassModel, MethodModel};
 use crate::raw::ClassFile;
 use crate::raw::ConstantPoolEntry;
@@ -51,7 +52,7 @@ impl ResolvedClass {
 
     pub fn from_classfile(classfile: &ClassFile) -> EngineResult<Self> {
         let name = cp_class_name(classfile, classfile.this_class)?;
-        let super_name = if classfile.super_class == 0 {
+        let super_name = if classfile.super_class.value() == 0 {
             None
         } else {
             Some(cp_class_name(classfile, classfile.super_class)?)
@@ -357,15 +358,16 @@ fn resolve_class(
         })
 }
 
-fn cp_utf8(classfile: &ClassFile, index: u16) -> EngineResult<String> {
+fn cp_utf8(classfile: &ClassFile, index: Utf8Index) -> EngineResult<String> {
+    let raw = index.value();
     let entry = classfile
         .constant_pool
-        .get(index as usize)
+        .get(raw as usize)
         .and_then(Option::as_ref)
         .ok_or_else(|| {
             crate::EngineError::new(
                 0,
-                crate::EngineErrorKind::InvalidConstantPoolIndex { index },
+                crate::EngineErrorKind::InvalidConstantPoolIndex { index: raw },
             )
         })?;
     match entry {
@@ -373,21 +375,22 @@ fn cp_utf8(classfile: &ClassFile, index: u16) -> EngineResult<String> {
         _ => Err(crate::EngineError::new(
             0,
             crate::EngineErrorKind::InvalidModelState {
-                reason: format!("constant-pool entry {index} is not Utf8"),
+                reason: format!("constant-pool entry {raw} is not Utf8"),
             },
         )),
     }
 }
 
-fn cp_class_name(classfile: &ClassFile, index: u16) -> EngineResult<String> {
+fn cp_class_name(classfile: &ClassFile, index: ClassIndex) -> EngineResult<String> {
+    let raw = index.value();
     let entry = classfile
         .constant_pool
-        .get(index as usize)
+        .get(raw as usize)
         .and_then(Option::as_ref)
         .ok_or_else(|| {
             crate::EngineError::new(
                 0,
-                crate::EngineErrorKind::InvalidConstantPoolIndex { index },
+                crate::EngineErrorKind::InvalidConstantPoolIndex { index: raw },
             )
         })?;
     match entry {
@@ -395,7 +398,7 @@ fn cp_class_name(classfile: &ClassFile, index: u16) -> EngineResult<String> {
         _ => Err(crate::EngineError::new(
             0,
             crate::EngineErrorKind::InvalidModelState {
-                reason: format!("constant-pool entry {index} is not Class"),
+                reason: format!("constant-pool entry {raw} is not Class"),
             },
         )),
     }

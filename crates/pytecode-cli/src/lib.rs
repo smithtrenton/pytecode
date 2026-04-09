@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use pytecode_archive::{JarFile, RewriteOptions};
 use pytecode_engine::constants::MethodAccessFlags;
 use pytecode_engine::fixtures::{compatibility_manifest, default_benchmark_jar, repo_root};
+use pytecode_engine::indexes::Utf8Index;
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::modified_utf8::decode_modified_utf8;
 use pytecode_engine::parse_class;
@@ -465,14 +466,15 @@ fn class_summary(classfile: &ClassFile) -> CliResult<ClassSummary> {
     })
 }
 
-fn constant_pool_utf8(classfile: &ClassFile, index: u16) -> CliResult<String> {
+fn constant_pool_utf8(classfile: &ClassFile, index: Utf8Index) -> CliResult<String> {
+    let raw = index.value();
     let entry = classfile
         .constant_pool
-        .get(index as usize)
+        .get(raw as usize)
         .and_then(Option::as_ref)
-        .ok_or(CliError::MissingConstantPoolEntry { index })?;
+        .ok_or(CliError::MissingConstantPoolEntry { index: raw })?;
     match entry {
         ConstantPoolEntry::Utf8(info) => Ok(decode_modified_utf8(&info.bytes)?),
-        _ => Err(CliError::ConstantPoolEntryNotUtf8 { index }),
+        _ => Err(CliError::ConstantPoolEntryNotUtf8 { index: raw }),
     }
 }

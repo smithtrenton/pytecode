@@ -6,6 +6,10 @@ use crate::constants::{
     validate_class_version,
 };
 use crate::error::{EngineError, EngineErrorKind, Result};
+use crate::indexes::{
+    BootstrapMethodIndex, ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex,
+    Utf8Index,
+};
 use crate::modified_utf8::decode_modified_utf8;
 use crate::raw::attributes::{
     AnnotationDefaultAttribute, AnnotationInfo, AttributeInfo, BootstrapMethodInfo,
@@ -14,7 +18,7 @@ use crate::raw::attributes::{
     ExceptionHandler, ExceptionsAttribute, ExportInfo, InnerClassInfo, InnerClassesAttribute,
     LineNumberInfo, LineNumberTableAttribute, LocalVariableInfo, LocalVariableTableAttribute,
     LocalVariableTypeInfo, LocalVariableTypeTableAttribute, MethodParameterInfo,
-    MethodParametersAttribute, ModuleAttribute, ModuleInfo as ModuleAttributeInfo,
+    MethodParametersAttribute, ModuleAttribute, ModuleAttributeModuleInfo,
     ModuleMainClassAttribute, ModulePackagesAttribute, NestHostAttribute, NestMembersAttribute,
     OpensInfo, ParameterAnnotationInfo, PathInfo, PermittedSubclassesAttribute, ProvidesInfo,
     RecordAttribute, RecordComponentInfo, RequiresInfo, RuntimeInvisibleAnnotationsAttribute,
@@ -85,12 +89,12 @@ impl<'a> ClassReader<'a> {
         }
 
         let access_flags = ClassAccessFlags::from_bits_retain(self.reader.read_u2()?);
-        let this_class = self.reader.read_u2()?;
-        let super_class = self.reader.read_u2()?;
+        let this_class = ClassIndex::from(self.reader.read_u2()?);
+        let super_class = ClassIndex::from(self.reader.read_u2()?);
 
         let interfaces_count = self.reader.read_u2()? as usize;
         let interfaces = (0..interfaces_count)
-            .map(|_| self.reader.read_u2())
+            .map(|_| self.reader.read_u2().map(ClassIndex::from))
             .collect::<Result<Vec<_>>>()?;
 
         let fields_count = self.reader.read_u2()? as usize;
@@ -125,8 +129,8 @@ impl<'a> ClassReader<'a> {
 
     fn read_field(&mut self) -> Result<FieldInfo> {
         let access_flags = FieldAccessFlags::from_bits_retain(self.reader.read_u2()?);
-        let name_index = self.reader.read_u2()?;
-        let descriptor_index = self.reader.read_u2()?;
+        let name_index = Utf8Index::from(self.reader.read_u2()?);
+        let descriptor_index = Utf8Index::from(self.reader.read_u2()?);
         let attributes_count = self.reader.read_u2()? as usize;
         let attributes = (0..attributes_count)
             .map(|_| self.read_attribute())
@@ -141,8 +145,8 @@ impl<'a> ClassReader<'a> {
 
     fn read_method(&mut self) -> Result<MethodInfo> {
         let access_flags = MethodAccessFlags::from_bits_retain(self.reader.read_u2()?);
-        let name_index = self.reader.read_u2()?;
-        let descriptor_index = self.reader.read_u2()?;
+        let name_index = Utf8Index::from(self.reader.read_u2()?);
+        let descriptor_index = Utf8Index::from(self.reader.read_u2()?);
         let attributes_count = self.reader.read_u2()? as usize;
         let attributes = (0..attributes_count)
             .map(|_| self.read_attribute())
@@ -156,10 +160,10 @@ impl<'a> ClassReader<'a> {
     }
 
     fn read_attribute(&mut self) -> Result<AttributeInfo> {
-        let name_index = self.reader.read_u2()?;
+        let name_index = Utf8Index::from(self.reader.read_u2()?);
         let attribute_length = self.reader.read_u4()?;
         let payload = self.reader.read_bytes(attribute_length as usize)?;
-        let name = self.constant_pool_utf8(name_index)?;
+        let name = self.constant_pool_utf8(name_index.value())?;
         self.parse_attribute_payload(
             name_index,
             attribute_length,
@@ -174,10 +178,10 @@ impl<'a> ClassReader<'a> {
         &self,
         payload_reader: &mut ByteReader<'_>,
     ) -> Result<AttributeInfo> {
-        let name_index = payload_reader.read_u2()?;
+        let name_index = Utf8Index::from(payload_reader.read_u2()?);
         let attribute_length = payload_reader.read_u4()?;
         let payload = payload_reader.read_bytes(attribute_length as usize)?;
-        let name = self.constant_pool_utf8(name_index)?;
+        let name = self.constant_pool_utf8(name_index.value())?;
         self.parse_attribute_payload(
             name_index,
             attribute_length,
@@ -190,7 +194,7 @@ impl<'a> ClassReader<'a> {
 
     fn parse_attribute_payload(
         &self,
-        name_index: u16,
+        name_index: Utf8Index,
         attribute_length: u32,
         name: &str,
         payload: &[u8],
@@ -210,17 +214,17 @@ impl<'a> ClassReader<'a> {
             "ConstantValue" => AttributeInfo::ConstantValue(ConstantValueAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                constantvalue_index: payload_reader.read_u2()?,
+                constantvalue_index: CpIndex::from(payload_reader.read_u2()?),
             }),
             "Signature" => AttributeInfo::Signature(SignatureAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                signature_index: payload_reader.read_u2()?,
+                signature_index: Utf8Index::from(payload_reader.read_u2()?),
             }),
             "SourceFile" => AttributeInfo::SourceFile(SourceFileAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                sourcefile_index: payload_reader.read_u2()?,
+                sourcefile_index: Utf8Index::from(payload_reader.read_u2()?),
             }),
             "SourceDebugExtension" => {
                 AttributeInfo::SourceDebugExtension(SourceDebugExtensionAttribute {
@@ -252,8 +256,8 @@ impl<'a> ClassReader<'a> {
                         Ok(LocalVariableInfo {
                             start_pc: payload_reader.read_u2()?,
                             length: payload_reader.read_u2()?,
-                            name_index: payload_reader.read_u2()?,
-                            descriptor_index: payload_reader.read_u2()?,
+                            name_index: Utf8Index::from(payload_reader.read_u2()?),
+                            descriptor_index: Utf8Index::from(payload_reader.read_u2()?),
                             index: payload_reader.read_u2()?,
                         })
                     })
@@ -271,8 +275,8 @@ impl<'a> ClassReader<'a> {
                         Ok(LocalVariableTypeInfo {
                             start_pc: payload_reader.read_u2()?,
                             length: payload_reader.read_u2()?,
-                            name_index: payload_reader.read_u2()?,
-                            signature_index: payload_reader.read_u2()?,
+                            name_index: Utf8Index::from(payload_reader.read_u2()?),
+                            signature_index: Utf8Index::from(payload_reader.read_u2()?),
                             index: payload_reader.read_u2()?,
                         })
                     })
@@ -297,7 +301,7 @@ impl<'a> ClassReader<'a> {
             "Exceptions" => {
                 let exception_count = payload_reader.read_u2()? as usize;
                 let exception_index_table = (0..exception_count)
-                    .map(|_| payload_reader.read_u2())
+                    .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                     .collect::<Result<Vec<_>>>()?;
                 AttributeInfo::Exceptions(ExceptionsAttribute {
                     attribute_name_index: name_index,
@@ -310,9 +314,9 @@ impl<'a> ClassReader<'a> {
                 let classes = (0..count)
                     .map(|_| {
                         Ok(InnerClassInfo {
-                            inner_class_info_index: payload_reader.read_u2()?,
-                            outer_class_info_index: payload_reader.read_u2()?,
-                            inner_name_index: payload_reader.read_u2()?,
+                            inner_class_info_index: ClassIndex::from(payload_reader.read_u2()?),
+                            outer_class_info_index: ClassIndex::from(payload_reader.read_u2()?),
+                            inner_name_index: Utf8Index::from(payload_reader.read_u2()?),
                             inner_class_access_flags: NestedClassAccessFlag::from_bits_retain(
                                 payload_reader.read_u2()?,
                             ),
@@ -328,8 +332,8 @@ impl<'a> ClassReader<'a> {
             "EnclosingMethod" => AttributeInfo::EnclosingMethod(EnclosingMethodAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                class_index: payload_reader.read_u2()?,
-                method_index: payload_reader.read_u2()?,
+                class_index: ClassIndex::from(payload_reader.read_u2()?),
+                method_index: NameAndTypeIndex::from(payload_reader.read_u2()?),
             }),
             "Code" => {
                 let max_stack = payload_reader.read_u2()?;
@@ -355,7 +359,7 @@ impl<'a> ClassReader<'a> {
                             start_pc: payload_reader.read_u2()?,
                             end_pc: payload_reader.read_u2()?,
                             handler_pc: payload_reader.read_u2()?,
-                            catch_type: payload_reader.read_u2()?,
+                            catch_type: ClassIndex::from(payload_reader.read_u2()?),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -379,7 +383,7 @@ impl<'a> ClassReader<'a> {
                 let parameters = (0..count)
                     .map(|_| {
                         Ok(MethodParameterInfo {
-                            name_index: payload_reader.read_u2()?,
+                            name_index: Utf8Index::from(payload_reader.read_u2()?),
                             access_flags: MethodParameterAccessFlag::from_bits_retain(
                                 payload_reader.read_u2()?,
                             ),
@@ -395,12 +399,12 @@ impl<'a> ClassReader<'a> {
             "NestHost" => AttributeInfo::NestHost(NestHostAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                host_class_index: payload_reader.read_u2()?,
+                host_class_index: ClassIndex::from(payload_reader.read_u2()?),
             }),
             "NestMembers" => {
                 let count = payload_reader.read_u2()? as usize;
                 let classes = (0..count)
-                    .map(|_| payload_reader.read_u2())
+                    .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                     .collect::<Result<Vec<_>>>()?;
                 AttributeInfo::NestMembers(NestMembersAttribute {
                     attribute_name_index: name_index,
@@ -491,10 +495,10 @@ impl<'a> ClassReader<'a> {
                 let count = payload_reader.read_u2()? as usize;
                 let bootstrap_methods = (0..count)
                     .map(|_| {
-                        let bootstrap_method_ref = payload_reader.read_u2()?;
+                        let bootstrap_method_ref = CpIndex::from(payload_reader.read_u2()?);
                         let argument_count = payload_reader.read_u2()? as usize;
                         let bootstrap_arguments = (0..argument_count)
-                            .map(|_| payload_reader.read_u2())
+                            .map(|_| payload_reader.read_u2().map(CpIndex::from))
                             .collect::<Result<Vec<_>>>()?;
                         Ok(BootstrapMethodInfo {
                             bootstrap_method_ref,
@@ -509,19 +513,19 @@ impl<'a> ClassReader<'a> {
                 })
             }
             "Module" => {
-                let module_name_index = payload_reader.read_u2()?;
+                let module_name_index = ModuleIndex::from(payload_reader.read_u2()?);
                 let module_flags = ModuleAccessFlag::from_bits_retain(payload_reader.read_u2()?);
-                let module_version_index = payload_reader.read_u2()?;
+                let module_version_index = Utf8Index::from(payload_reader.read_u2()?);
 
                 let requires_count = payload_reader.read_u2()? as usize;
                 let requires = (0..requires_count)
                     .map(|_| {
                         Ok(RequiresInfo {
-                            requires_index: payload_reader.read_u2()?,
+                            requires_index: ModuleIndex::from(payload_reader.read_u2()?),
                             requires_flags: ModuleRequiresAccessFlag::from_bits_retain(
                                 payload_reader.read_u2()?,
                             ),
-                            requires_version_index: payload_reader.read_u2()?,
+                            requires_version_index: Utf8Index::from(payload_reader.read_u2()?),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -529,12 +533,12 @@ impl<'a> ClassReader<'a> {
                 let exports_count = payload_reader.read_u2()? as usize;
                 let exports = (0..exports_count)
                     .map(|_| {
-                        let exports_index = payload_reader.read_u2()?;
+                        let exports_index = PackageIndex::from(payload_reader.read_u2()?);
                         let exports_flags =
                             ModuleExportsAccessFlag::from_bits_retain(payload_reader.read_u2()?);
                         let exports_to_count = payload_reader.read_u2()? as usize;
                         let exports_to_index = (0..exports_to_count)
-                            .map(|_| payload_reader.read_u2())
+                            .map(|_| payload_reader.read_u2().map(ModuleIndex::from))
                             .collect::<Result<Vec<_>>>()?;
                         Ok(ExportInfo {
                             exports_index,
@@ -547,12 +551,12 @@ impl<'a> ClassReader<'a> {
                 let opens_count = payload_reader.read_u2()? as usize;
                 let opens = (0..opens_count)
                     .map(|_| {
-                        let opens_index = payload_reader.read_u2()?;
+                        let opens_index = PackageIndex::from(payload_reader.read_u2()?);
                         let opens_flags =
                             ModuleOpensAccessFlag::from_bits_retain(payload_reader.read_u2()?);
                         let opens_to_count = payload_reader.read_u2()? as usize;
                         let opens_to_index = (0..opens_to_count)
-                            .map(|_| payload_reader.read_u2())
+                            .map(|_| payload_reader.read_u2().map(ModuleIndex::from))
                             .collect::<Result<Vec<_>>>()?;
                         Ok(OpensInfo {
                             opens_index,
@@ -564,16 +568,16 @@ impl<'a> ClassReader<'a> {
 
                 let uses_count = payload_reader.read_u2()? as usize;
                 let uses_index = (0..uses_count)
-                    .map(|_| payload_reader.read_u2())
+                    .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                     .collect::<Result<Vec<_>>>()?;
 
                 let provides_count = payload_reader.read_u2()? as usize;
                 let provides = (0..provides_count)
                     .map(|_| {
-                        let provides_index = payload_reader.read_u2()?;
+                        let provides_index = ClassIndex::from(payload_reader.read_u2()?);
                         let provides_with_count = payload_reader.read_u2()? as usize;
                         let provides_with_index = (0..provides_with_count)
-                            .map(|_| payload_reader.read_u2())
+                            .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                             .collect::<Result<Vec<_>>>()?;
                         Ok(ProvidesInfo {
                             provides_index,
@@ -585,7 +589,7 @@ impl<'a> ClassReader<'a> {
                 AttributeInfo::Module(ModuleAttribute {
                     attribute_name_index: name_index,
                     attribute_length,
-                    module: ModuleAttributeInfo {
+                    module: ModuleAttributeModuleInfo {
                         module_name_index,
                         module_flags,
                         module_version_index,
@@ -600,7 +604,7 @@ impl<'a> ClassReader<'a> {
             "ModulePackages" => {
                 let count = payload_reader.read_u2()? as usize;
                 let package_index = (0..count)
-                    .map(|_| payload_reader.read_u2())
+                    .map(|_| payload_reader.read_u2().map(PackageIndex::from))
                     .collect::<Result<Vec<_>>>()?;
                 AttributeInfo::ModulePackages(ModulePackagesAttribute {
                     attribute_name_index: name_index,
@@ -611,14 +615,14 @@ impl<'a> ClassReader<'a> {
             "ModuleMainClass" => AttributeInfo::ModuleMainClass(ModuleMainClassAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                main_class_index: payload_reader.read_u2()?,
+                main_class_index: ClassIndex::from(payload_reader.read_u2()?),
             }),
             "Record" => {
                 let count = payload_reader.read_u2()? as usize;
                 let components = (0..count)
                     .map(|_| {
-                        let name_index = payload_reader.read_u2()?;
-                        let descriptor_index = payload_reader.read_u2()?;
+                        let name_index = Utf8Index::from(payload_reader.read_u2()?);
+                        let descriptor_index = Utf8Index::from(payload_reader.read_u2()?);
                         let nested_count = payload_reader.read_u2()? as usize;
                         let attributes = (0..nested_count)
                             .map(|_| self.read_attribute_from_payload(&mut payload_reader))
@@ -639,7 +643,7 @@ impl<'a> ClassReader<'a> {
             "PermittedSubclasses" => {
                 let count = payload_reader.read_u2()? as usize;
                 let classes = (0..count)
-                    .map(|_| payload_reader.read_u2())
+                    .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                     .collect::<Result<Vec<_>>>()?;
                 AttributeInfo::PermittedSubclasses(PermittedSubclassesAttribute {
                     attribute_name_index: name_index,
@@ -671,12 +675,12 @@ impl<'a> ClassReader<'a> {
         payload_reader: &mut ByteReader<'_>,
         error_offset: usize,
     ) -> Result<AnnotationInfo> {
-        let type_index = payload_reader.read_u2()?;
+        let type_index = Utf8Index::from(payload_reader.read_u2()?);
         let pair_count = payload_reader.read_u2()? as usize;
         let element_value_pairs = (0..pair_count)
             .map(|_| {
                 Ok(ElementValuePairInfo {
-                    element_name_index: payload_reader.read_u2()?,
+                    element_name_index: Utf8Index::from(payload_reader.read_u2()?),
                     element_value: self.read_element_value_info(payload_reader, error_offset)?,
                 })
             })
@@ -715,12 +719,12 @@ impl<'a> ClassReader<'a> {
         })?;
         let target_info = self.read_target_info(payload_reader, target_type, error_offset)?;
         let target_path = self.read_type_path_info(payload_reader, error_offset)?;
-        let type_index = payload_reader.read_u2()?;
+        let type_index = Utf8Index::from(payload_reader.read_u2()?);
         let pair_count = payload_reader.read_u2()? as usize;
         let element_value_pairs = (0..pair_count)
             .map(|_| {
                 Ok(ElementValuePairInfo {
-                    element_name_index: payload_reader.read_u2()?,
+                    element_name_index: Utf8Index::from(payload_reader.read_u2()?),
                     element_value: self.read_element_value_info(payload_reader, error_offset)?,
                 })
             })
@@ -830,14 +834,14 @@ impl<'a> ClassReader<'a> {
                 | ElementValueTag::String),
             ) => Ok(ElementValueInfo::Const {
                 tag,
-                const_value_index: payload_reader.read_u2()?,
+                const_value_index: CpIndex::from(payload_reader.read_u2()?),
             }),
             Some(ElementValueTag::Enum) => Ok(ElementValueInfo::Enum {
-                type_name_index: payload_reader.read_u2()?,
-                const_name_index: payload_reader.read_u2()?,
+                type_name_index: Utf8Index::from(payload_reader.read_u2()?),
+                const_name_index: Utf8Index::from(payload_reader.read_u2()?),
             }),
             Some(ElementValueTag::Class) => Ok(ElementValueInfo::Class {
-                class_info_index: payload_reader.read_u2()?,
+                class_info_index: Utf8Index::from(payload_reader.read_u2()?),
             }),
             Some(ElementValueTag::Annotation) => Ok(ElementValueInfo::Annotation(
                 self.read_annotation_info(payload_reader, error_offset)?,
@@ -937,7 +941,7 @@ impl<'a> ClassReader<'a> {
                 Ok(VerificationTypeInfo::UninitializedThis)
             }
             Some(VerificationType::Object) => Ok(VerificationTypeInfo::Object {
-                cpool_index: payload_reader.read_u2()?,
+                cpool_index: ClassIndex::from(payload_reader.read_u2()?),
             }),
             Some(VerificationType::Uninitialized) => Ok(VerificationTypeInfo::Uninitialized {
                 offset: payload_reader.read_u2()?,
@@ -977,28 +981,28 @@ impl<'a> ClassReader<'a> {
                 low_bytes: self.reader.read_u4()?,
             }),
             ConstantPoolTag::Class => ConstantPoolEntry::Class(ClassInfo {
-                name_index: self.reader.read_u2()?,
+                name_index: Utf8Index::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::String => ConstantPoolEntry::String(StringInfo {
-                string_index: self.reader.read_u2()?,
+                string_index: Utf8Index::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::FieldRef => ConstantPoolEntry::FieldRef(FieldRefInfo {
-                class_index: self.reader.read_u2()?,
-                name_and_type_index: self.reader.read_u2()?,
+                class_index: ClassIndex::from(self.reader.read_u2()?),
+                name_and_type_index: NameAndTypeIndex::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::MethodRef => ConstantPoolEntry::MethodRef(MethodRefInfo {
-                class_index: self.reader.read_u2()?,
-                name_and_type_index: self.reader.read_u2()?,
+                class_index: ClassIndex::from(self.reader.read_u2()?),
+                name_and_type_index: NameAndTypeIndex::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::InterfaceMethodRef => {
                 ConstantPoolEntry::InterfaceMethodRef(InterfaceMethodRefInfo {
-                    class_index: self.reader.read_u2()?,
-                    name_and_type_index: self.reader.read_u2()?,
+                    class_index: ClassIndex::from(self.reader.read_u2()?),
+                    name_and_type_index: NameAndTypeIndex::from(self.reader.read_u2()?),
                 })
             }
             ConstantPoolTag::NameAndType => ConstantPoolEntry::NameAndType(NameAndTypeInfo {
-                name_index: self.reader.read_u2()?,
-                descriptor_index: self.reader.read_u2()?,
+                name_index: Utf8Index::from(self.reader.read_u2()?),
+                descriptor_index: Utf8Index::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::MethodHandle => {
                 let reference_kind = self.reader.read_u1()?;
@@ -1015,25 +1019,25 @@ impl<'a> ClassReader<'a> {
                 }
                 ConstantPoolEntry::MethodHandle(MethodHandleInfo {
                     reference_kind,
-                    reference_index: self.reader.read_u2()?,
+                    reference_index: CpIndex::from(self.reader.read_u2()?),
                 })
             }
             ConstantPoolTag::MethodType => ConstantPoolEntry::MethodType(MethodTypeInfo {
-                descriptor_index: self.reader.read_u2()?,
+                descriptor_index: Utf8Index::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::Dynamic => ConstantPoolEntry::Dynamic(DynamicInfo {
-                bootstrap_method_attr_index: self.reader.read_u2()?,
-                name_and_type_index: self.reader.read_u2()?,
+                bootstrap_method_attr_index: BootstrapMethodIndex::from(self.reader.read_u2()?),
+                name_and_type_index: NameAndTypeIndex::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::InvokeDynamic => ConstantPoolEntry::InvokeDynamic(InvokeDynamicInfo {
-                bootstrap_method_attr_index: self.reader.read_u2()?,
-                name_and_type_index: self.reader.read_u2()?,
+                bootstrap_method_attr_index: BootstrapMethodIndex::from(self.reader.read_u2()?),
+                name_and_type_index: NameAndTypeIndex::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::Module => ConstantPoolEntry::Module(ModuleInfo {
-                name_index: self.reader.read_u2()?,
+                name_index: Utf8Index::from(self.reader.read_u2()?),
             }),
             ConstantPoolTag::Package => ConstantPoolEntry::Package(PackageInfo {
-                name_index: self.reader.read_u2()?,
+                name_index: Utf8Index::from(self.reader.read_u2()?),
             }),
         };
         Ok(entry)
@@ -1084,7 +1088,7 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 Instruction::ConstantPoolIndexWide(ConstantPoolIndexWide {
                     opcode,
                     offset,
-                    index: reader.read_u2()?,
+                    index: CpIndex::from(reader.read_u2()?),
                 })
             }
             crate::raw::instructions::OperandKind::Byte => Instruction::Byte {
@@ -1113,7 +1117,7 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 value: reader.read_i1()?,
             },
             crate::raw::instructions::OperandKind::InvokeDynamic => {
-                let index = reader.read_u2()?;
+                let index = CpIndex::from(reader.read_u2()?);
                 let reserved = reader.read_u2()?;
                 if reserved != 0 {
                     return Err(EngineError::new(
@@ -1133,7 +1137,7 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 })
             }
             crate::raw::instructions::OperandKind::InvokeInterface => {
-                let index = reader.read_u2()?;
+                let index = CpIndex::from(reader.read_u2()?);
                 let count = reader.read_u1()?;
                 let reserved = reader.read_u1()?;
                 if reserved != 0 {
@@ -1161,7 +1165,7 @@ fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
             }
             crate::raw::instructions::OperandKind::MultiANewArray => Instruction::MultiANewArray {
                 offset,
-                index: reader.read_u2()?,
+                index: ClassIndex::from(reader.read_u2()?),
                 dimensions: reader.read_u1()?,
             },
             crate::raw::instructions::OperandKind::LookupSwitch => {

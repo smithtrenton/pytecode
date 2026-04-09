@@ -5,6 +5,7 @@ use crate::constants::{
 };
 use crate::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
 use crate::error::EngineErrorKind;
+use crate::indexes::{ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex, Utf8Index};
 use crate::model::{
     ClassModel, CodeItem, CodeModel, DebugInfoState, FieldModel, Label, MethodModel,
 };
@@ -215,7 +216,7 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
         class_name.as_deref(),
         class_location.clone(),
     ));
-    if classfile.this_class == 0 {
+    if classfile.this_class.value() == 0 {
         diagnostics.push(Diagnostic::error(
             Category::ClassStructure,
             "this_class must be non-zero",
@@ -1186,7 +1187,10 @@ fn verify_constant_pool(classfile: &ClassFile, class_name: Option<&str>) -> Vec<
                         location.clone(),
                     ));
                 }
-                if !bootstrap_method_index_valid(classfile, info.bootstrap_method_attr_index) {
+                if !bootstrap_method_index_valid(
+                    classfile,
+                    info.bootstrap_method_attr_index.value(),
+                ) {
                     diagnostics.push(Diagnostic::error(
                         Category::ConstantPool,
                         "dynamic entry bootstrap_method_attr_index is out of range",
@@ -1210,7 +1214,10 @@ fn verify_constant_pool(classfile: &ClassFile, class_name: Option<&str>) -> Vec<
                         location.clone(),
                     ));
                 }
-                if !bootstrap_method_index_valid(classfile, info.bootstrap_method_attr_index) {
+                if !bootstrap_method_index_valid(
+                    classfile,
+                    info.bootstrap_method_attr_index.value(),
+                ) {
                     diagnostics.push(Diagnostic::error(
                         Category::ConstantPool,
                         "invokedynamic entry bootstrap_method_attr_index is out of range",
@@ -1260,7 +1267,8 @@ fn verify_class_structure(classfile: &ClassFile, class_name: Option<&str>) -> Ve
     };
     let is_module = classfile.access_flags.contains(ClassAccessFlags::MODULE);
 
-    if classfile.this_class != 0 && cp_class_name(classfile, classfile.this_class).is_err() {
+    if classfile.this_class.value() != 0 && cp_class_name(classfile, classfile.this_class).is_err()
+    {
         diagnostics.push(Diagnostic::error(
             Category::ClassStructure,
             "this_class must reference CONSTANT_Class",
@@ -1269,7 +1277,7 @@ fn verify_class_structure(classfile: &ClassFile, class_name: Option<&str>) -> Ve
     }
 
     if is_module {
-        if classfile.super_class != 0 {
+        if classfile.super_class.value() != 0 {
             diagnostics.push(Diagnostic::error(
                 Category::ClassStructure,
                 "module class must have super_class == 0",
@@ -1298,14 +1306,14 @@ fn verify_class_structure(classfile: &ClassFile, class_name: Option<&str>) -> Ve
             ));
         }
     } else if class_name == Some("java/lang/Object") {
-        if classfile.super_class != 0 {
+        if classfile.super_class.value() != 0 {
             diagnostics.push(Diagnostic::error(
                 Category::ClassStructure,
                 "java/lang/Object must have super_class == 0",
                 location.clone(),
             ));
         }
-    } else if classfile.super_class == 0 {
+    } else if classfile.super_class.value() == 0 {
         diagnostics.push(Diagnostic::error(
             Category::ClassStructure,
             "non-root class must have non-zero super_class",
@@ -1570,7 +1578,7 @@ fn verify_attribute_contents(
                     location.clone(),
                 ));
             }
-            if attribute.method_index != 0
+            if attribute.method_index.value() != 0
                 && cp_name_and_type(classfile, attribute.method_index).is_err()
             {
                 diagnostics.push(Diagnostic::error(
@@ -1582,7 +1590,9 @@ fn verify_attribute_contents(
         }
         AttributeInfo::MethodParameters(attribute) => {
             for parameter in &attribute.parameters {
-                if parameter.name_index != 0 && cp_utf8(classfile, parameter.name_index).is_err() {
+                if parameter.name_index.value() != 0
+                    && cp_utf8(classfile, parameter.name_index).is_err()
+                {
                     diagnostics.push(Diagnostic::error(
                         Category::ConstantPool,
                         "MethodParameters names must reference Utf8 or be zero",
@@ -1594,7 +1604,7 @@ fn verify_attribute_contents(
         AttributeInfo::BootstrapMethods(attribute) => {
             for bootstrap_method in &attribute.bootstrap_methods {
                 if !matches!(
-                    cp_entry(classfile, bootstrap_method.bootstrap_method_ref),
+                    cp_entry(classfile, bootstrap_method.bootstrap_method_ref.value()),
                     Ok(ConstantPoolEntry::MethodHandle(_))
                 ) {
                     diagnostics.push(Diagnostic::error(
@@ -1604,7 +1614,7 @@ fn verify_attribute_contents(
                     ));
                 }
                 for argument in &bootstrap_method.bootstrap_arguments {
-                    if !bootstrap_argument_entry_valid(classfile, *argument) {
+                    if !bootstrap_argument_entry_valid(classfile, argument.value()) {
                         diagnostics.push(Diagnostic::error(
                             Category::ConstantPool,
                             "BootstrapMethods arguments must reference loadable constants",
@@ -1672,7 +1682,7 @@ fn verify_attribute_contents(
                     location.clone(),
                 ));
             }
-            if attribute.module.module_version_index != 0
+            if attribute.module.module_version_index.value() != 0
                 && cp_utf8(classfile, attribute.module.module_version_index).is_err()
             {
                 diagnostics.push(Diagnostic::error(
@@ -1689,7 +1699,7 @@ fn verify_attribute_contents(
                         location.clone(),
                     ));
                 }
-                if requires.requires_version_index != 0
+                if requires.requires_version_index.value() != 0
                     && cp_utf8(classfile, requires.requires_version_index).is_err()
                 {
                     diagnostics.push(Diagnostic::error(
@@ -1850,7 +1860,7 @@ fn verify_method_handle(
         return diagnostics;
     }
 
-    let target_entry = cp_entry(classfile, info.reference_index);
+    let target_entry = cp_entry(classfile, info.reference_index.value());
     let valid_target = match info.reference_kind {
         1..=4 => matches!(target_entry, Ok(ConstantPoolEntry::FieldRef(_))),
         5 | 8 => matches!(target_entry, Ok(ConstantPoolEntry::MethodRef(_))),
@@ -2052,10 +2062,10 @@ fn attribute_minimum_major(attribute: &AttributeInfo) -> Option<u16> {
     }
 }
 
-fn cp_utf8(classfile: &ClassFile, index: u16) -> Result<String, ()> {
+fn cp_utf8(classfile: &ClassFile, index: Utf8Index) -> Result<String, ()> {
     let entry = classfile
         .constant_pool
-        .get(index as usize)
+        .get(index.value() as usize)
         .and_then(Option::as_ref)
         .ok_or(())?;
     match entry {
@@ -2074,32 +2084,35 @@ fn cp_entry(classfile: &ClassFile, index: u16) -> Result<&ConstantPoolEntry, ()>
         .ok_or(())
 }
 
-fn cp_class_name(classfile: &ClassFile, index: u16) -> Result<String, ()> {
-    let entry = cp_entry(classfile, index)?;
+fn cp_class_name(classfile: &ClassFile, index: ClassIndex) -> Result<String, ()> {
+    let entry = cp_entry(classfile, index.value())?;
     match entry {
         ConstantPoolEntry::Class(info) => cp_utf8(classfile, info.name_index),
         _ => Err(()),
     }
 }
 
-fn cp_module_name(classfile: &ClassFile, index: u16) -> Result<String, ()> {
-    let entry = cp_entry(classfile, index)?;
+fn cp_module_name(classfile: &ClassFile, index: ModuleIndex) -> Result<String, ()> {
+    let entry = cp_entry(classfile, index.value())?;
     match entry {
         ConstantPoolEntry::Module(info) => cp_utf8(classfile, info.name_index),
         _ => Err(()),
     }
 }
 
-fn cp_package_name(classfile: &ClassFile, index: u16) -> Result<String, ()> {
-    let entry = cp_entry(classfile, index)?;
+fn cp_package_name(classfile: &ClassFile, index: PackageIndex) -> Result<String, ()> {
+    let entry = cp_entry(classfile, index.value())?;
     match entry {
         ConstantPoolEntry::Package(info) => cp_utf8(classfile, info.name_index),
         _ => Err(()),
     }
 }
 
-fn cp_name_and_type(classfile: &ClassFile, index: u16) -> Result<(String, String), ()> {
-    let entry = cp_entry(classfile, index)?;
+fn cp_name_and_type(
+    classfile: &ClassFile,
+    index: NameAndTypeIndex,
+) -> Result<(String, String), ()> {
+    let entry = cp_entry(classfile, index.value())?;
     match entry {
         ConstantPoolEntry::NameAndType(info) => Ok((
             cp_utf8(classfile, info.name_index)?,
@@ -2109,8 +2122,8 @@ fn cp_name_and_type(classfile: &ClassFile, index: u16) -> Result<(String, String
     }
 }
 
-fn cp_member_name_and_type(classfile: &ClassFile, index: u16) -> Result<(String, String), ()> {
-    match cp_entry(classfile, index)? {
+fn cp_member_name_and_type(classfile: &ClassFile, index: CpIndex) -> Result<(String, String), ()> {
+    match cp_entry(classfile, index.value())? {
         ConstantPoolEntry::FieldRef(info) => cp_name_and_type(classfile, info.name_and_type_index),
         ConstantPoolEntry::MethodRef(info) => cp_name_and_type(classfile, info.name_and_type_index),
         ConstantPoolEntry::InterfaceMethodRef(info) => {

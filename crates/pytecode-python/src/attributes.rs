@@ -157,7 +157,7 @@ fn wrap_verification_type_info(
             wrap_pyclass!(
                 py,
                 PyObjectVariableInfo {
-                    cpool_index: *cpool_index,
+                    cpool_index: (*cpool_index).into(),
                 }
             )
         }
@@ -477,12 +477,12 @@ impl PyLocalVariableInfo {
 
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
     fn descriptor_index(&self) -> u16 {
-        self.inner.descriptor_index
+        self.inner.descriptor_index.into()
     }
 
     #[getter]
@@ -511,12 +511,12 @@ impl PyLocalVariableTypeInfo {
 
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
     fn signature_index(&self) -> u16 {
-        self.inner.signature_index
+        self.inner.signature_index.into()
     }
 
     #[getter]
@@ -535,17 +535,17 @@ pub(crate) struct PyInnerClassInfo {
 impl PyInnerClassInfo {
     #[getter]
     fn inner_class_info_index(&self) -> u16 {
-        self.inner.inner_class_info_index
+        self.inner.inner_class_info_index.into()
     }
 
     #[getter]
     fn outer_class_info_index(&self) -> u16 {
-        self.inner.outer_class_info_index
+        self.inner.outer_class_info_index.into()
     }
 
     #[getter]
     fn inner_name_index(&self) -> u16 {
-        self.inner.inner_name_index
+        self.inner.inner_name_index.into()
     }
 
     #[getter]
@@ -655,7 +655,7 @@ impl PyElementValueInfo {
             } => wrap_pyclass!(
                 py,
                 PyConstValueInfo {
-                    const_value_index: *const_value_index,
+                    const_value_index: (*const_value_index).into(),
                 }
             ),
             raw::ElementValueInfo::Enum {
@@ -664,15 +664,15 @@ impl PyElementValueInfo {
             } => wrap_pyclass!(
                 py,
                 PyEnumConstantValueInfo {
-                    type_name_index: *type_name_index,
-                    const_name_index: *const_name_index,
+                    type_name_index: (*type_name_index).into(),
+                    const_name_index: (*const_name_index).into(),
                 }
             ),
             raw::ElementValueInfo::Class { class_info_index } => {
                 wrap_pyclass!(
                     py,
                     PyClassInfoValueInfo {
-                        class_info_index: *class_info_index,
+                        class_info_index: (*class_info_index).into(),
                     }
                 )
             }
@@ -715,7 +715,7 @@ pub(crate) struct PyElementValuePairInfo {
 impl PyElementValuePairInfo {
     #[getter]
     fn element_name_index(&self) -> u16 {
-        self.inner.element_name_index
+        self.inner.element_name_index.into()
     }
 
     #[getter]
@@ -734,7 +734,7 @@ pub(crate) struct PyAnnotationInfo {
 impl PyAnnotationInfo {
     #[getter]
     fn type_index(&self) -> u16 {
-        self.inner.type_index
+        self.inner.type_index.into()
     }
 
     #[getter]
@@ -1107,7 +1107,7 @@ impl PyTypeAnnotationInfo {
 
     #[getter]
     fn type_index(&self) -> u16 {
-        self.inner.type_index
+        self.inner.type_index.into()
     }
 
     #[getter]
@@ -1146,7 +1146,7 @@ pub(crate) struct PyBootstrapMethodInfo {
 impl PyBootstrapMethodInfo {
     #[getter]
     fn bootstrap_method_ref(&self) -> u16 {
-        self.inner.bootstrap_method_ref
+        self.inner.bootstrap_method_ref.into()
     }
 
     // Python field name has typo "boostrap" — kept for compatibility
@@ -1157,7 +1157,11 @@ impl PyBootstrapMethodInfo {
 
     #[getter]
     fn boostrap_arguments(&self) -> Vec<u16> {
-        self.inner.bootstrap_arguments.clone()
+        self.inner
+            .bootstrap_arguments
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1171,7 +1175,7 @@ pub(crate) struct PyMethodParameterInfo {
 impl PyMethodParameterInfo {
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
@@ -1190,7 +1194,7 @@ pub(crate) struct PyRequiresInfo {
 impl PyRequiresInfo {
     #[getter]
     fn requires_index(&self) -> u16 {
-        self.inner.requires_index
+        self.inner.requires_index.into()
     }
 
     // Python field name is "requires_flag" (singular)
@@ -1201,7 +1205,7 @@ impl PyRequiresInfo {
 
     #[getter]
     fn requires_version_index(&self) -> u16 {
-        self.inner.requires_version_index
+        self.inner.requires_version_index.into()
     }
 }
 
@@ -1215,7 +1219,7 @@ pub(crate) struct PyExportInfo {
 impl PyExportInfo {
     #[getter]
     fn exports_index(&self) -> u16 {
-        self.inner.exports_index
+        self.inner.exports_index.into()
     }
 
     #[getter]
@@ -1230,7 +1234,11 @@ impl PyExportInfo {
 
     #[getter]
     fn exports_to_index(&self) -> Vec<u16> {
-        self.inner.exports_to_index.clone()
+        self.inner
+            .exports_to_index
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1244,7 +1252,7 @@ pub(crate) struct PyOpensInfo {
 impl PyOpensInfo {
     #[getter]
     fn opens_index(&self) -> u16 {
-        self.inner.opens_index
+        self.inner.opens_index.into()
     }
 
     #[getter]
@@ -1259,7 +1267,11 @@ impl PyOpensInfo {
 
     #[getter]
     fn opens_to_index(&self) -> Vec<u16> {
-        self.inner.opens_to_index.clone()
+        self.inner
+            .opens_to_index
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1273,7 +1285,7 @@ pub(crate) struct PyProvidesInfo {
 impl PyProvidesInfo {
     #[getter]
     fn provides_index(&self) -> u16 {
-        self.inner.provides_index
+        self.inner.provides_index.into()
     }
 
     #[getter]
@@ -1283,7 +1295,11 @@ impl PyProvidesInfo {
 
     #[getter]
     fn provides_with_index(&self) -> Vec<u16> {
-        self.inner.provides_with_index.clone()
+        self.inner
+            .provides_with_index
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1297,12 +1313,12 @@ pub(crate) struct PyRecordComponentInfo {
 impl PyRecordComponentInfo {
     #[getter]
     fn name_index(&self) -> u16 {
-        self.inner.name_index
+        self.inner.name_index.into()
     }
 
     #[getter]
     fn descriptor_index(&self) -> u16 {
-        self.inner.descriptor_index
+        self.inner.descriptor_index.into()
     }
 
     #[getter]
@@ -1334,7 +1350,7 @@ pub(crate) struct PyStackMapTableAttr {
 impl PyStackMapTableAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1367,7 +1383,7 @@ pub(crate) struct PyInnerClassesAttr {
 impl PyInnerClassesAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1400,7 +1416,7 @@ pub(crate) struct PyEnclosingMethodAttr {
 impl PyEnclosingMethodAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1410,12 +1426,12 @@ impl PyEnclosingMethodAttr {
 
     #[getter]
     fn class_index(&self) -> u16 {
-        self.inner.class_index
+        self.inner.class_index.into()
     }
 
     #[getter]
     fn method_index(&self) -> u16 {
-        self.inner.method_index
+        self.inner.method_index.into()
     }
 }
 
@@ -1429,7 +1445,7 @@ pub(crate) struct PySyntheticAttr {
 impl PySyntheticAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1448,7 +1464,7 @@ pub(crate) struct PyDeprecatedAttr {
 impl PyDeprecatedAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1467,7 +1483,7 @@ pub(crate) struct PyLineNumberTableAttr {
 impl PyLineNumberTableAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1500,7 +1516,7 @@ pub(crate) struct PyLocalVariableTableAttr {
 impl PyLocalVariableTableAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1533,7 +1549,7 @@ pub(crate) struct PyLocalVariableTypeTableAttr {
 impl PyLocalVariableTypeTableAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1566,7 +1582,7 @@ pub(crate) struct PyRuntimeVisibleAnnotationsAttr {
 impl PyRuntimeVisibleAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1599,7 +1615,7 @@ pub(crate) struct PyRuntimeInvisibleAnnotationsAttr {
 impl PyRuntimeInvisibleAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1635,7 +1651,7 @@ pub(crate) struct PyRuntimeVisibleParameterAnnotationsAttr {
 impl PyRuntimeVisibleParameterAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1671,7 +1687,7 @@ pub(crate) struct PyRuntimeInvisibleParameterAnnotationsAttr {
 impl PyRuntimeInvisibleParameterAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1704,7 +1720,7 @@ pub(crate) struct PyRuntimeVisibleTypeAnnotationsAttr {
 impl PyRuntimeVisibleTypeAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1740,7 +1756,7 @@ pub(crate) struct PyRuntimeInvisibleTypeAnnotationsAttr {
 impl PyRuntimeInvisibleTypeAnnotationsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1773,7 +1789,7 @@ pub(crate) struct PyAnnotationDefaultAttr {
 impl PyAnnotationDefaultAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1797,7 +1813,7 @@ pub(crate) struct PyBootstrapMethodsAttr {
 impl PyBootstrapMethodsAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1830,7 +1846,7 @@ pub(crate) struct PyMethodParametersAttr {
 impl PyMethodParametersAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1863,7 +1879,7 @@ pub(crate) struct PyModuleAttr {
 impl PyModuleAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1873,7 +1889,7 @@ impl PyModuleAttr {
 
     #[getter]
     fn module_name_index(&self) -> u16 {
-        self.inner.module.module_name_index
+        self.inner.module.module_name_index.into()
     }
 
     #[getter]
@@ -1883,7 +1899,7 @@ impl PyModuleAttr {
 
     #[getter]
     fn module_version_index(&self) -> u16 {
-        self.inner.module.module_version_index
+        self.inner.module.module_version_index.into()
     }
 
     #[getter]
@@ -1938,7 +1954,12 @@ impl PyModuleAttr {
 
     #[getter]
     fn uses_index(&self) -> Vec<u16> {
-        self.inner.module.uses_index.clone()
+        self.inner
+            .module
+            .uses_index
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 
     #[getter]
@@ -1967,7 +1988,7 @@ pub(crate) struct PyModulePackagesAttr {
 impl PyModulePackagesAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -1982,7 +2003,11 @@ impl PyModulePackagesAttr {
 
     #[getter]
     fn package_index(&self) -> Vec<u16> {
-        self.inner.package_index.clone()
+        self.inner
+            .package_index
+            .iter()
+            .map(|x| (*x).into())
+            .collect()
     }
 }
 
@@ -1996,7 +2021,7 @@ pub(crate) struct PyModuleMainClassAttr {
 impl PyModuleMainClassAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -2006,7 +2031,7 @@ impl PyModuleMainClassAttr {
 
     #[getter]
     fn main_class_index(&self) -> u16 {
-        self.inner.main_class_index
+        self.inner.main_class_index.into()
     }
 }
 
@@ -2020,7 +2045,7 @@ pub(crate) struct PyNestHostAttr {
 impl PyNestHostAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -2030,7 +2055,7 @@ impl PyNestHostAttr {
 
     #[getter]
     fn host_class_index(&self) -> u16 {
-        self.inner.host_class_index
+        self.inner.host_class_index.into()
     }
 }
 
@@ -2044,7 +2069,7 @@ pub(crate) struct PyNestMembersAttr {
 impl PyNestMembersAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -2059,7 +2084,7 @@ impl PyNestMembersAttr {
 
     #[getter]
     fn classes(&self) -> Vec<u16> {
-        self.inner.classes.clone()
+        self.inner.classes.iter().map(|x| (*x).into()).collect()
     }
 }
 
@@ -2073,7 +2098,7 @@ pub(crate) struct PyRecordAttr {
 impl PyRecordAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -2106,7 +2131,7 @@ pub(crate) struct PyPermittedSubclassesAttr {
 impl PyPermittedSubclassesAttr {
     #[getter]
     fn attribute_name_index(&self) -> u16 {
-        self.inner.attribute_name_index
+        self.inner.attribute_name_index.into()
     }
 
     #[getter]
@@ -2121,7 +2146,7 @@ impl PyPermittedSubclassesAttr {
 
     #[getter]
     fn classes(&self) -> Vec<u16> {
-        self.inner.classes.clone()
+        self.inner.classes.iter().map(|x| (*x).into()).collect()
     }
 }
 

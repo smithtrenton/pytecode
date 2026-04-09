@@ -16,18 +16,18 @@ fn base_classfile() -> ClassFile {
                 bytes: pytecode_engine::modified_utf8::encode_modified_utf8("TestClass"),
             })),
             Some(ConstantPoolEntry::Class(pytecode_engine::raw::ClassInfo {
-                name_index: 1,
+                name_index: 1.into(),
             })),
             Some(ConstantPoolEntry::Utf8(pytecode_engine::raw::Utf8Info {
                 bytes: pytecode_engine::modified_utf8::encode_modified_utf8("java/lang/Object"),
             })),
             Some(ConstantPoolEntry::Class(pytecode_engine::raw::ClassInfo {
-                name_index: 3,
+                name_index: 3.into(),
             })),
         ],
         access_flags: ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
-        this_class: 2,
-        super_class: 4,
+        this_class: 2.into(),
+        super_class: 4.into(),
         interfaces: Vec::new(),
         fields: Vec::new(),
         methods: Vec::new(),
@@ -58,7 +58,9 @@ fn push_class(classfile: &mut ClassFile, value: &str) -> u16 {
     let name_index = push_utf8(classfile, value);
     push_cp_entry(
         classfile,
-        ConstantPoolEntry::Class(pytecode_engine::raw::ClassInfo { name_index }),
+        ConstantPoolEntry::Class(pytecode_engine::raw::ClassInfo {
+            name_index: name_index.into(),
+        }),
     )
 }
 
@@ -66,7 +68,9 @@ fn push_module(classfile: &mut ClassFile, value: &str) -> u16 {
     let name_index = push_utf8(classfile, value);
     push_cp_entry(
         classfile,
-        ConstantPoolEntry::Module(pytecode_engine::raw::ModuleInfo { name_index }),
+        ConstantPoolEntry::Module(pytecode_engine::raw::ModuleInfo {
+            name_index: name_index.into(),
+        }),
     )
 }
 
@@ -76,8 +80,8 @@ fn push_name_and_type(classfile: &mut ClassFile, name: &str, descriptor: &str) -
     push_cp_entry(
         classfile,
         ConstantPoolEntry::NameAndType(pytecode_engine::raw::NameAndTypeInfo {
-            name_index,
-            descriptor_index,
+            name_index: name_index.into(),
+            descriptor_index: descriptor_index.into(),
         }),
     )
 }
@@ -92,8 +96,8 @@ fn push_field_ref(
     push_cp_entry(
         classfile,
         ConstantPoolEntry::FieldRef(pytecode_engine::raw::FieldRefInfo {
-            class_index,
-            name_and_type_index,
+            class_index: class_index.into(),
+            name_and_type_index: name_and_type_index.into(),
         }),
     )
 }
@@ -108,8 +112,8 @@ fn push_method_ref(
     push_cp_entry(
         classfile,
         ConstantPoolEntry::MethodRef(pytecode_engine::raw::MethodRefInfo {
-            class_index,
-            name_and_type_index,
+            class_index: class_index.into(),
+            name_and_type_index: name_and_type_index.into(),
         }),
     )
 }
@@ -165,7 +169,7 @@ fn verify_classfile_reports_structural_and_access_flag_issues() {
         bytes: pytecode_engine::modified_utf8::encode_modified_utf8("bad"),
     }));
     classfile.constant_pool.push(None);
-    classfile.super_class = 0;
+    classfile.super_class = 0.into();
 
     let field_name = push_utf8(&mut classfile, "value");
     let field_desc = push_utf8(&mut classfile, "I");
@@ -174,8 +178,8 @@ fn verify_classfile_reports_structural_and_access_flag_issues() {
             | FieldAccessFlags::PRIVATE
             | FieldAccessFlags::FINAL
             | FieldAccessFlags::VOLATILE,
-        name_index: field_name,
-        descriptor_index: field_desc,
+        name_index: field_name.into(),
+        descriptor_index: field_desc.into(),
         attributes: Vec::new(),
     });
 
@@ -186,10 +190,10 @@ fn verify_classfile_reports_structural_and_access_flag_issues() {
         access_flags: MethodAccessFlags::PUBLIC
             | MethodAccessFlags::PRIVATE
             | MethodAccessFlags::NATIVE,
-        name_index: method_name,
-        descriptor_index: method_desc,
+        name_index: method_name.into(),
+        descriptor_index: method_desc.into(),
         attributes: vec![AttributeInfo::Code(CodeAttribute {
-            attribute_name_index: code_name,
+            attribute_name_index: code_name.into(),
             attribute_length: 0,
             max_stack: 0,
             max_locals: 0,
@@ -232,8 +236,8 @@ fn verify_classfile_reports_invalid_module_class_structure() {
     let method_desc = push_utf8(&mut classfile, "()V");
     classfile.methods.push(MethodInfo {
         access_flags: MethodAccessFlags::PUBLIC,
-        name_index: method_name,
-        descriptor_index: method_desc,
+        name_index: method_name.into(),
+        descriptor_index: method_desc.into(),
         attributes: Vec::new(),
     });
 
@@ -272,12 +276,12 @@ fn verify_classfile_reports_invalid_attribute_placement_and_versions() {
 
     classfile.attributes = vec![
         AttributeInfo::Module(pytecode_engine::raw::ModuleAttribute {
-            attribute_name_index: module_attr_name,
+            attribute_name_index: module_attr_name.into(),
             attribute_length: 0,
-            module: pytecode_engine::raw::ModuleAttributeInfo {
-                module_name_index: module_index,
+            module: pytecode_engine::raw::ModuleAttributeModuleInfo {
+                module_name_index: module_index.into(),
                 module_flags: pytecode_engine::constants::ModuleAccessFlag::empty(),
-                module_version_index: 0,
+                module_version_index: 0.into(),
                 requires: Vec::new(),
                 exports: Vec::new(),
                 opens: Vec::new(),
@@ -286,18 +290,18 @@ fn verify_classfile_reports_invalid_attribute_placement_and_versions() {
             },
         }),
         AttributeInfo::ModuleMainClass(pytecode_engine::raw::ModuleMainClassAttribute {
-            attribute_name_index: module_main_class_attr_name,
+            attribute_name_index: module_main_class_attr_name.into(),
             attribute_length: 0,
-            main_class_index,
+            main_class_index: main_class_index.into(),
         }),
         AttributeInfo::Record(pytecode_engine::raw::RecordAttribute {
-            attribute_name_index: record_attr_name,
+            attribute_name_index: record_attr_name.into(),
             attribute_length: 0,
             components: vec![pytecode_engine::raw::RecordComponentInfo {
-                name_index: component_name,
-                descriptor_index: component_desc,
+                name_index: component_name.into(),
+                descriptor_index: component_desc.into(),
                 attributes: vec![AttributeInfo::Code(CodeAttribute {
-                    attribute_name_index: code_attr_name,
+                    attribute_name_index: code_attr_name.into(),
                     attribute_length: 0,
                     max_stack: 0,
                     max_locals: 0,
@@ -309,9 +313,9 @@ fn verify_classfile_reports_invalid_attribute_placement_and_versions() {
             }],
         }),
         AttributeInfo::NestHost(pytecode_engine::raw::NestHostAttribute {
-            attribute_name_index: nest_host_attr_name,
+            attribute_name_index: nest_host_attr_name.into(),
             attribute_length: 0,
-            host_class_index,
+            host_class_index: host_class_index.into(),
         }),
     ];
 
@@ -319,10 +323,10 @@ fn verify_classfile_reports_invalid_attribute_placement_and_versions() {
     let method_desc = push_utf8(&mut classfile, "()V");
     classfile.methods.push(MethodInfo {
         access_flags: MethodAccessFlags::PUBLIC,
-        name_index: method_name,
-        descriptor_index: method_desc,
+        name_index: method_name.into(),
+        descriptor_index: method_desc.into(),
         attributes: vec![AttributeInfo::Code(CodeAttribute {
-            attribute_name_index: code_attr_name,
+            attribute_name_index: code_attr_name.into(),
             attribute_length: 0,
             max_stack: 0,
             max_locals: 0,
@@ -331,21 +335,21 @@ fn verify_classfile_reports_invalid_attribute_placement_and_versions() {
             exception_table: Vec::new(),
             attributes: vec![
                 AttributeInfo::MethodParameters(pytecode_engine::raw::MethodParametersAttribute {
-                    attribute_name_index: method_parameters_attr_name,
+                    attribute_name_index: method_parameters_attr_name.into(),
                     attribute_length: 0,
                     parameters: vec![pytecode_engine::raw::MethodParameterInfo {
-                        name_index: 0,
+                        name_index: 0.into(),
                         access_flags: pytecode_engine::constants::MethodParameterAccessFlag::empty(
                         ),
                     }],
                 }),
                 AttributeInfo::StackMapTable(pytecode_engine::raw::StackMapTableAttribute {
-                    attribute_name_index: stack_map_attr_name,
+                    attribute_name_index: stack_map_attr_name.into(),
                     attribute_length: 0,
                     entries: Vec::new(),
                 }),
                 AttributeInfo::StackMapTable(pytecode_engine::raw::StackMapTableAttribute {
-                    attribute_name_index: stack_map_attr_name,
+                    attribute_name_index: stack_map_attr_name.into(),
                     attribute_length: 0,
                     entries: Vec::new(),
                 }),
@@ -416,35 +420,35 @@ fn verify_classfile_reports_invalid_generic_signatures() {
 
     classfile.attributes.push(AttributeInfo::Signature(
         pytecode_engine::raw::SignatureAttribute {
-            attribute_name_index: signature_attr_name,
+            attribute_name_index: signature_attr_name.into(),
             attribute_length: 0,
-            signature_index: class_signature,
+            signature_index: class_signature.into(),
         },
     ));
     classfile.fields.push(FieldInfo {
         access_flags: FieldAccessFlags::PRIVATE,
-        name_index: field_name,
-        descriptor_index: field_desc,
+        name_index: field_name.into(),
+        descriptor_index: field_desc.into(),
         attributes: vec![AttributeInfo::Signature(
             pytecode_engine::raw::SignatureAttribute {
-                attribute_name_index: signature_attr_name,
+                attribute_name_index: signature_attr_name.into(),
                 attribute_length: 0,
-                signature_index: field_signature,
+                signature_index: field_signature.into(),
             },
         )],
     });
     classfile.methods.push(MethodInfo {
         access_flags: MethodAccessFlags::PUBLIC,
-        name_index: method_name,
-        descriptor_index: method_desc,
+        name_index: method_name.into(),
+        descriptor_index: method_desc.into(),
         attributes: vec![
             AttributeInfo::Signature(pytecode_engine::raw::SignatureAttribute {
-                attribute_name_index: signature_attr_name,
+                attribute_name_index: signature_attr_name.into(),
                 attribute_length: 0,
-                signature_index: method_signature,
+                signature_index: method_signature.into(),
             }),
             AttributeInfo::Code(CodeAttribute {
-                attribute_name_index: code_attr_name,
+                attribute_name_index: code_attr_name.into(),
                 attribute_length: 0,
                 max_stack: 1,
                 max_locals: 2,
@@ -456,14 +460,14 @@ fn verify_classfile_reports_invalid_generic_signatures() {
                 exception_table: Vec::new(),
                 attributes: vec![AttributeInfo::LocalVariableTypeTable(
                     pytecode_engine::raw::LocalVariableTypeTableAttribute {
-                        attribute_name_index: lvtt_attr_name,
+                        attribute_name_index: lvtt_attr_name.into(),
                         attribute_length: 0,
                         local_variable_type_table: vec![
                             pytecode_engine::raw::LocalVariableTypeInfo {
                                 start_pc: 0,
                                 length: 1,
-                                name_index: local_name,
-                                signature_index: local_signature,
+                                name_index: local_name.into(),
+                                signature_index: local_signature.into(),
                                 index: 1,
                             },
                         ],
@@ -506,7 +510,7 @@ fn verify_classfile_reports_invalid_bootstrap_and_method_handle_links() {
         .push(Some(ConstantPoolEntry::MethodHandle(
             pytecode_engine::raw::MethodHandleInfo {
                 reference_kind: 0,
-                reference_index: field_ref,
+                reference_index: field_ref.into(),
             },
         )));
     classfile
@@ -514,33 +518,33 @@ fn verify_classfile_reports_invalid_bootstrap_and_method_handle_links() {
         .push(Some(ConstantPoolEntry::MethodHandle(
             pytecode_engine::raw::MethodHandleInfo {
                 reference_kind: 8,
-                reference_index: method_ref,
+                reference_index: method_ref.into(),
             },
         )));
     classfile
         .constant_pool
         .push(Some(ConstantPoolEntry::Dynamic(
             pytecode_engine::raw::DynamicInfo {
-                bootstrap_method_attr_index: 1,
-                name_and_type_index: dynamic_nat,
+                bootstrap_method_attr_index: 1.into(),
+                name_and_type_index: dynamic_nat.into(),
             },
         )));
     classfile
         .constant_pool
         .push(Some(ConstantPoolEntry::InvokeDynamic(
             pytecode_engine::raw::InvokeDynamicInfo {
-                bootstrap_method_attr_index: 1,
-                name_and_type_index: indy_nat,
+                bootstrap_method_attr_index: 1.into(),
+                name_and_type_index: indy_nat.into(),
             },
         )));
 
     classfile.attributes.push(AttributeInfo::BootstrapMethods(
         pytecode_engine::raw::BootstrapMethodsAttribute {
-            attribute_name_index: bootstrap_attr_name,
+            attribute_name_index: bootstrap_attr_name.into(),
             attribute_length: 0,
             bootstrap_methods: vec![pytecode_engine::raw::BootstrapMethodInfo {
-                bootstrap_method_ref: field_ref,
-                bootstrap_arguments: vec![field_ref],
+                bootstrap_method_ref: field_ref.into(),
+                bootstrap_arguments: vec![field_ref.into()],
             }],
         },
     ));

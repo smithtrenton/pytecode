@@ -5,6 +5,7 @@
 
 use pytecode_engine::constants::MAGIC;
 use pytecode_engine::error::EngineErrorKind;
+use pytecode_engine::indexes::*;
 use pytecode_engine::modified_utf8::encode_modified_utf8;
 use pytecode_engine::parse_class;
 use pytecode_engine::raw::{
@@ -349,7 +350,7 @@ fn cp_class_entry() -> TestResult<()> {
     });
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[6] {
-        Some(ConstantPoolEntry::Class(info)) => assert_eq!(info.name_index, 5),
+        Some(ConstantPoolEntry::Class(info)) => assert_eq!(info.name_index, Utf8Index(5)),
         other => panic!("expected Class, got {other:?}"),
     }
     assert_eq!(write_class(&parsed)?, raw);
@@ -369,7 +370,7 @@ fn cp_string_entry() -> TestResult<()> {
     });
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[6] {
-        Some(ConstantPoolEntry::String(info)) => assert_eq!(info.string_index, 5),
+        Some(ConstantPoolEntry::String(info)) => assert_eq!(info.string_index, Utf8Index(5)),
         other => panic!("expected String, got {other:?}"),
     }
     assert_eq!(write_class(&parsed)?, raw);
@@ -399,8 +400,8 @@ fn cp_fieldref_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[8] {
         Some(ConstantPoolEntry::FieldRef(info)) => {
-            assert_eq!(info.class_index, 2);
-            assert_eq!(info.name_and_type_index, 7);
+            assert_eq!(info.class_index, ClassIndex(2));
+            assert_eq!(info.name_and_type_index, NameAndTypeIndex(7));
         }
         other => panic!("expected FieldRef, got {other:?}"),
     }
@@ -428,8 +429,8 @@ fn cp_methodref_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[8] {
         Some(ConstantPoolEntry::MethodRef(info)) => {
-            assert_eq!(info.class_index, 4);
-            assert_eq!(info.name_and_type_index, 7);
+            assert_eq!(info.class_index, ClassIndex(4));
+            assert_eq!(info.name_and_type_index, NameAndTypeIndex(7));
         }
         other => panic!("expected MethodRef, got {other:?}"),
     }
@@ -457,8 +458,8 @@ fn cp_interface_methodref_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[8] {
         Some(ConstantPoolEntry::InterfaceMethodRef(info)) => {
-            assert_eq!(info.class_index, 2);
-            assert_eq!(info.name_and_type_index, 7);
+            assert_eq!(info.class_index, ClassIndex(2));
+            assert_eq!(info.name_and_type_index, NameAndTypeIndex(7));
         }
         other => panic!("expected InterfaceMethodRef, got {other:?}"),
     }
@@ -482,8 +483,8 @@ fn cp_name_and_type_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[7] {
         Some(ConstantPoolEntry::NameAndType(info)) => {
-            assert_eq!(info.name_index, 5);
-            assert_eq!(info.descriptor_index, 6);
+            assert_eq!(info.name_index, Utf8Index(5));
+            assert_eq!(info.descriptor_index, Utf8Index(6));
         }
         other => panic!("expected NameAndType, got {other:?}"),
     }
@@ -520,7 +521,7 @@ fn cp_method_handle_all_reference_kinds() -> TestResult<()> {
         match &parsed.constant_pool[9] {
             Some(ConstantPoolEntry::MethodHandle(info)) => {
                 assert_eq!(info.reference_kind, ref_kind);
-                assert_eq!(info.reference_index, 8);
+                assert_eq!(info.reference_index, CpIndex(8));
             }
             other => panic!("expected MethodHandle kind {ref_kind}, got {other:?}"),
         }
@@ -542,7 +543,9 @@ fn cp_method_type_entry() -> TestResult<()> {
     });
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[6] {
-        Some(ConstantPoolEntry::MethodType(info)) => assert_eq!(info.descriptor_index, 5),
+        Some(ConstantPoolEntry::MethodType(info)) => {
+            assert_eq!(info.descriptor_index, Utf8Index(5))
+        }
         other => panic!("expected MethodType, got {other:?}"),
     }
     assert_eq!(write_class(&parsed)?, raw);
@@ -569,8 +572,8 @@ fn cp_dynamic_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[8] {
         Some(ConstantPoolEntry::Dynamic(info)) => {
-            assert_eq!(info.bootstrap_method_attr_index, 0);
-            assert_eq!(info.name_and_type_index, 7);
+            assert_eq!(info.bootstrap_method_attr_index, BootstrapMethodIndex(0));
+            assert_eq!(info.name_and_type_index, NameAndTypeIndex(7));
         }
         other => panic!("expected Dynamic, got {other:?}"),
     }
@@ -598,8 +601,8 @@ fn cp_invoke_dynamic_entry() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[8] {
         Some(ConstantPoolEntry::InvokeDynamic(info)) => {
-            assert_eq!(info.bootstrap_method_attr_index, 0);
-            assert_eq!(info.name_and_type_index, 7);
+            assert_eq!(info.bootstrap_method_attr_index, BootstrapMethodIndex(0));
+            assert_eq!(info.name_and_type_index, NameAndTypeIndex(7));
         }
         other => panic!("expected InvokeDynamic, got {other:?}"),
     }
@@ -620,7 +623,7 @@ fn cp_module_entry() -> TestResult<()> {
     });
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[6] {
-        Some(ConstantPoolEntry::Module(info)) => assert_eq!(info.name_index, 5),
+        Some(ConstantPoolEntry::Module(info)) => assert_eq!(info.name_index, Utf8Index(5)),
         other => panic!("expected Module, got {other:?}"),
     }
     assert_eq!(write_class(&parsed)?, raw);
@@ -640,7 +643,7 @@ fn cp_package_entry() -> TestResult<()> {
     });
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[6] {
-        Some(ConstantPoolEntry::Package(info)) => assert_eq!(info.name_index, 5),
+        Some(ConstantPoolEntry::Package(info)) => assert_eq!(info.name_index, Utf8Index(5)),
         other => panic!("expected Package, got {other:?}"),
     }
     assert_eq!(write_class(&parsed)?, raw);
@@ -879,7 +882,7 @@ fn opcode_cp_wide_index() -> TestResult<()> {
         match insn {
             Instruction::ConstantPoolIndexWide(cp_insn) => {
                 assert_eq!(cp_insn.opcode, wide_opcodes[i]);
-                assert_eq!(cp_insn.index, 8);
+                assert_eq!(cp_insn.index, CpIndex(8));
             }
             other => panic!(
                 "expected ConstantPoolIndexWide for 0x{:02X}, got {other:?}",
@@ -1011,7 +1014,7 @@ fn opcode_invokeinterface() -> TestResult<()> {
         instructions[0],
         Instruction::InvokeInterface(InvokeInterfaceInsn {
             offset: 0,
-            index: 11,
+            index: CpIndex(11),
             count: 1,
             reserved: 0,
         })
@@ -1045,7 +1048,7 @@ fn opcode_invokedynamic() -> TestResult<()> {
         instructions[0],
         Instruction::InvokeDynamic(InvokeDynamicInsn {
             offset: 0,
-            index: 11,
+            index: CpIndex(11),
             reserved: 0,
         })
     ));
@@ -1100,7 +1103,7 @@ fn opcode_multianewarray() -> TestResult<()> {
         instructions[0],
         Instruction::MultiANewArray {
             offset: 0,
-            index: 9,
+            index: ClassIndex(9),
             dimensions: 2,
         }
     ));

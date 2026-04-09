@@ -51,7 +51,7 @@ fn main_flags(class_bytes: &[u8]) -> MethodAccessFlags {
         .methods
         .iter()
         .find(
-            |method| match classfile.constant_pool[method.name_index as usize].as_ref() {
+            |method| match classfile.constant_pool[method.name_index.value() as usize].as_ref() {
                 Some(ConstantPoolEntry::Utf8(info)) => {
                     decode_modified_utf8(&info.bytes).expect("utf8 should decode") == "main"
                 }

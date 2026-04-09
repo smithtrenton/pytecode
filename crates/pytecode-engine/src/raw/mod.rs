@@ -11,7 +11,7 @@ pub use attributes::{
     ExceptionHandler, ExceptionsAttribute, ExportInfo, InnerClassInfo, InnerClassesAttribute,
     LineNumberInfo, LineNumberTableAttribute, LocalVariableInfo, LocalVariableTableAttribute,
     LocalVariableTypeInfo, LocalVariableTypeTableAttribute, MethodParameterInfo,
-    MethodParametersAttribute, ModuleAttribute, ModuleInfo as ModuleAttributeInfo,
+    MethodParametersAttribute, ModuleAttribute, ModuleAttributeModuleInfo,
     ModuleMainClassAttribute, ModulePackagesAttribute, NestHostAttribute, NestMembersAttribute,
     OpensInfo, ParameterAnnotationInfo, PathInfo, PermittedSubclassesAttribute, ProvidesInfo,
     RecordAttribute, RecordComponentInfo, RequiresInfo, RuntimeInvisibleAnnotationsAttribute,

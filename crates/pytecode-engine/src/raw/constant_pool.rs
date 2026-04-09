@@ -74,71 +74,73 @@ pub struct DoubleInfo {
     pub low_bytes: u32,
 }
 
+use crate::indexes::{BootstrapMethodIndex, ClassIndex, CpIndex, NameAndTypeIndex, Utf8Index};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassInfo {
-    pub name_index: u16,
+    pub name_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StringInfo {
-    pub string_index: u16,
+    pub string_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldRefInfo {
-    pub class_index: u16,
-    pub name_and_type_index: u16,
+    pub class_index: ClassIndex,
+    pub name_and_type_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodRefInfo {
-    pub class_index: u16,
-    pub name_and_type_index: u16,
+    pub class_index: ClassIndex,
+    pub name_and_type_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterfaceMethodRefInfo {
-    pub class_index: u16,
-    pub name_and_type_index: u16,
+    pub class_index: ClassIndex,
+    pub name_and_type_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameAndTypeInfo {
-    pub name_index: u16,
-    pub descriptor_index: u16,
+    pub name_index: Utf8Index,
+    pub descriptor_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodHandleInfo {
     pub reference_kind: u8,
-    pub reference_index: u16,
+    pub reference_index: CpIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodTypeInfo {
-    pub descriptor_index: u16,
+    pub descriptor_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicInfo {
-    pub bootstrap_method_attr_index: u16,
-    pub name_and_type_index: u16,
+    pub bootstrap_method_attr_index: BootstrapMethodIndex,
+    pub name_and_type_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeDynamicInfo {
-    pub bootstrap_method_attr_index: u16,
-    pub name_and_type_index: u16,
+    pub bootstrap_method_attr_index: BootstrapMethodIndex,
+    pub name_and_type_index: NameAndTypeIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleInfo {
-    pub name_index: u16,
+    pub name_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageInfo {
-    pub name_index: u16,
+    pub name_index: Utf8Index,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,4 +1,5 @@
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
+use pytecode_engine::indexes::*;
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, Label,
     MethodModel, VarInsn, mark_class_debug_info_stale, mark_method_debug_info_stale,
@@ -95,8 +96,8 @@ fn attribute_named(attribute: &AttributeInfo, name: &str) -> bool {
     }
 }
 
-fn cp_utf8(pool: &[Option<ConstantPoolEntry>], index: u16) -> String {
-    let entry = pool[index as usize]
+fn cp_utf8(pool: &[Option<ConstantPoolEntry>], index: Utf8Index) -> String {
+    let entry = pool[index.value() as usize]
         .as_ref()
         .expect("constant-pool entry should exist");
     match entry {
@@ -204,8 +205,8 @@ fn constant_pool_builder_deduplicates_wide_entries() {
         .add_long(42)
         .expect("duplicate long entry should dedupe");
     assert_eq!(first, second);
-    assert!(builder.peek(first + 1).is_none());
-    assert_eq!(builder.count(), first + 2);
+    assert!(builder.peek(first.value() + 1).is_none());
+    assert_eq!(builder.count(), first.value() + 2);
 }
 
 #[test]

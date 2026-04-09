@@ -4,6 +4,7 @@ use pytecode_engine::fixtures::{
     compiled_fixture_paths as rust_compiled_fixture_paths,
     compiled_fixture_paths_for as rust_compiled_fixture_paths_for,
 };
+use pytecode_engine::indexes::*;
 use pytecode_engine::modified_utf8::{decode_modified_utf8, encode_modified_utf8};
 use pytecode_engine::parse_class;
 use pytecode_engine::raw::AttributeInfo;
@@ -17,8 +18,8 @@ fn minimal_classfile_parses() -> TestResult<()> {
     assert_eq!(parsed.magic, MAGIC);
     assert_eq!(parsed.major_version, 52);
     assert_eq!(parsed.minor_version, 0);
-    assert_eq!(parsed.this_class, 2);
-    assert_eq!(parsed.super_class, 4);
+    assert_eq!(parsed.this_class, ClassIndex::from(2));
+    assert_eq!(parsed.super_class, ClassIndex::from(4));
     assert_eq!(parsed.interfaces.len(), 0);
     assert_eq!(parsed.fields.len(), 0);
     assert_eq!(parsed.methods.len(), 0);
@@ -682,20 +683,20 @@ fn fixtures_and_constructed_inputs_expose_typed_module_record_bootstrap_attrs() 
     assert!(matches!(
         &parsed.attributes[0],
         AttributeInfo::Module(attr)
-            if attr.module.module_name_index == 9
+            if attr.module.module_name_index == ModuleIndex::from(9)
                 && attr.module.requires.len() == 1
                 && attr.module.exports.len() == 1
                 && attr.module.opens.len() == 1
-                && attr.module.uses_index == vec![20]
+                && attr.module.uses_index == vec![ClassIndex::from(20)]
                 && attr.module.provides.len() == 1
     ));
     assert!(matches!(
         &parsed.attributes[1],
-        AttributeInfo::ModulePackages(attr) if attr.package_index == vec![14, 16]
+        AttributeInfo::ModulePackages(attr) if attr.package_index == vec![PackageIndex::from(14), PackageIndex::from(16)]
     ));
     assert!(matches!(
         &parsed.attributes[2],
-        AttributeInfo::ModuleMainClass(attr) if attr.main_class_index == 18
+        AttributeInfo::ModuleMainClass(attr) if attr.main_class_index == ClassIndex::from(18)
     ));
     assert_eq!(write_class(&parsed)?, raw);
     Ok(())
@@ -719,11 +720,11 @@ fn writer_roundtrip_all_java_resources() -> TestResult<()> {
 
 fn constant_pool_utf8(
     classfile: &pytecode_engine::raw::ClassFile,
-    index: u16,
+    index: Utf8Index,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let entry = classfile
         .constant_pool
-        .get(index as usize)
+        .get(index.value() as usize)
         .and_then(Option::as_ref)
         .ok_or("missing constant-pool entry")?;
     match entry {

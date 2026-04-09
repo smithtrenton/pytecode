@@ -3,6 +3,7 @@ use pytecode_engine::constants::{
     ModuleRequiresAccessFlag, NestedClassAccessFlag, TargetInfoType, TargetType, TypePathKind,
     VerificationType,
 };
+use pytecode_engine::indexes::*;
 use pytecode_engine::raw::{
     AnnotationInfo, ElementValueInfo, ElementValuePairInfo, ElementValueTag, PathInfo,
     StackMapFrameInfo, TableInfo, TargetInfo, TypeAnnotationInfo, TypePathInfo,
@@ -46,7 +47,9 @@ fn target_info_type_groups_match_target_types() {
 
 #[test]
 fn shared_raw_support_types_preserve_discriminants() {
-    let object = VerificationTypeInfo::Object { cpool_index: 9 };
+    let object = VerificationTypeInfo::Object {
+        cpool_index: ClassIndex::from(9),
+    };
     assert_eq!(object.tag(), VerificationType::Object);
 
     let frame = StackMapFrameInfo::Append {
@@ -60,14 +63,14 @@ fn shared_raw_support_types_preserve_discriminants() {
         values: vec![
             ElementValueInfo::Const {
                 tag: ElementValueTag::String,
-                const_value_index: 7,
+                const_value_index: 7.into(),
             },
             ElementValueInfo::Annotation(AnnotationInfo {
-                type_index: 12,
+                type_index: 12.into(),
                 element_value_pairs: vec![ElementValuePairInfo {
-                    element_name_index: 13,
+                    element_name_index: 13.into(),
                     element_value: ElementValueInfo::Class {
-                        class_info_index: 14,
+                        class_info_index: 14.into(),
                     },
                 }],
             }),
@@ -90,7 +93,7 @@ fn shared_raw_support_types_preserve_discriminants() {
                 type_argument_index: 0,
             }],
         },
-        type_index: 20,
+        type_index: 20.into(),
         element_value_pairs: vec![],
     };
     assert_eq!(
