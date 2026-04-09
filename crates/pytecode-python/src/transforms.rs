@@ -662,14 +662,17 @@ impl PyPipeline {
             matcher: matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
+                    // Swap model into wrapper — zero-copy move, not clone
                     let py_model = PyClassModel {
-                        inner: model.clone(),
+                        inner: std::mem::take(model),
                     };
-                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell =
+                        Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
-                    *model = cell.borrow(py).inner.clone();
+                    // Move back out — zero-copy
+                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
                 });
             })),
         });
@@ -709,13 +712,14 @@ impl PyPipeline {
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
                     let py_model = PyClassModel {
-                        inner: model.clone(),
+                        inner: std::mem::take(model),
                     };
-                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell =
+                        Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
-                    *model = cell.borrow(py).inner.clone();
+                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
                 });
             })),
         });
@@ -755,13 +759,14 @@ impl PyPipeline {
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
                     let py_model = PyClassModel {
-                        inner: model.clone(),
+                        inner: std::mem::take(model),
                     };
-                    let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
+                    let cell =
+                        Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
-                    *model = cell.borrow(py).inner.clone();
+                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
                 });
             })),
         });

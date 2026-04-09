@@ -75,6 +75,25 @@ pub struct ClassModel {
     pub debug_info_state: DebugInfoState,
 }
 
+impl Default for ClassModel {
+    fn default() -> Self {
+        Self {
+            entry_name: String::new(),
+            original_byte_len: 0,
+            version: (0, 0),
+            access_flags: ClassAccessFlags::empty(),
+            name: String::new(),
+            super_name: None,
+            interfaces: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constant_pool: ConstantPoolBuilder::default(),
+            debug_info_state: DebugInfoState::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameComputationMode {
     Preserve,
