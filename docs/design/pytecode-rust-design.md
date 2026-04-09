@@ -167,7 +167,7 @@ The raw model should stay close to the JVM classfile format:
 Recommended design:
 
 - use enums for closed sets like constant-pool tags, attributes, and instructions,
-- use typed newtypes for indexes like `CpIndex`, `MethodIndex`, `FieldIndex`,
+- use typed newtypes for indexes like `CpIndex`, `MethodIndex`, `FieldIndex` (not yet implemented — raw `u16` is used throughout; this is a future safety improvement),
 - preserve unknown attributes as opaque byte payloads,
 - keep imported ordering and slot layout where roundtrip fidelity depends on it.
 
@@ -252,20 +252,22 @@ Areas where compatibility can be adapted:
 
 ### Current implementation status
 
-- Phases 0, 1, 2, 3, 4, 5, and 6 are complete in the current repository.
+- Phases 0, 1, 2, 3, 4, 5, 6, and 7 are complete in the current repository.
 - Rust tests now use Rust-owned fixtures under `crates\pytecode-engine\fixtures`; Java fixture sources compile lazily into `target\pytecode-rust-javac` when inputs change, and cross-language checks run through standalone tooling rather than Rust crate tests.
 - The default focused Rust benchmark fixture is `crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar`.
 - `pytecode-engine::model` now contains a real symbolic editing layer with a constant-pool builder, symbolic operands, labels, debug-info handling, raw <-> symbolic lift/lower, and opt-in frame recomputation during lowering.
 - `pytecode-engine::analysis` now exposes hierarchy resolution, CFG construction, JVM-slot simulation, structured verifier diagnostics, and frame recomputation directly from Rust.
 - `pytecode-engine::transform` now exposes Rust-native pipeline/matcher helpers (`Pipeline`, `pipeline!`, `on_fields`, `on_methods`, `on_code`, and the current selector subset) layered directly on `ClassModel`.
 - `pytecode-archive` now provides in-memory JAR state, entry mutation helpers, and rewrite flows that compose with transform pipelines and Phase 4 lowering controls.
-- `pytecode-cli` now exposes a rewrite smoke command plus isolated-stage benchmark reporting with per-iteration samples and median/spread summaries.
+- `pytecode-cli` now exposes a rewrite smoke command, class summary, compatibility manifest, plus isolated-stage benchmark reporting with per-iteration samples and median/spread summaries.
 - Rust-owned examples now live in `crates\pytecode-engine\examples` and `crates\pytecode-archive\examples`, and the crate manifests now include release-ready metadata such as descriptions, keywords, categories, and README linkage.
-- Python-side tooling now includes isolated-stage benchmark reporting and a Rust-vs-Python comparison tool so benchmark artifacts can be regenerated against the current Python implementation.
+- Python-side tooling now includes isolated-stage benchmark reporting, a Rust-vs-Python comparison tool, and a transform pipeline benchmark so benchmark artifacts can be regenerated against the current Python implementation.
 - Benchmark `model-lift` / `model-lower` stages now use that real symbolic pipeline, and focused Rust tests cover exact roundtrip fidelity plus key edit-model, analysis, transform, and archive edge cases, including conditional branch widening, switch-layout edits, hierarchy queries, CFG edges, verifier diagnostics, transform pipeline behavior, archive rewrite flows, and recomputation of edited methods that previously failed on stale `StackMapTable`.
 - `pytecode-python` now provides a PyO3 binding crate plus `maturin` packaging, so `uv sync` and `uv build` install/build mixed Python/Rust distributions with `pytecode._rust` included by default.
 - The public Python package now defaults to the Rust parser path when the extension is available, and compatibility bridges let existing `ClassModel`, hierarchy, verifier, and writer entry points consume Rust-backed classfiles without a second maintained backend.
 - Phase 7 Python backend integration is complete.
+- The Rust transform/pipeline system is now bridged to Python via PyO3 as declarative matcher specs, transform specs, and a compiled pipeline. Python constructs spec trees; Rust evaluates matchers and applies built-in transforms natively without per-match FFI. Custom Python callbacks are supported via zero-copy `std::mem::take` handoff. Benchmarks show 20× speedup for pure-Rust pipelines and 3× speedup for mixed pipelines with Python callbacks versus pure-Python closure pipelines.
+- Python `Matcher[T]` now carries an optional `_rust_spec` field populated by all factory functions, enabling dual-mode matchers that work with both the Python predicate path and the Rust spec path. Rust pipeline types (`RustClassMatcher`, `RustFieldMatcher`, `RustMethodMatcher`, `RustClassTransform`, `RustPipeline`, `RustPipelineBuilder`) are re-exported from `pytecode.transforms`.
 
 ### Phase 0: project setup and compatibility harness
 
@@ -387,7 +389,7 @@ Deliverables:
 - safe atomic rewrite behavior with unchanged-class passthrough when possible,
 - resource preservation and ZIP metadata preservation,
 - recompute/debug-info lowering options threaded through archive rewrite flows,
-- optional parallel class processing only after single-threaded rewrite semantics are stable.
+- optional parallel class processing only after single-threaded rewrite semantics are stable (deferred — single-threaded pipeline already achieves 20× speedup over Python).
 
 Exit criteria:
 
@@ -396,23 +398,34 @@ Exit criteria:
 - rewritten archives preserve non-class resources and produce stable output paths safely,
 - archive rewrite APIs compose cleanly with Phase 4 frame recomputation and debug-info controls.
 
-#### PyO3 bridge: transform layer intentionally not bridged
+#### PyO3 bridge: declarative transform pipeline
 
-The Rust transform/pipeline system (`Pipeline`, `Matcher<T>`, `on_classes`,
-`on_methods`, etc.) is **not** exposed to Python via PyO3.  This is a deliberate
-design decision:
+The Rust transform/pipeline system is exposed to Python via PyO3 using a
+**declarative spec** architecture that avoids per-match FFI overhead:
 
-- Python transforms are user-defined closures (`Callable[[ClassModel], None]`).
-  The Python `Matcher[T]` wraps Python callables, and `Pipeline.apply()` calls
-  Python callbacks.  Moving these to Rust would require crossing the PyO3 FFI
-  boundary per matcher invocation and per transform callback, which benchmarks
-  show negates any Rust performance benefit.
-- The Python transform module already has a complete implementation (21 class
-  matchers, 16 field matchers, 19 method matchers, Pipeline, on_classes/fields/
-  methods/code) that mirrors the Rust API.
-- The Rust transform system serves pure-Rust workflows (CLI, archive rewrite,
-  batch analysis) where the full 19× speedup is realized because no Python
-  objects are created.
+- Python matcher factories (e.g. `class_named("Foo")`, `method_is_public()`)
+  construct `MatcherSpec` enum trees that Rust evaluates natively.
+- Python transform factories (e.g. `add_access_flags(0x0010)`) construct
+  `ClassTransformSpec` enums that Rust applies natively.
+- `RustPipelineBuilder` assembles steps in Python, then `build()` + `compile()`
+  produces a `CompiledPipeline` that iterates models and evaluates matchers
+  entirely in Rust — no per-class or per-match Python callback.
+- For custom logic that cannot be expressed as a declarative spec, custom Python
+  callbacks are supported via `on_classes_custom()`, `on_fields_custom()`, and
+  `on_methods_custom()`.  These use `std::mem::take()` to move the `ClassModel`
+  into the Python wrapper and back without cloning.
+
+Benchmarks on 5928 classes (byte-buddy JAR):
+
+| Pipeline mode | Apply time | vs Pure Python |
+|---|---|---|
+| Pure Rust (declarative specs only) | 2.5 ms | 20× faster |
+| Mixed (Rust matching + Python callback) | 17.8 ms | 3× faster |
+| Pure Python (closure pipeline) | 54.3 ms | baseline |
+
+Python `Matcher[T]` now carries an optional `_rust_spec` field populated by all
+factory functions, so code can detect `has_rust_spec` and route to the Rust path.
+Rust pipeline types are re-exported from `pytecode.transforms` for convenience.
 
 ### Phase 6: polish, optimization, and packaging
 
@@ -485,7 +498,8 @@ Implemented direction:
 
 - use **thin Rust-backed Python objects** for the raw parse/package surface,
 - bridge those objects into the current Python edit/analysis/archive layers where direct wrappers are not yet worth the binding cost,
-- keep compatibility helpers only where they preserve the documented API story and no second parser backend is maintained.
+- keep compatibility helpers only where they preserve the documented API story and no second parser backend is maintained,
+- expose the Rust transform/pipeline system to Python as **declarative specs** so matcher evaluation and built-in transforms run entirely in Rust, with Python callbacks supported via zero-copy model handoff for custom logic.
 
 ## Validation strategy
 
