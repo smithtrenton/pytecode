@@ -1062,3 +1062,199 @@ def test_context_transform_with_jarfile_rewrite(tmp_path: Path) -> None:
     model = ClassModel.from_bytes(rewritten.files["HelloWorld.class"].bytes)
     methods = {m.name: m for m in model.methods}
     assert MethodAccessFlag.FINAL in methods["main"].access_flags
+
+
+# ── Dual-mode matcher tests (rust_spec propagation) ──
+
+
+def test_matcher_factory_has_rust_spec() -> None:
+    """Factory matchers carry a Rust spec."""
+    m = class_named("example/Foo")
+    assert m.has_rust_spec
+    assert m._rust_spec is not None
+
+
+def test_closure_matcher_no_rust_spec() -> None:
+    """User-supplied closures don't have a Rust spec."""
+    m: Matcher[ClassModel] = Matcher(lambda _m: True, "custom")
+    assert not m.has_rust_spec
+    assert m._rust_spec is None
+
+
+def test_matcher_and_propagates_rust_spec() -> None:
+    """& operator propagates Rust specs when both sides have one."""
+    left = class_named("A")
+    right = class_is_public()
+    combined = left & right
+    assert combined.has_rust_spec
+
+
+def test_matcher_and_drops_rust_spec_when_missing() -> None:
+    """& operator drops Rust spec when one side is a closure."""
+    left = class_named("A")
+    right: Matcher[ClassModel] = Matcher(lambda _m: True, "custom")
+    combined = left & right
+    assert not combined.has_rust_spec
+
+
+def test_matcher_or_propagates_rust_spec() -> None:
+    """| operator propagates Rust specs."""
+    left = class_named("A")
+    right = class_named("B")
+    combined = left | right
+    assert combined.has_rust_spec
+
+
+def test_matcher_invert_propagates_rust_spec() -> None:
+    """~ operator propagates Rust spec."""
+    m = class_named("A")
+    inverted = ~m
+    assert inverted.has_rust_spec
+
+
+def test_matcher_invert_drops_when_no_spec() -> None:
+    """~ operator returns None spec when base has none."""
+    m: Matcher[ClassModel] = Matcher(lambda _m: True, "custom")
+    inverted = ~m
+    assert not inverted.has_rust_spec
+
+
+def test_all_of_propagates_rust_specs() -> None:
+    """all_of propagates when all matchers have specs."""
+    combined = all_of(class_named("A"), class_is_public(), extends("B"))
+    assert combined.has_rust_spec
+
+
+def test_all_of_drops_with_closure() -> None:
+    """all_of drops spec when any matcher lacks one."""
+    combined = all_of(class_named("A"), Matcher(lambda _m: True, "custom"))
+    assert not combined.has_rust_spec
+
+
+def test_any_of_propagates_rust_specs() -> None:
+    """any_of propagates when all matchers have specs."""
+    combined = any_of(class_named("A"), class_named("B"))
+    assert combined.has_rust_spec
+
+
+def test_not_propagates_rust_spec() -> None:
+    """not_ propagates Rust spec."""
+    m = not_(class_named("A"))
+    assert m.has_rust_spec
+
+
+def test_field_matcher_has_rust_spec() -> None:
+    m = field_named("value")
+    assert m.has_rust_spec
+
+
+def test_method_matcher_has_rust_spec() -> None:
+    m = method_named("run")
+    assert m.has_rust_spec
+
+
+def test_ensure_matcher_preserves_rust_spec() -> None:
+    """_ensure_matcher preserves Rust spec when re-wrapping with new description."""
+    m = class_named("A")
+    wrapped = Matcher.of(m, "custom_description")
+    assert wrapped.has_rust_spec
+    assert wrapped._description == "custom_description"
+
+
+def test_class_version_matchers_have_rust_spec() -> None:
+    assert class_version(52).has_rust_spec
+    assert class_version_at_least(52).has_rust_spec
+    assert class_version_below(52).has_rust_spec
+
+
+def test_method_returns_has_rust_spec() -> None:
+    assert method_returns("V").has_rust_spec
+
+
+def test_has_code_has_rust_spec() -> None:
+    assert has_code().has_rust_spec
+
+
+def test_is_constructor_has_rust_spec() -> None:
+    assert is_constructor().has_rust_spec
+
+
+def test_all_class_matchers_have_rust_spec() -> None:
+    """Every class matcher factory produces a matcher with a Rust spec."""
+    matchers = [
+        class_named("X"),
+        class_name_matches("X.*"),
+        class_access(ClassAccessFlag.PUBLIC),
+        class_access_any(ClassAccessFlag.PUBLIC | ClassAccessFlag.FINAL),
+        class_is_public(),
+        class_is_package_private(),
+        class_is_final(),
+        class_is_interface(),
+        class_is_abstract(),
+        class_is_synthetic(),
+        class_is_annotation(),
+        class_is_enum(),
+        class_is_module(),
+        extends("java/lang/Object"),
+        implements("java/io/Serializable"),
+        class_version(52),
+        class_version_at_least(52),
+        class_version_below(52),
+    ]
+    for m in matchers:
+        assert m.has_rust_spec, f"{m!r} missing rust_spec"
+
+
+def test_all_field_matchers_have_rust_spec() -> None:
+    """Every field matcher factory produces a matcher with a Rust spec."""
+    matchers = [
+        field_named("value"),
+        field_name_matches("val.*"),
+        field_descriptor("I"),
+        field_descriptor_matches("L.*"),
+        field_access(FieldAccessFlag.PUBLIC),
+        field_access_any(FieldAccessFlag.PUBLIC | FieldAccessFlag.PRIVATE),
+        field_is_public(),
+        field_is_private(),
+        field_is_protected(),
+        field_is_package_private(),
+        field_is_static(),
+        field_is_final(),
+        field_is_volatile(),
+        field_is_transient(),
+        field_is_synthetic(),
+        field_is_enum_constant(),
+    ]
+    for m in matchers:
+        assert m.has_rust_spec, f"{m!r} missing rust_spec"
+
+
+def test_all_method_matchers_have_rust_spec() -> None:
+    """Every method matcher factory produces a matcher with a Rust spec."""
+    matchers = [
+        method_named("run"),
+        method_name_matches("run.*"),
+        method_descriptor("()V"),
+        method_descriptor_matches("\\(.*"),
+        method_access(MethodAccessFlag.PUBLIC),
+        method_access_any(MethodAccessFlag.PUBLIC | MethodAccessFlag.PRIVATE),
+        method_is_public(),
+        method_is_private(),
+        method_is_protected(),
+        method_is_package_private(),
+        method_is_static(),
+        method_is_final(),
+        method_is_synchronized(),
+        method_is_bridge(),
+        method_is_varargs(),
+        method_is_native(),
+        method_is_abstract(),
+        method_is_strict(),
+        method_is_synthetic(),
+        has_code(),
+        is_constructor(),
+        is_static_initializer(),
+        method_returns("V"),
+    ]
+    for m in matchers:
+        assert m.has_rust_spec, f"{m!r} missing rust_spec"
