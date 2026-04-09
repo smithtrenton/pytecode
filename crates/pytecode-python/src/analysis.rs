@@ -120,16 +120,20 @@ fn rust_verify_classmodel(
     fail_fast: bool,
 ) -> PyResult<Vec<PyDiagnostic>> {
     let diagnostics = if fail_fast {
-        verify_classmodel_with_options(
-            &model.inner,
-            resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
-            true,
-        )
+        model.with_class_model(|inner| {
+            Ok(verify_classmodel_with_options(
+                inner,
+                resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+                true,
+            ))
+        })?
     } else {
-        verify_classmodel(
-            &model.inner,
-            resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
-        )
+        model.with_class_model(|inner| {
+            Ok(verify_classmodel(
+                inner,
+                resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+            ))
+        })?
     };
     Ok(diagnostics
         .into_iter()

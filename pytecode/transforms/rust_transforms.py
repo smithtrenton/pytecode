@@ -51,16 +51,12 @@ def remove_interface(name: str) -> RustClassTransform:
     return RustClassTransform.remove_interface(name)
 
 
-def remove_method(
-    name: str, descriptor: str | None = None
-) -> RustClassTransform:
+def remove_method(name: str, descriptor: str | None = None) -> RustClassTransform:
     """Remove method by *name*, optionally filtered by *descriptor*."""
     return RustClassTransform.remove_method(name, descriptor)
 
 
-def remove_field(
-    name: str, descriptor: str | None = None
-) -> RustClassTransform:
+def remove_field(name: str, descriptor: str | None = None) -> RustClassTransform:
     """Remove field by *name*, optionally filtered by *descriptor*."""
     return RustClassTransform.remove_field(name, descriptor)
 

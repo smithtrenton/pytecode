@@ -1,3 +1,4 @@
+use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use pytecode_engine::analysis::MappingClassResolver;
@@ -6,7 +7,9 @@ use pytecode_engine::model::{
     ExceptionHandler, FieldModel, FrameComputationMode, Label, LdcValue, MethodModel,
 };
 use pytecode_engine::write_class;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------
 // Helper: convert EngineError → PyErr
@@ -14,6 +17,113 @@ use std::hash::{Hash, Hasher};
 
 fn analysis_error_to_py(e: pytecode_engine::analysis::AnalysisError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+type SharedClassState = Rc<RefCell<ClassModelState>>;
+
+struct ClassModelState {
+    inner: Option<ClassModel>,
+    interfaces_generation: u64,
+    fields_generation: u64,
+    methods_generation: u64,
+}
+
+impl ClassModelState {
+    fn new(inner: ClassModel) -> Self {
+        Self {
+            inner: Some(inner),
+            interfaces_generation: 0,
+            fields_generation: 0,
+            methods_generation: 0,
+        }
+    }
+}
+
+fn dead_model_err() -> PyErr {
+    PyErr::new::<PyRuntimeError, _>("RustClassModel is no longer live")
+}
+
+fn stale_ref_err(kind: &str) -> PyErr {
+    PyErr::new::<PyRuntimeError, _>(format!("{kind} is stale after structural mutation"))
+}
+
+fn index_err(index: isize, len: usize) -> PyErr {
+    PyErr::new::<PyIndexError, _>(format!("index {index} out of range for length {len}"))
+}
+
+fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
+    let normalized = if index < 0 {
+        len as isize + index
+    } else {
+        index
+    };
+    if normalized < 0 || normalized >= len as isize {
+        return Err(index_err(index, len));
+    }
+    Ok(normalized as usize)
+}
+
+fn with_live_model<R>(
+    state: &SharedClassState,
+    f: impl FnOnce(&ClassModelState) -> PyResult<R>,
+) -> PyResult<R> {
+    let borrowed = state.borrow();
+    if borrowed.inner.is_none() {
+        return Err(dead_model_err());
+    }
+    f(&borrowed)
+}
+
+fn with_live_model_mut<R>(
+    state: &SharedClassState,
+    f: impl FnOnce(&mut ClassModelState) -> PyResult<R>,
+) -> PyResult<R> {
+    let mut borrowed = state.borrow_mut();
+    if borrowed.inner.is_none() {
+        return Err(dead_model_err());
+    }
+    f(&mut borrowed)
+}
+
+fn wrap_line_number(py: Python<'_>, label: &Label, line_number: u16) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("label", wrap_label(py, label)?)?;
+    dict.set_item("line_number", line_number)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn wrap_local_variable(
+    py: Python<'_>,
+    start: &Label,
+    end: &Label,
+    name: &str,
+    descriptor: &str,
+    index: u16,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("start", wrap_label(py, start)?)?;
+    dict.set_item("end", wrap_label(py, end)?)?;
+    dict.set_item("name", name)?;
+    dict.set_item("descriptor", descriptor)?;
+    dict.set_item("index", index)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn wrap_local_variable_type(
+    py: Python<'_>,
+    start: &Label,
+    end: &Label,
+    name: &str,
+    signature: &str,
+    index: u16,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("start", wrap_label(py, start)?)?;
+    dict.set_item("end", wrap_label(py, end)?)?;
+    dict.set_item("name", name)?;
+    dict.set_item("signature", signature)?;
+    dict.set_item("index", index)?;
+    Ok(dict.into_any().unbind())
 }
 
 // ---------------------------------------------------------------------------
@@ -280,117 +390,535 @@ fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
 }
 
 // ---------------------------------------------------------------------------
+// Shared bridge access
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum FieldAccess {
+    Shared {
+        state: SharedClassState,
+        index: usize,
+        generation: u64,
+    },
+}
+
+#[derive(Clone)]
+enum MethodAccess {
+    Shared {
+        state: SharedClassState,
+        index: usize,
+        generation: u64,
+    },
+}
+
+#[derive(Clone)]
+enum CodeAccess {
+    Shared {
+        state: SharedClassState,
+        method_index: usize,
+        methods_generation: u64,
+    },
+}
+
+#[derive(Clone)]
+enum ConstantPoolAccess {
+    Owned(ConstantPoolBuilder),
+    Shared(SharedClassState),
+}
+
+#[derive(Clone)]
+enum AttributeOwner {
+    Class(SharedClassState),
+    Field {
+        state: SharedClassState,
+        index: usize,
+        generation: u64,
+    },
+    Method {
+        state: SharedClassState,
+        index: usize,
+        generation: u64,
+    },
+    Code {
+        state: SharedClassState,
+        method_index: usize,
+        methods_generation: u64,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum CodeListKind {
+    Instructions,
+    ExceptionHandlers,
+    LineNumbers,
+    LocalVariables,
+    LocalVariableTypes,
+}
+
+// ---------------------------------------------------------------------------
+// View objects
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "RustStringListView", unsendable)]
+#[derive(Clone)]
+pub struct PyStringListView {
+    state: SharedClassState,
+    generation: u64,
+}
+
+#[pymethods]
+impl PyStringListView {
+    fn __len__(&self) -> PyResult<usize> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.interfaces_generation != self.generation {
+                return Err(stale_ref_err("interface view"));
+            }
+            Ok(model_state.inner.as_ref().unwrap().interfaces.len())
+        })
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<String> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.interfaces_generation != self.generation {
+                return Err(stale_ref_err("interface view"));
+            }
+            let interfaces = &model_state.inner.as_ref().unwrap().interfaces;
+            Ok(interfaces[normalize_index(index, interfaces.len())?].clone())
+        })
+    }
+
+    fn to_list(&self) -> PyResult<Vec<String>> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.interfaces_generation != self.generation {
+                return Err(stale_ref_err("interface view"));
+            }
+            Ok(model_state.inner.as_ref().unwrap().interfaces.clone())
+        })
+    }
+}
+
+#[pyclass(name = "RustFieldListView", unsendable)]
+#[derive(Clone)]
+pub struct PyFieldListView {
+    state: SharedClassState,
+    generation: u64,
+}
+
+#[pymethods]
+impl PyFieldListView {
+    fn __len__(&self) -> PyResult<usize> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.fields_generation != self.generation {
+                return Err(stale_ref_err("field view"));
+            }
+            Ok(model_state.inner.as_ref().unwrap().fields.len())
+        })
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<PyFieldModel> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.fields_generation != self.generation {
+                return Err(stale_ref_err("field view"));
+            }
+            let fields = &model_state.inner.as_ref().unwrap().fields;
+            Ok(PyFieldModel {
+                access: FieldAccess::Shared {
+                    state: self.state.clone(),
+                    index: normalize_index(index, fields.len())?,
+                    generation: self.generation,
+                },
+            })
+        })
+    }
+
+    fn to_list(&self) -> PyResult<Vec<PyFieldModel>> {
+        let len = self.__len__()?;
+        (0..len)
+            .map(|index| self.__getitem__(index as isize))
+            .collect::<PyResult<Vec<_>>>()
+    }
+}
+
+#[pyclass(name = "RustMethodListView", unsendable)]
+#[derive(Clone)]
+pub struct PyMethodListView {
+    state: SharedClassState,
+    generation: u64,
+}
+
+#[pymethods]
+impl PyMethodListView {
+    fn __len__(&self) -> PyResult<usize> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.methods_generation != self.generation {
+                return Err(stale_ref_err("method view"));
+            }
+            Ok(model_state.inner.as_ref().unwrap().methods.len())
+        })
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<PyMethodModel> {
+        with_live_model(&self.state, |model_state| {
+            if model_state.methods_generation != self.generation {
+                return Err(stale_ref_err("method view"));
+            }
+            let methods = &model_state.inner.as_ref().unwrap().methods;
+            Ok(PyMethodModel {
+                access: MethodAccess::Shared {
+                    state: self.state.clone(),
+                    index: normalize_index(index, methods.len())?,
+                    generation: self.generation,
+                },
+            })
+        })
+    }
+
+    fn to_list(&self) -> PyResult<Vec<PyMethodModel>> {
+        let len = self.__len__()?;
+        (0..len)
+            .map(|index| self.__getitem__(index as isize))
+            .collect::<PyResult<Vec<_>>>()
+    }
+}
+
+impl AttributeOwner {
+    fn len(&self) -> PyResult<usize> {
+        match self {
+            AttributeOwner::Class(state) => with_live_model(state, |model_state| {
+                Ok(model_state.inner.as_ref().unwrap().attributes.len())
+            }),
+            AttributeOwner::Field {
+                state,
+                index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.fields_generation != *generation {
+                    return Err(stale_ref_err("field attribute view"));
+                }
+                Ok(model_state.inner.as_ref().unwrap().fields[*index]
+                    .attributes
+                    .len())
+            }),
+            AttributeOwner::Method {
+                state,
+                index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *generation {
+                    return Err(stale_ref_err("method attribute view"));
+                }
+                Ok(model_state.inner.as_ref().unwrap().methods[*index]
+                    .attributes
+                    .len())
+            }),
+            AttributeOwner::Code {
+                state,
+                method_index,
+                methods_generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *methods_generation {
+                    return Err(stale_ref_err("code attribute view"));
+                }
+                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
+                let code = method
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                Ok(code.attributes.len())
+            }),
+        }
+    }
+
+    fn get(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
+        match self {
+            AttributeOwner::Class(state) => with_live_model(state, |model_state| {
+                let attrs = &model_state.inner.as_ref().unwrap().attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }),
+            AttributeOwner::Field {
+                state,
+                index: field_index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.fields_generation != *generation {
+                    return Err(stale_ref_err("field attribute view"));
+                }
+                let attrs = &model_state.inner.as_ref().unwrap().fields[*field_index].attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }),
+            AttributeOwner::Method {
+                state,
+                index: method_index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *generation {
+                    return Err(stale_ref_err("method attribute view"));
+                }
+                let attrs = &model_state.inner.as_ref().unwrap().methods[*method_index].attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }),
+            AttributeOwner::Code {
+                state,
+                method_index,
+                methods_generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *methods_generation {
+                    return Err(stale_ref_err("code attribute view"));
+                }
+                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
+                let code = method
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                let attrs = &code.attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }),
+        }
+    }
+}
+
+#[pyclass(name = "RustAttributeListView", unsendable)]
+#[derive(Clone)]
+pub struct PyAttributeListView {
+    owner: AttributeOwner,
+}
+
+#[pymethods]
+impl PyAttributeListView {
+    fn __len__(&self) -> PyResult<usize> {
+        self.owner.len()
+    }
+
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
+        self.owner.get(py, index)
+    }
+
+    fn to_list(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let len = self.__len__()?;
+        (0..len)
+            .map(|index| self.__getitem__(py, index as isize))
+            .collect::<PyResult<Vec<_>>>()
+    }
+}
+
+#[pyclass(name = "RustCodeListView", unsendable)]
+#[derive(Clone)]
+pub struct PyCodeListView {
+    access: CodeAccess,
+    kind: CodeListKind,
+}
+
+#[pymethods]
+impl PyCodeListView {
+    fn __len__(&self) -> PyResult<usize> {
+        self.with_code(|code| {
+            Ok(match self.kind {
+                CodeListKind::Instructions => code.instructions.len(),
+                CodeListKind::ExceptionHandlers => code.exception_handlers.len(),
+                CodeListKind::LineNumbers => code.line_numbers.len(),
+                CodeListKind::LocalVariables => code.local_variables.len(),
+                CodeListKind::LocalVariableTypes => code.local_variable_types.len(),
+            })
+        })
+    }
+
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
+        self.with_code(|code| match self.kind {
+            CodeListKind::Instructions => wrap_code_item(
+                py,
+                &code.instructions[normalize_index(index, code.instructions.len())?],
+            ),
+            CodeListKind::ExceptionHandlers => {
+                let item = &code.exception_handlers
+                    [normalize_index(index, code.exception_handlers.len())?];
+                Ok(Py::new(
+                    py,
+                    PyModelExceptionHandler {
+                        inner: item.clone(),
+                    },
+                )?
+                .into_any())
+            }
+            CodeListKind::LineNumbers => {
+                let item = &code.line_numbers[normalize_index(index, code.line_numbers.len())?];
+                wrap_line_number(py, &item.label, item.line_number)
+            }
+            CodeListKind::LocalVariables => {
+                let item =
+                    &code.local_variables[normalize_index(index, code.local_variables.len())?];
+                wrap_local_variable(
+                    py,
+                    &item.start,
+                    &item.end,
+                    &item.name,
+                    &item.descriptor,
+                    item.index,
+                )
+            }
+            CodeListKind::LocalVariableTypes => {
+                let item = &code.local_variable_types
+                    [normalize_index(index, code.local_variable_types.len())?];
+                wrap_local_variable_type(
+                    py,
+                    &item.start,
+                    &item.end,
+                    &item.name,
+                    &item.signature,
+                    item.index,
+                )
+            }
+        })
+    }
+
+    fn to_list(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let len = self.__len__()?;
+        (0..len)
+            .map(|index| self.__getitem__(py, index as isize))
+            .collect::<PyResult<Vec<_>>>()
+    }
+}
+
+impl PyCodeListView {
+    fn with_code<R>(&self, f: impl FnOnce(&CodeModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            CodeAccess::Shared {
+                state,
+                method_index,
+                methods_generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *methods_generation {
+                    return Err(stale_ref_err("code view"));
+                }
+                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
+                let code = method
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                f(code)
+            }),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PyCodeModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustCodeModel")]
+#[pyclass(name = "RustCodeModel", unsendable)]
 #[derive(Clone)]
 pub struct PyCodeModel {
-    pub(crate) inner: CodeModel,
+    access: CodeAccess,
+}
+
+impl PyCodeModel {
+    fn with_code<R>(&self, f: impl FnOnce(&CodeModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            CodeAccess::Shared {
+                state,
+                method_index,
+                methods_generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *methods_generation {
+                    return Err(stale_ref_err("code ref"));
+                }
+                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
+                let code = method
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                f(code)
+            }),
+        }
+    }
 }
 
 #[pymethods]
 impl PyCodeModel {
     #[getter]
-    fn max_stack(&self) -> u16 {
-        self.inner.max_stack
+    fn max_stack(&self) -> PyResult<u16> {
+        self.with_code(|code| Ok(code.max_stack))
     }
 
     #[getter]
-    fn max_locals(&self) -> u16 {
-        self.inner.max_locals
+    fn max_locals(&self) -> PyResult<u16> {
+        self.with_code(|code| Ok(code.max_locals))
     }
 
     #[getter]
-    fn instructions(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .instructions
-            .iter()
-            .map(|item| wrap_code_item(py, item))
-            .collect()
-    }
-
-    #[getter]
-    fn exception_handlers(&self) -> Vec<PyModelExceptionHandler> {
-        self.inner
-            .exception_handlers
-            .iter()
-            .map(|eh| PyModelExceptionHandler { inner: eh.clone() })
-            .collect()
-    }
-
-    #[getter]
-    fn line_numbers(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .line_numbers
-            .iter()
-            .map(|ln| -> PyResult<PyObject> {
-                let dict = PyDict::new(py);
-                dict.set_item("label", wrap_label(py, &ln.label)?)?;
-                dict.set_item("line_number", ln.line_number)?;
-                Ok(dict.into_any().unbind())
-            })
-            .collect()
-    }
-
-    #[getter]
-    fn local_variables(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .local_variables
-            .iter()
-            .map(|lv| -> PyResult<PyObject> {
-                let dict = PyDict::new(py);
-                dict.set_item("start", wrap_label(py, &lv.start)?)?;
-                dict.set_item("end", wrap_label(py, &lv.end)?)?;
-                dict.set_item("name", &lv.name)?;
-                dict.set_item("descriptor", &lv.descriptor)?;
-                dict.set_item("index", lv.index)?;
-                Ok(dict.into_any().unbind())
-            })
-            .collect()
-    }
-
-    #[getter]
-    fn local_variable_types(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .local_variable_types
-            .iter()
-            .map(|lv| -> PyResult<PyObject> {
-                let dict = PyDict::new(py);
-                dict.set_item("start", wrap_label(py, &lv.start)?)?;
-                dict.set_item("end", wrap_label(py, &lv.end)?)?;
-                dict.set_item("name", &lv.name)?;
-                dict.set_item("signature", &lv.signature)?;
-                dict.set_item("index", lv.index)?;
-                Ok(dict.into_any().unbind())
-            })
-            .collect()
-    }
-
-    #[getter]
-    fn attributes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .attributes
-            .iter()
-            .map(|attr| crate::wrap_attribute(py, attr))
-            .collect()
-    }
-
-    #[getter]
-    fn debug_info_state(&self) -> &str {
-        match self.inner.debug_info_state {
-            DebugInfoState::Fresh => "fresh",
-            DebugInfoState::Stale => "stale",
+    fn instructions(&self) -> PyCodeListView {
+        PyCodeListView {
+            access: self.access.clone(),
+            kind: CodeListKind::Instructions,
         }
     }
 
     #[getter]
-    fn nested_attribute_layout(&self) -> Vec<String> {
-        self.inner
-            .nested_attribute_layout()
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+    fn exception_handlers(&self) -> PyCodeListView {
+        PyCodeListView {
+            access: self.access.clone(),
+            kind: CodeListKind::ExceptionHandlers,
+        }
+    }
+
+    #[getter]
+    fn line_numbers(&self) -> PyCodeListView {
+        PyCodeListView {
+            access: self.access.clone(),
+            kind: CodeListKind::LineNumbers,
+        }
+    }
+
+    #[getter]
+    fn local_variables(&self) -> PyCodeListView {
+        PyCodeListView {
+            access: self.access.clone(),
+            kind: CodeListKind::LocalVariables,
+        }
+    }
+
+    #[getter]
+    fn local_variable_types(&self) -> PyCodeListView {
+        PyCodeListView {
+            access: self.access.clone(),
+            kind: CodeListKind::LocalVariableTypes,
+        }
+    }
+
+    #[getter]
+    fn attributes(&self) -> PyAttributeListView {
+        let owner = match &self.access {
+            CodeAccess::Shared {
+                state,
+                method_index,
+                methods_generation,
+            } => AttributeOwner::Code {
+                state: state.clone(),
+                method_index: *method_index,
+                methods_generation: *methods_generation,
+            },
+        };
+        PyAttributeListView { owner }
+    }
+
+    #[getter]
+    fn debug_info_state(&self) -> PyResult<&'static str> {
+        self.with_code(|code| {
+            Ok(match code.debug_info_state {
+                DebugInfoState::Fresh => "fresh",
+                DebugInfoState::Stale => "stale",
+            })
+        })
+    }
+
+    #[getter]
+    fn nested_attribute_layout(&self) -> PyResult<Vec<String>> {
+        self.with_code(|code| {
+            Ok(code
+                .nested_attribute_layout()
+                .iter()
+                .map(|s| s.to_string())
+                .collect())
+        })
     }
 }
 
@@ -398,36 +926,64 @@ impl PyCodeModel {
 // PyFieldModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustFieldModel")]
+#[pyclass(name = "RustFieldModel", unsendable)]
 #[derive(Clone)]
 pub struct PyFieldModel {
-    pub(crate) inner: FieldModel,
+    access: FieldAccess,
+}
+
+impl PyFieldModel {
+    fn with_field<R>(&self, f: impl FnOnce(&FieldModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            FieldAccess::Shared {
+                state,
+                index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.fields_generation != *generation {
+                    return Err(stale_ref_err("field ref"));
+                }
+                f(&model_state.inner.as_ref().unwrap().fields[*index])
+            }),
+        }
+    }
+
+    fn clone_inner(&self) -> PyResult<FieldModel> {
+        self.with_field(|field| Ok(field.clone()))
+    }
 }
 
 #[pymethods]
 impl PyFieldModel {
     #[getter]
-    fn access_flags(&self) -> u16 {
-        self.inner.access_flags.bits()
+    fn access_flags(&self) -> PyResult<u16> {
+        self.with_field(|field| Ok(field.access_flags.bits()))
     }
 
     #[getter]
-    fn name(&self) -> String {
-        self.inner.name.clone()
+    fn name(&self) -> PyResult<String> {
+        self.with_field(|field| Ok(field.name.clone()))
     }
 
     #[getter]
-    fn descriptor(&self) -> String {
-        self.inner.descriptor.clone()
+    fn descriptor(&self) -> PyResult<String> {
+        self.with_field(|field| Ok(field.descriptor.clone()))
     }
 
     #[getter]
-    fn attributes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .attributes
-            .iter()
-            .map(|attr| crate::wrap_attribute(py, attr))
-            .collect()
+    fn attributes(&self) -> PyAttributeListView {
+        let owner = match &self.access {
+            FieldAccess::Shared {
+                state,
+                index,
+                generation,
+            } => AttributeOwner::Field {
+                state: state.clone(),
+                index: *index,
+                generation: *generation,
+            },
+        };
+        PyAttributeListView { owner }
     }
 }
 
@@ -435,44 +991,87 @@ impl PyFieldModel {
 // PyMethodModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustMethodModel")]
+#[pyclass(name = "RustMethodModel", unsendable)]
 #[derive(Clone)]
 pub struct PyMethodModel {
-    pub(crate) inner: MethodModel,
+    access: MethodAccess,
+}
+
+impl PyMethodModel {
+    fn with_method<R>(&self, f: impl FnOnce(&MethodModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            MethodAccess::Shared {
+                state,
+                index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *generation {
+                    return Err(stale_ref_err("method ref"));
+                }
+                f(&model_state.inner.as_ref().unwrap().methods[*index])
+            }),
+        }
+    }
+
+    fn clone_inner(&self) -> PyResult<MethodModel> {
+        self.with_method(|method| Ok(method.clone()))
+    }
 }
 
 #[pymethods]
 impl PyMethodModel {
     #[getter]
-    fn access_flags(&self) -> u16 {
-        self.inner.access_flags.bits()
+    fn access_flags(&self) -> PyResult<u16> {
+        self.with_method(|method| Ok(method.access_flags.bits()))
     }
 
     #[getter]
-    fn name(&self) -> String {
-        self.inner.name.clone()
+    fn name(&self) -> PyResult<String> {
+        self.with_method(|method| Ok(method.name.clone()))
     }
 
     #[getter]
-    fn descriptor(&self) -> String {
-        self.inner.descriptor.clone()
+    fn descriptor(&self) -> PyResult<String> {
+        self.with_method(|method| Ok(method.descriptor.clone()))
     }
 
     #[getter]
-    fn code(&self) -> Option<PyCodeModel> {
-        self.inner
-            .code
-            .as_ref()
-            .map(|c| PyCodeModel { inner: c.clone() })
+    fn code(&self) -> PyResult<Option<PyCodeModel>> {
+        match &self.access {
+            MethodAccess::Shared {
+                state,
+                index,
+                generation,
+            } => with_live_model(state, |model_state| {
+                if model_state.methods_generation != *generation {
+                    return Err(stale_ref_err("method ref"));
+                }
+                let method = &model_state.inner.as_ref().unwrap().methods[*index];
+                Ok(method.code.as_ref().map(|_| PyCodeModel {
+                    access: CodeAccess::Shared {
+                        state: state.clone(),
+                        method_index: *index,
+                        methods_generation: *generation,
+                    },
+                }))
+            }),
+        }
     }
 
     #[getter]
-    fn attributes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .attributes
-            .iter()
-            .map(|attr| crate::wrap_attribute(py, attr))
-            .collect()
+    fn attributes(&self) -> PyAttributeListView {
+        let owner = match &self.access {
+            MethodAccess::Shared {
+                state,
+                index,
+                generation,
+            } => AttributeOwner::Method {
+                state: state.clone(),
+                index: *index,
+                generation: *generation,
+            },
+        };
+        PyAttributeListView { owner }
     }
 }
 
@@ -480,10 +1079,39 @@ impl PyMethodModel {
 // PyConstantPoolBuilder
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustConstantPoolBuilder")]
+#[pyclass(name = "RustConstantPoolBuilder", unsendable)]
 #[derive(Clone)]
 pub struct PyConstantPoolBuilder {
-    inner: ConstantPoolBuilder,
+    access: ConstantPoolAccess,
+}
+
+impl PyConstantPoolBuilder {
+    fn from_shared(state: SharedClassState) -> Self {
+        Self {
+            access: ConstantPoolAccess::Shared(state),
+        }
+    }
+
+    fn with_builder<R>(&self, f: impl FnOnce(&ConstantPoolBuilder) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            ConstantPoolAccess::Owned(builder) => f(builder),
+            ConstantPoolAccess::Shared(state) => with_live_model(state, |model_state| {
+                f(&model_state.inner.as_ref().unwrap().constant_pool)
+            }),
+        }
+    }
+
+    fn with_builder_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut ConstantPoolBuilder) -> PyResult<R>,
+    ) -> PyResult<R> {
+        match &mut self.access {
+            ConstantPoolAccess::Owned(builder) => f(builder),
+            ConstantPoolAccess::Shared(state) => with_live_model_mut(state, |model_state| {
+                f(&mut model_state.inner.as_mut().unwrap().constant_pool)
+            }),
+        }
+    }
 }
 
 #[pymethods]
@@ -491,71 +1119,89 @@ impl PyConstantPoolBuilder {
     #[new]
     fn new() -> Self {
         Self {
-            inner: ConstantPoolBuilder::new(),
+            access: ConstantPoolAccess::Owned(ConstantPoolBuilder::new()),
         }
     }
 
     fn add_utf8(&mut self, value: &str) -> PyResult<u16> {
-        self.inner
-            .add_utf8(value)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_utf8(value)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_class(&mut self, name: &str) -> PyResult<u16> {
-        self.inner
-            .add_class(name)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_class(name)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_string(&mut self, value: &str) -> PyResult<u16> {
-        self.inner
-            .add_string(value)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_string(value)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_integer(&mut self, value: u32) -> PyResult<u16> {
-        self.inner
-            .add_integer(value)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_integer(value)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_long(&mut self, value: u64) -> PyResult<u16> {
-        self.inner
-            .add_long(value)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_long(value)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_float_bits(&mut self, raw_bits: u32) -> PyResult<u16> {
-        self.inner
-            .add_float_bits(raw_bits)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_float_bits(raw_bits)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_double_bits(&mut self, raw_bits: u64) -> PyResult<u16> {
-        self.inner
-            .add_double_bits(raw_bits)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_double_bits(raw_bits)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_field_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
-        self.inner
-            .add_field_ref(owner, name, descriptor)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_field_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
-        self.inner
-            .add_method_ref(owner, name, descriptor)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_interface_method_ref(
@@ -564,27 +1210,33 @@ impl PyConstantPoolBuilder {
         name: &str,
         descriptor: &str,
     ) -> PyResult<u16> {
-        self.inner
-            .add_interface_method_ref(owner, name, descriptor)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_interface_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_method_type(&mut self, descriptor: &str) -> PyResult<u16> {
-        self.inner
-            .add_method_type(descriptor)
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_method_type(descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_method_handle(&mut self, reference_kind: u8, reference_index: u16) -> PyResult<u16> {
-        self.inner
-            .add_method_handle(
-                reference_kind,
-                pytecode_engine::indexes::CpIndex::from(reference_index),
-            )
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_method_handle(
+                    reference_kind,
+                    pytecode_engine::indexes::CpIndex::from(reference_index),
+                )
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn add_invoke_dynamic(
@@ -593,34 +1245,40 @@ impl PyConstantPoolBuilder {
         name: &str,
         descriptor: &str,
     ) -> PyResult<u16> {
-        self.inner
-            .add_invoke_dynamic(
-                pytecode_engine::indexes::BootstrapMethodIndex::from(bootstrap_idx),
-                name,
-                descriptor,
-            )
-            .map(|idx| idx.into())
-            .map_err(crate::engine_error_to_py)
+        self.with_builder_mut(|builder| {
+            builder
+                .add_invoke_dynamic(
+                    pytecode_engine::indexes::BootstrapMethodIndex::from(bootstrap_idx),
+                    name,
+                    descriptor,
+                )
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn resolve_utf8(&self, index: u16) -> PyResult<String> {
-        self.inner
-            .resolve_utf8(pytecode_engine::indexes::Utf8Index::from(index))
-            .map_err(crate::engine_error_to_py)
+        self.with_builder(|builder| {
+            builder
+                .resolve_utf8(pytecode_engine::indexes::Utf8Index::from(index))
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
     fn resolve_class_name(&self, index: u16) -> PyResult<String> {
-        self.inner
-            .resolve_class_name(pytecode_engine::indexes::ClassIndex::from(index))
-            .map_err(crate::engine_error_to_py)
+        self.with_builder(|builder| {
+            builder
+                .resolve_class_name(pytecode_engine::indexes::ClassIndex::from(index))
+                .map_err(crate::engine_error_to_py)
+        })
     }
 
-    fn count(&self) -> u16 {
-        self.inner.count()
+    fn count(&self) -> PyResult<u16> {
+        self.with_builder(|builder| Ok(builder.count()))
     }
 
-    fn len(&self) -> usize {
-        self.inner.len()
+    fn len(&self) -> PyResult<usize> {
+        self.with_builder(|builder| Ok(builder.len()))
     }
 }
 
@@ -683,10 +1341,41 @@ fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
     }
 }
 
-#[pyclass(name = "RustClassModel")]
+#[pyclass(name = "RustClassModel", unsendable)]
 #[derive(Clone)]
 pub struct PyClassModel {
-    pub(crate) inner: ClassModel,
+    state: SharedClassState,
+}
+
+impl PyClassModel {
+    pub(crate) fn from_model(inner: ClassModel) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(ClassModelState::new(inner))),
+        }
+    }
+
+    pub(crate) fn with_class_model<R>(
+        &self,
+        f: impl FnOnce(&ClassModel) -> PyResult<R>,
+    ) -> PyResult<R> {
+        with_live_model(&self.state, |model_state| {
+            f(model_state.inner.as_ref().unwrap())
+        })
+    }
+
+    pub(crate) fn with_class_model_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut ClassModel) -> PyResult<R>,
+    ) -> PyResult<R> {
+        with_live_model_mut(&self.state, |model_state| {
+            f(model_state.inner.as_mut().unwrap())
+        })
+    }
+
+    pub(crate) fn take_inner(&mut self) -> PyResult<ClassModel> {
+        let mut borrowed = self.state.borrow_mut();
+        borrowed.inner.take().ok_or_else(dead_model_err)
+    }
 }
 
 #[pymethods]
@@ -696,13 +1385,20 @@ impl PyClassModel {
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
         let model = ClassModel::from_bytes(data).map_err(crate::engine_error_to_py)?;
-        Ok(Self { inner: model })
+        Ok(Self::from_model(model))
     }
 
     // -- serialisation ------------------------------------------------------
 
     fn to_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
-        let bytes = self.inner.to_bytes().map_err(crate::engine_error_to_py)?;
+        let bytes = with_live_model(&self.state, |model_state| {
+            model_state
+                .inner
+                .as_ref()
+                .unwrap()
+                .to_bytes()
+                .map_err(crate::engine_error_to_py)
+        })?;
         Ok(PyBytes::new(py, &bytes).unbind())
     }
 
@@ -720,14 +1416,18 @@ impl PyClassModel {
         } else {
             FrameComputationMode::Preserve
         };
-        let classfile = self
-            .inner
-            .to_classfile_with_options(
-                policy,
-                frame_mode,
-                resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
-            )
-            .map_err(crate::engine_error_to_py)?;
+        let classfile = with_live_model(&self.state, |model_state| {
+            model_state
+                .inner
+                .as_ref()
+                .unwrap()
+                .to_classfile_with_options(
+                    policy,
+                    frame_mode,
+                    resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+                )
+                .map_err(crate::engine_error_to_py)
+        })?;
         let bytes = write_class(&classfile).map_err(crate::engine_error_to_py)?;
         Ok(PyBytes::new(py, &bytes).unbind())
     }
@@ -735,118 +1435,167 @@ impl PyClassModel {
     // -- getters ------------------------------------------------------------
 
     #[getter]
-    fn entry_name(&self) -> String {
-        self.inner.entry_name.clone()
+    fn entry_name(&self) -> PyResult<String> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().entry_name.clone())
+        })
     }
 
     #[getter]
-    fn original_byte_len(&self) -> usize {
-        self.inner.original_byte_len
+    fn original_byte_len(&self) -> PyResult<usize> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().original_byte_len)
+        })
     }
 
     #[getter]
-    fn version(&self) -> (u16, u16) {
-        self.inner.version
+    fn version(&self) -> PyResult<(u16, u16)> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().version)
+        })
     }
 
     #[getter]
-    fn access_flags(&self) -> u16 {
-        self.inner.access_flags.bits()
+    fn access_flags(&self) -> PyResult<u16> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().access_flags.bits())
+        })
     }
 
     #[getter]
-    fn name(&self) -> String {
-        self.inner.name.clone()
+    fn name(&self) -> PyResult<String> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().name.clone())
+        })
     }
 
     #[getter]
-    fn super_name(&self) -> Option<String> {
-        self.inner.super_name.clone()
+    fn super_name(&self) -> PyResult<Option<String>> {
+        with_live_model(&self.state, |model_state| {
+            Ok(model_state.inner.as_ref().unwrap().super_name.clone())
+        })
     }
 
     #[getter]
-    fn interfaces(&self) -> Vec<String> {
-        self.inner.interfaces.clone()
+    fn interfaces(&self) -> PyResult<PyStringListView> {
+        with_live_model(&self.state, |model_state| {
+            Ok(PyStringListView {
+                state: self.state.clone(),
+                generation: model_state.interfaces_generation,
+            })
+        })
     }
 
     #[getter]
-    fn fields(&self) -> Vec<PyFieldModel> {
-        self.inner
-            .fields
-            .iter()
-            .map(|f| PyFieldModel { inner: f.clone() })
-            .collect()
+    fn fields(&self) -> PyResult<PyFieldListView> {
+        with_live_model(&self.state, |model_state| {
+            Ok(PyFieldListView {
+                state: self.state.clone(),
+                generation: model_state.fields_generation,
+            })
+        })
     }
 
     #[getter]
-    fn methods(&self) -> Vec<PyMethodModel> {
-        self.inner
-            .methods
-            .iter()
-            .map(|m| PyMethodModel { inner: m.clone() })
-            .collect()
+    fn methods(&self) -> PyResult<PyMethodListView> {
+        with_live_model(&self.state, |model_state| {
+            Ok(PyMethodListView {
+                state: self.state.clone(),
+                generation: model_state.methods_generation,
+            })
+        })
     }
 
     #[getter]
-    fn attributes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        self.inner
-            .attributes
-            .iter()
-            .map(|attr| crate::wrap_attribute(py, attr))
-            .collect()
+    fn attributes(&self) -> PyAttributeListView {
+        PyAttributeListView {
+            owner: AttributeOwner::Class(self.state.clone()),
+        }
     }
 
     #[getter]
     fn constant_pool(&self) -> PyConstantPoolBuilder {
-        PyConstantPoolBuilder {
-            inner: self.inner.constant_pool.clone(),
-        }
+        PyConstantPoolBuilder::from_shared(self.state.clone())
     }
 
     #[getter]
-    fn debug_info_state(&self) -> &str {
-        match self.inner.debug_info_state {
-            DebugInfoState::Fresh => "fresh",
-            DebugInfoState::Stale => "stale",
-        }
+    fn debug_info_state(&self) -> PyResult<&'static str> {
+        with_live_model(&self.state, |model_state| {
+            Ok(match model_state.inner.as_ref().unwrap().debug_info_state {
+                DebugInfoState::Fresh => "fresh",
+                DebugInfoState::Stale => "stale",
+            })
+        })
     }
 
     // -- setters ------------------------------------------------------------
 
     #[setter]
-    fn set_name(&mut self, value: String) {
-        self.inner.name = value;
+    fn set_name(&mut self, value: String) -> PyResult<()> {
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().name = value;
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_super_name(&mut self, value: Option<String>) {
-        self.inner.super_name = value;
+    fn set_super_name(&mut self, value: Option<String>) -> PyResult<()> {
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().super_name = value;
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_interfaces(&mut self, value: Vec<String>) {
-        self.inner.interfaces = value;
+    fn set_interfaces(&mut self, value: Vec<String>) -> PyResult<()> {
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().interfaces = value;
+            model_state.interfaces_generation += 1;
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_access_flags(&mut self, value: u16) {
-        self.inner.access_flags =
-            pytecode_engine::constants::ClassAccessFlags::from_bits_truncate(value);
+    fn set_access_flags(&mut self, value: u16) -> PyResult<()> {
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().access_flags =
+                pytecode_engine::constants::ClassAccessFlags::from_bits_truncate(value);
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_version(&mut self, value: (u16, u16)) {
-        self.inner.version = value;
+    fn set_version(&mut self, value: (u16, u16)) -> PyResult<()> {
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().version = value;
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_fields(&mut self, value: Vec<PyFieldModel>) {
-        self.inner.fields = value.into_iter().map(|f| f.inner).collect();
+    fn set_fields(&mut self, value: Vec<PyFieldModel>) -> PyResult<()> {
+        let fields = value
+            .into_iter()
+            .map(|field| field.clone_inner())
+            .collect::<PyResult<Vec<_>>>()?;
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().fields = fields;
+            model_state.fields_generation += 1;
+            Ok(())
+        })
     }
 
     #[setter]
-    fn set_methods(&mut self, value: Vec<PyMethodModel>) {
-        self.inner.methods = value.into_iter().map(|m| m.inner).collect();
+    fn set_methods(&mut self, value: Vec<PyMethodModel>) -> PyResult<()> {
+        let methods = value
+            .into_iter()
+            .map(|method| method.clone_inner())
+            .collect::<PyResult<Vec<_>>>()?;
+        with_live_model_mut(&self.state, |model_state| {
+            model_state.inner.as_mut().unwrap().methods = methods;
+            model_state.methods_generation += 1;
+            Ok(())
+        })
     }
 }
 
@@ -859,6 +1608,11 @@ pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add_class::<PyMethodModel>()?;
     module.add_class::<PyFieldModel>()?;
     module.add_class::<PyCodeModel>()?;
+    module.add_class::<PyStringListView>()?;
+    module.add_class::<PyFieldListView>()?;
+    module.add_class::<PyMethodListView>()?;
+    module.add_class::<PyAttributeListView>()?;
+    module.add_class::<PyCodeListView>()?;
     module.add_class::<PyLabel>()?;
     module.add_class::<PyConstantPoolBuilder>()?;
     module.add_class::<PyMappingClassResolver>()?;

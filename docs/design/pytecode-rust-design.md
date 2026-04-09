@@ -414,6 +414,11 @@ The Rust transform/pipeline system is exposed to Python via PyO3 using a
   callbacks are supported via `on_classes_custom()`, `on_fields_custom()`, and
   `on_methods_custom()`.  These use `std::mem::take()` to move the `ClassModel`
   into the Python wrapper and back without cloning.
+- Bridge-facing model collections now use **live views** instead of eager cloned
+  Python lists: `RustClassModel.interfaces/fields/methods/attributes` and nested
+  method/code collections are owner-backed sequence views. `list(...)` is now the
+  explicit snapshot/materialization boundary, and stale refs fail fast after
+  structural mutation.
 
 Benchmarks on 5928 classes (byte-buddy JAR):
 

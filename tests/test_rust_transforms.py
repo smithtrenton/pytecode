@@ -144,11 +144,7 @@ class TestPipelineBuilder:
         assert len(p) == 0
 
     def test_single_class_step(self) -> None:
-        p = (
-            RustPipelineBuilder()
-            .on_classes(class_named("Foo"), rename_class("Bar"))
-            .build()
-        )
+        p = RustPipelineBuilder().on_classes(class_named("Foo"), rename_class("Bar")).build()
         assert len(p) == 1
 
     def test_multiple_steps(self) -> None:
@@ -164,11 +160,7 @@ class TestPipelineBuilder:
         assert len(p) == 2
 
     def test_method_step(self) -> None:
-        p = (
-            RustPipelineBuilder()
-            .on_methods(method_named("foo"), remove_method("foo"))
-            .build()
-        )
+        p = RustPipelineBuilder().on_methods(method_named("foo"), remove_method("foo")).build()
         assert len(p) == 1
 
     def test_method_step_with_owner(self) -> None:
@@ -184,11 +176,7 @@ class TestPipelineBuilder:
         assert len(p) == 1
 
     def test_field_step(self) -> None:
-        p = (
-            RustPipelineBuilder()
-            .on_fields(field_named("x"), remove_field("x"))
-            .build()
-        )
+        p = RustPipelineBuilder().on_fields(field_named("x"), remove_field("x")).build()
         assert len(p) == 1
 
     def test_field_step_with_owner(self) -> None:
@@ -234,20 +222,12 @@ class TestComposition:
 
     def test_combinator_matcher_in_pipeline(self) -> None:
         matcher = class_named("Foo") | class_named("Bar")
-        p = (
-            RustPipelineBuilder()
-            .on_classes(matcher, rename_class("Baz"))
-            .build()
-        )
+        p = RustPipelineBuilder().on_classes(matcher, rename_class("Baz")).build()
         assert len(p) == 1
 
     def test_negated_matcher_in_pipeline(self) -> None:
         matcher = ~class_named("Foo")
-        p = (
-            RustPipelineBuilder()
-            .on_classes(matcher, remove_access_flags(0x0010))
-            .build()
-        )
+        p = RustPipelineBuilder().on_classes(matcher, remove_access_flags(0x0010)).build()
         assert len(p) == 1
 
     def test_sequence_transform_in_pipeline(self) -> None:
@@ -256,11 +236,7 @@ class TestComposition:
             set_super_class("java/lang/Object"),
             add_interface("java/io/Serializable"),
         )
-        p = (
-            RustPipelineBuilder()
-            .on_classes(class_name_matches(".*"), t)
-            .build()
-        )
+        p = RustPipelineBuilder().on_classes(class_name_matches(".*"), t).build()
         assert len(p) == 1
 
 
@@ -327,9 +303,7 @@ class TestPipelineApply:
         original_name = m.name
 
         p = RustPipelineBuilder()
-        p.on_classes(
-            class_named("nonexistent/Class"), rename_class("should/not/apply")
-        )
+        p.on_classes(class_named("nonexistent/Class"), rename_class("should/not/apply"))
         p.build().apply(m)
 
         assert m.name == original_name
@@ -364,9 +338,7 @@ class TestPipelineApply:
         orig_ifaces = list(m.interfaces)
 
         p = RustPipelineBuilder()
-        p.on_classes(
-            class_named(m.name), add_interface("java/io/Serializable")
-        )
+        p.on_classes(class_named(m.name), add_interface("java/io/Serializable"))
         p.build().apply(m)
 
         assert "java/io/Serializable" in m.interfaces
@@ -378,16 +350,12 @@ class TestPipelineApply:
         m = RustClassModel.from_bytes(class_bytes)
         # First add, then remove
         p1 = RustPipelineBuilder()
-        p1.on_classes(
-            class_named(m.name), add_interface("java/io/Serializable")
-        )
+        p1.on_classes(class_named(m.name), add_interface("java/io/Serializable"))
         p1.build().apply(m)
         assert "java/io/Serializable" in m.interfaces
 
         p2 = RustPipelineBuilder()
-        p2.on_classes(
-            class_named(m.name), remove_interface("java/io/Serializable")
-        )
+        p2.on_classes(class_named(m.name), remove_interface("java/io/Serializable"))
         p2.build().apply(m)
         assert "java/io/Serializable" not in m.interfaces
 
@@ -500,7 +468,7 @@ class TestCustomCallbacks:
 
         m = RustClassModel.from_bytes(class_bytes)
         original = m.name
-        called = []
+        called: list[bool] = []
 
         def should_not_run(model: object) -> None:
             called.append(True)
@@ -518,10 +486,10 @@ class TestCustomCallbacks:
         m = RustClassModel.from_bytes(class_bytes)
         original_name = m.name
 
-        def add_iface(model: object) -> None:
-            ifaces = list(model.interfaces)  # type: ignore[attr-defined]
+        def add_iface(model: RustClassModel) -> None:
+            ifaces = list(model.interfaces)
             ifaces.append("com/callback/Added")
-            model.interfaces = ifaces  # type: ignore[attr-defined]
+            model.interfaces = ifaces
 
         p = RustPipelineBuilder()
         # Built-in step first
@@ -533,13 +501,11 @@ class TestCustomCallbacks:
         assert m.access_flags & 0x0010
         assert "com/callback/Added" in m.interfaces
 
-    def test_callback_on_methods_guard(
-        self, multi_class_bytes: list[bytes]
-    ) -> None:
+    def test_callback_on_methods_guard(self, multi_class_bytes: list[bytes]) -> None:
         from pytecode._rust import RustClassModel
 
         models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
-        transformed = []
+        transformed: list[str] = []
 
         def track(model: object) -> None:
             transformed.append(model.name)  # type: ignore[attr-defined]
@@ -582,3 +548,40 @@ class TestCustomCallbacks:
         compiled.apply(m)
 
         assert m.name == "com/compiled/Callback"
+
+    def test_interfaces_view_invalidates_after_replace(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        view = m.interfaces
+        original = list(view)
+
+        m.interfaces = [*original, "com/callback/Added"]
+
+        with pytest.raises(RuntimeError, match="stale"):
+            len(view)
+
+    def test_method_ref_invalidates_after_method_list_replace(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        methods = m.methods
+        first = methods[0]
+
+        m.methods = list(methods)
+
+        with pytest.raises(RuntimeError, match="stale"):
+            _ = first.name
+
+    def test_constant_pool_view_mutates_owner(self, class_bytes: bytes) -> None:
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        cp = m.constant_pool
+        before = cp.count()
+
+        added = cp.add_utf8("bridge/ViewTest")
+
+        assert added >= before
+        assert cp.count() == before + 1
+        assert len(m.to_bytes()) > 0

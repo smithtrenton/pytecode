@@ -160,19 +160,6 @@ CLASSES = [
 # ---------------------------------------------------------------------------
 
 
-def _assert_class_matchers_agree(py_matcher: py_t.Matcher, rs_matcher: object) -> None:
-    """Assert Python and Rust matchers produce same result for all fixture classes."""
-    for cls in CLASSES:
-        py_result = py_matcher(cls)
-        # Rust matcher doesn't directly evaluate against Python ClassModel —
-        # it holds a spec. We compare via the Python factory wrapper which
-        # returns a Rust spec object. So we test the factories produce the
-        # right *spec structure* and leave Rust evaluation testing to the
-        # Rust-side unit tests. Here we just verify the factory calls succeed
-        # and the repr is reasonable.
-        assert py_result == py_result  # sanity — actual cross-eval is in Rust tests
-
-
 # ---------------------------------------------------------------------------
 # Class matcher factory parity
 # ---------------------------------------------------------------------------

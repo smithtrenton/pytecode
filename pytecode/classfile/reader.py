@@ -52,7 +52,7 @@ class ClassReader(BytesReader):
             return
 
         try:
-            self._rust_reader = _rust.ClassReader.from_bytes(bytes_or_bytearray)
+            self._rust_reader = _rust.ClassReader.from_bytes(bytes(bytes_or_bytearray))
         except _rust.MalformedClassException:
             self.read_class()
             return

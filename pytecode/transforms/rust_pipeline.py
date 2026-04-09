@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from pytecode._rust import (
     RustClassMatcher,
+    RustClassModel,
     RustClassTransform,
+    RustCompiledPipeline,
     RustFieldMatcher,
     RustMethodMatcher,
     RustPipeline,
@@ -68,7 +70,12 @@ class RustPipelineBuilder:
         matcher: RustClassMatcher,
         callback: object,
     ) -> RustPipelineBuilder:
-        """Class step with custom Python callback (receives RustClassModel)."""
+        """Class step with custom Python callback (receives RustClassModel).
+
+        Collection properties on ``RustClassModel`` are live views, not eager
+        snapshot lists. Use ``list(model.methods)`` / ``list(model.interfaces)``
+        when a detached snapshot is actually wanted.
+        """
         self._pipeline.on_classes_custom(matcher, callback)
         return self
 
@@ -79,7 +86,11 @@ class RustPipelineBuilder:
         *,
         owner_matcher: RustClassMatcher | None = None,
     ) -> RustPipelineBuilder:
-        """Field step with custom Python callback."""
+        """Field step with custom Python callback.
+
+        Nested Rust bridge collections also use live views; ``list(...)`` is the
+        explicit materialization boundary.
+        """
         self._pipeline.on_fields_custom(field_matcher, callback, owner_matcher)
         return self
 
@@ -90,25 +101,27 @@ class RustPipelineBuilder:
         *,
         owner_matcher: RustClassMatcher | None = None,
     ) -> RustPipelineBuilder:
-        """Method step with custom Python callback."""
-        self._pipeline.on_methods_custom(
-            method_matcher, callback, owner_matcher
-        )
+        """Method step with custom Python callback.
+
+        Nested Rust bridge collections also use live views; ``list(...)`` is the
+        explicit materialization boundary.
+        """
+        self._pipeline.on_methods_custom(method_matcher, callback, owner_matcher)
         return self
 
     def build(self) -> RustPipeline:
         """Return the constructed pipeline."""
         return self._pipeline
 
-    def apply(self, model: object) -> None:
+    def apply(self, model: RustClassModel) -> None:
         """Apply pipeline to a single RustClassModel (mutates in-place)."""
         self._pipeline.apply(model)
 
-    def apply_all(self, models: list[object]) -> None:
+    def apply_all(self, models: list[RustClassModel]) -> None:
         """Apply pipeline to many RustClassModel objects (mutates in-place)."""
         self._pipeline.apply_all(models)
 
-    def compile(self) -> object:
+    def compile(self) -> RustCompiledPipeline:
         """Compile for hot-path repeated use (pre-compiles regexes)."""
         return self._pipeline.compile()
 

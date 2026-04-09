@@ -47,7 +47,7 @@ def _jar_classes(jar_name: str) -> list[tuple[str, bytes]]:
     jar_path = _FIXTURE_JARS_DIR / jar_name
     if not jar_path.exists():
         pytest.skip(f"Fixture JAR not found: {jar_path}")
-    result = []
+    result: list[tuple[str, bytes]] = []
     with zipfile.ZipFile(jar_path, "r") as zf:
         for entry in sorted(zf.namelist()):
             if entry.endswith(".class"):
@@ -111,19 +111,6 @@ def fixture_classes() -> list[Path]:
     return _compiled_fixture_classes()
 
 
-def _fixture_ids() -> list[str]:
-    target_dir = _REPO_ROOT / "target" / "pytecode-rust-javac"
-    if not target_dir.exists():
-        return ["no-fixtures"]
-    classes = sorted(target_dir.rglob("*.class"))
-    return [p.stem for p in classes] if classes else ["no-fixtures"]
-
-
-@pytest.mark.parametrize("idx", range(max(1, len(_compiled_fixture_classes.__defaults__ or []))), indirect=True)
-class _Dummy:
-    """Placeholder to avoid empty parametrize at import time."""
-
-
 # Use a simpler approach: test all fixtures in a single test with sub-assertions
 def test_all_fixture_classes_roundtrip() -> None:
     """Every compiled fixture class must produce identical bytes via both paths."""
@@ -147,8 +134,8 @@ def test_all_fixture_classes_roundtrip() -> None:
 # ---------------------------------------------------------------------------
 
 
-_FIXTURE_JAR_NAMES = sorted(
-    p.name for p in (_FIXTURE_JARS_DIR.iterdir() if _FIXTURE_JARS_DIR.exists() else []) if p.suffix == ".jar"
+_FIXTURE_JAR_NAMES: list[str] = sorted(
+    p.name for p in _FIXTURE_JARS_DIR.iterdir() if _FIXTURE_JARS_DIR.exists() and p.suffix == ".jar"
 )
 
 

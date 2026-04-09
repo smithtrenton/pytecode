@@ -2,16 +2,19 @@
 
 Converts a ``RustClassModel`` (from the PyO3 bridge) into a Python
 ``ClassModel`` dataclass, bypassing the slow coerce-bridge and Python
-constant-pool builder entirely.  The Rust model layer already resolves
-all constant-pool indexes to symbolic strings, so this conversion is
-just a thin structural mapping.
+constant-pool builder entirely. The Rust bridge now exposes live
+sequence views for collections such as ``fields``, ``methods``,
+``attributes``, and ``instructions``; calling ``list(...)`` on those
+views is the explicit snapshot/materialization boundary used here.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from ..classfile.attributes import (
+    AttributeInfoType,
     ConstantValueAttr,
     ExceptionsAttr,
     SignatureAttr,
@@ -62,6 +65,7 @@ from .operands import (
 )
 
 type CodeItem = InsnInfo | Label
+type RustAttrConverter = Callable[[Any], Any]
 
 
 def _rust_module() -> Any:
@@ -74,19 +78,19 @@ def _rust_module() -> Any:
         return None
 
 
-# Rust PyO3 attribute class names that need conversion to Python dataclasses.
-_RUST_ATTR_CONVERTERS: dict[str, Any] | None = None
+# Rust PyO3 attribute classes that need conversion to Python dataclasses.
+_rust_attr_converters: dict[type[object], RustAttrConverter] | None = None
 
 
-def _get_rust_attr_converters() -> dict[str, Any]:
-    global _RUST_ATTR_CONVERTERS  # noqa: PLW0603
-    if _RUST_ATTR_CONVERTERS is not None:
-        return _RUST_ATTR_CONVERTERS
+def _get_rust_attr_converters() -> dict[type[object], RustAttrConverter]:
+    global _rust_attr_converters  # noqa: PLW0603
+    if _rust_attr_converters is not None:
+        return _rust_attr_converters
     rust = _rust_module()
     if rust is None:
-        _RUST_ATTR_CONVERTERS = {}
-        return _RUST_ATTR_CONVERTERS
-    _RUST_ATTR_CONVERTERS = {}
+        _rust_attr_converters = {}
+        return _rust_attr_converters
+    _rust_attr_converters = {}
     for rust_cls_name, convert_fn in [
         ("ConstantValueAttr", _convert_constant_value_attr),
         ("SignatureAttr", _convert_signature_attr),
@@ -97,8 +101,8 @@ def _get_rust_attr_converters() -> dict[str, Any]:
     ]:
         cls = getattr(rust, rust_cls_name, None)
         if cls is not None:
-            _RUST_ATTR_CONVERTERS[cls] = convert_fn
-    return _RUST_ATTR_CONVERTERS
+            _rust_attr_converters[cls] = convert_fn
+    return _rust_attr_converters
 
 
 def _convert_constant_value_attr(attr: Any) -> Any:
@@ -147,13 +151,14 @@ def _convert_unimplemented_attr(attr: Any) -> Any:
         attribute_name_index=attr.attribute_name_index,
         attribute_length=attr.attribute_length,
         info=attr.info,
+        attr_type=AttributeInfoType.UNIMPLEMENTED,
     )
 
 
 def _convert_attribute(attr: Any) -> Any:
     """Convert a Rust-backed attribute to a Python dataclass equivalent."""
     converters = _get_rust_attr_converters()
-    converter = converters.get(type(attr))
+    converter = converters.get(cast(type[object], type(attr)))
     if converter is not None:
         return converter(attr)
     # call_attr_class! types are already Python dataclasses
@@ -413,7 +418,7 @@ def from_rust_model(
         for f in rust_model.fields
     ]
 
-    methods = []
+    methods: list[MethodModel] = []
     for m in rust_model.methods:
         code = None
         rust_code = m.code

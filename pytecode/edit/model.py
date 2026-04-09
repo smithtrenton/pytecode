@@ -307,7 +307,7 @@ class ClassModel:
         try:
             from .._rust import RustClassModel  # type: ignore[attr-defined]
 
-            rust_model = RustClassModel.from_bytes(data)
+            rust_model = RustClassModel.from_bytes(bytes(data))
             from ._rust_bridge_model import from_rust_model
 
             model = from_rust_model(rust_model, skip_debug=skip_debug)

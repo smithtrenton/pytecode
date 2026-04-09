@@ -663,15 +663,16 @@ impl PyPipeline {
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
                     // Swap model into wrapper — zero-copy move, not clone
-                    let py_model = PyClassModel {
-                        inner: std::mem::take(model),
-                    };
+                    let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
                     // Move back out — zero-copy
-                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
+                    *model = cell
+                        .borrow_mut(py)
+                        .take_inner()
+                        .expect("failed to take RustClassModel back from Python");
                 });
             })),
         });
@@ -710,14 +711,15 @@ impl PyPipeline {
             field_matcher: field_matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
-                    let py_model = PyClassModel {
-                        inner: std::mem::take(model),
-                    };
+                    let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
-                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
+                    *model = cell
+                        .borrow_mut(py)
+                        .take_inner()
+                        .expect("failed to take RustClassModel back from Python");
                 });
             })),
         });
@@ -756,22 +758,26 @@ impl PyPipeline {
             method_matcher: method_matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
                 Python::with_gil(|py| {
-                    let py_model = PyClassModel {
-                        inner: std::mem::take(model),
-                    };
+                    let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
                         e.print(py);
                     }
-                    *model = std::mem::take(&mut cell.borrow_mut(py).inner);
+                    *model = cell
+                        .borrow_mut(py)
+                        .take_inner()
+                        .expect("failed to take RustClassModel back from Python");
                 });
             })),
         });
     }
 
     /// Apply pipeline to a single model (mutates in-place).
-    fn apply(&self, model: &mut PyClassModel) {
-        self.spec.apply(&mut model.inner);
+    fn apply(&self, model: &mut PyClassModel) -> PyResult<()> {
+        model.with_class_model_mut(|inner| {
+            self.spec.apply(inner);
+            Ok(())
+        })
     }
 
     /// Apply pipeline to many models (mutates in-place).
@@ -779,7 +785,10 @@ impl PyPipeline {
         let compiled = self.spec.compile();
         for item in models.iter() {
             let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
-            compiled.apply(&mut model.inner);
+            model.with_class_model_mut(|inner| {
+                compiled.apply(inner);
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -814,15 +823,21 @@ pub struct PyCompiledPipeline {
 #[pymethods]
 impl PyCompiledPipeline {
     /// Apply compiled pipeline to a single model (mutates in-place).
-    fn apply(&self, model: &mut PyClassModel) {
-        self.inner.apply(&mut model.inner);
+    fn apply(&self, model: &mut PyClassModel) -> PyResult<()> {
+        model.with_class_model_mut(|inner| {
+            self.inner.apply(inner);
+            Ok(())
+        })
     }
 
     /// Apply compiled pipeline to many models (mutates in-place).
     fn apply_all(&self, _py: Python<'_>, models: &Bound<'_, pyo3::types::PyList>) -> PyResult<()> {
         for item in models.iter() {
             let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
-            self.inner.apply(&mut model.inner);
+            model.with_class_model_mut(|inner| {
+                self.inner.apply(inner);
+                Ok(())
+            })?;
         }
         Ok(())
     }
