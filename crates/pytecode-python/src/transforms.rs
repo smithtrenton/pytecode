@@ -37,11 +37,17 @@ impl PyClassMatcher {
     }
 
     /// Match by regex pattern against class name.
+    ///
+    /// # Errors
+    /// Returns `ValueError` if `pattern` is not a valid regular expression.
     #[staticmethod]
-    fn name_matches(pattern: String) -> Self {
-        Self {
+    fn name_matches(pattern: String) -> PyResult<Self> {
+        regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+        })?;
+        Ok(Self {
             spec: ClassMatcherSpec::NameMatches(pattern),
-        }
+        })
     }
 
     /// Match when all given access flag bits are set.
@@ -210,11 +216,18 @@ impl PyFieldMatcher {
         }
     }
 
+    /// Match by regex pattern against field name.
+    ///
+    /// # Errors
+    /// Returns `ValueError` if `pattern` is not a valid regular expression.
     #[staticmethod]
-    fn name_matches(pattern: String) -> Self {
-        Self {
+    fn name_matches(pattern: String) -> PyResult<Self> {
+        regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+        })?;
+        Ok(Self {
             spec: FieldMatcherSpec::NameMatches(pattern),
-        }
+        })
     }
 
     #[staticmethod]
@@ -224,11 +237,18 @@ impl PyFieldMatcher {
         }
     }
 
+    /// Match by regex pattern against field descriptor.
+    ///
+    /// # Errors
+    /// Returns `ValueError` if `pattern` is not a valid regular expression.
     #[staticmethod]
-    fn descriptor_matches(pattern: String) -> Self {
-        Self {
+    fn descriptor_matches(pattern: String) -> PyResult<Self> {
+        regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+        })?;
+        Ok(Self {
             spec: FieldMatcherSpec::DescriptorMatches(pattern),
-        }
+        })
     }
 
     #[staticmethod]
@@ -352,11 +372,18 @@ impl PyMethodMatcher {
         }
     }
 
+    /// Match by regex pattern against method name.
+    ///
+    /// # Errors
+    /// Returns `ValueError` if `pattern` is not a valid regular expression.
     #[staticmethod]
-    fn name_matches(pattern: String) -> Self {
-        Self {
+    fn name_matches(pattern: String) -> PyResult<Self> {
+        regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+        })?;
+        Ok(Self {
             spec: MethodMatcherSpec::NameMatches(pattern),
-        }
+        })
     }
 
     #[staticmethod]
@@ -366,11 +393,18 @@ impl PyMethodMatcher {
         }
     }
 
+    /// Match by regex pattern against method descriptor.
+    ///
+    /// # Errors
+    /// Returns `ValueError` if `pattern` is not a valid regular expression.
     #[staticmethod]
-    fn descriptor_matches(pattern: String) -> Self {
-        Self {
+    fn descriptor_matches(pattern: String) -> PyResult<Self> {
+        regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+        })?;
+        Ok(Self {
             spec: MethodMatcherSpec::DescriptorMatches(pattern),
-        }
+        })
     }
 
     #[staticmethod]
@@ -633,6 +667,9 @@ impl PyClassTransform {
 #[derive(Clone)]
 pub struct PyPipeline {
     pub(crate) spec: PipelineSpec,
+    /// Shared error slot: custom callbacks write here when they raise a Python exception.
+    /// Checked and cleared by `apply`/`apply_all` after the pipeline runs.
+    callback_error: std::sync::Arc<std::sync::Mutex<Option<pyo3::PyErr>>>,
 }
 
 #[pymethods]
@@ -641,6 +678,7 @@ impl PyPipeline {
     fn new() -> Self {
         Self {
             spec: PipelineSpec::new(),
+            callback_error: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -658,6 +696,7 @@ impl PyPipeline {
     /// in-place. Matching is still done natively in Rust.
     fn on_classes_custom(&mut self, matcher: &PyClassMatcher, callback: PyObject) {
         let cb = std::sync::Arc::new(callback);
+        let error_slot = self.callback_error.clone();
         self.spec.steps.push(PipelineStep::Class {
             matcher: matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
@@ -666,7 +705,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        e.print(py);
+                        *error_slot.lock().unwrap() = Some(e);
                     }
                     // Move back out — zero-copy
                     *model = cell
@@ -704,6 +743,7 @@ impl PyPipeline {
         owner_matcher: Option<&PyClassMatcher>,
     ) {
         let cb = std::sync::Arc::new(callback);
+        let error_slot = self.callback_error.clone();
         self.spec.steps.push(PipelineStep::Field {
             owner_matcher: owner_matcher
                 .map(|m| m.spec.clone())
@@ -714,7 +754,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        e.print(py);
+                        *error_slot.lock().unwrap() = Some(e);
                     }
                     *model = cell
                         .borrow_mut(py)
@@ -751,6 +791,7 @@ impl PyPipeline {
         owner_matcher: Option<&PyClassMatcher>,
     ) {
         let cb = std::sync::Arc::new(callback);
+        let error_slot = self.callback_error.clone();
         self.spec.steps.push(PipelineStep::Method {
             owner_matcher: owner_matcher
                 .map(|m| m.spec.clone())
@@ -761,7 +802,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        e.print(py);
+                        *error_slot.lock().unwrap() = Some(e);
                     }
                     *model = cell
                         .borrow_mut(py)
@@ -773,11 +814,19 @@ impl PyPipeline {
     }
 
     /// Apply pipeline to a single model (mutates in-place).
+    ///
+    /// For repeated single-model calls in a loop, prefer [`PyPipeline::compile`] to avoid
+    /// re-compiling regex matchers on every invocation.
     fn apply(&self, model: &mut PyClassModel) -> PyResult<()> {
+        let compiled = self.spec.compile();
         model.with_class_model_mut(|inner| {
-            self.spec.apply(inner);
+            compiled.apply(inner);
             Ok(())
-        })
+        })?;
+        if let Some(err) = self.callback_error.lock().unwrap().take() {
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Apply pipeline to many models (mutates in-place).
@@ -789,6 +838,9 @@ impl PyPipeline {
                 compiled.apply(inner);
                 Ok(())
             })?;
+            if let Some(err) = self.callback_error.lock().unwrap().take() {
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -797,6 +849,7 @@ impl PyPipeline {
     fn compile(&self) -> PyCompiledPipeline {
         PyCompiledPipeline {
             inner: self.spec.compile(),
+            callback_error: self.callback_error.clone(),
         }
     }
 
@@ -818,6 +871,8 @@ impl PyPipeline {
 #[pyclass(name = "RustCompiledPipeline", module = "pytecode._rust")]
 pub struct PyCompiledPipeline {
     inner: CompiledPipeline,
+    /// Shared error slot from the originating `PyPipeline`.
+    callback_error: std::sync::Arc<std::sync::Mutex<Option<pyo3::PyErr>>>,
 }
 
 #[pymethods]
@@ -827,7 +882,11 @@ impl PyCompiledPipeline {
         model.with_class_model_mut(|inner| {
             self.inner.apply(inner);
             Ok(())
-        })
+        })?;
+        if let Some(err) = self.callback_error.lock().unwrap().take() {
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Apply compiled pipeline to many models (mutates in-place).
@@ -838,6 +897,9 @@ impl PyCompiledPipeline {
                 self.inner.apply(inner);
                 Ok(())
             })?;
+            if let Some(err) = self.callback_error.lock().unwrap().take() {
+                return Err(err);
+            }
         }
         Ok(())
     }

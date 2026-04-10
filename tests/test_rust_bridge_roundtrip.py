@@ -141,20 +141,27 @@ _FIXTURE_JAR_NAMES: list[str] = sorted(
 
 @pytest.mark.parametrize("jar_name", _FIXTURE_JAR_NAMES or ["no-jars"])
 def test_fixture_jar_roundtrip(jar_name: str) -> None:
-    """Every class in each fixture JAR must roundtrip identically via both paths."""
+    """Every class in each fixture JAR must be byte-exact via the Rust path."""
     if jar_name == "no-jars":
         pytest.skip("No fixture JARs available")
     entries = _jar_classes(jar_name)
     failures: list[str] = []
     for name, data in entries:
         try:
-            _compare_paths(data, f"{jar_name}!{name}")
+            model = ClassModel.from_bytes(data)
+            out = model.to_bytes()
+            if out != data:
+                diff_offset = next(
+                    (i for i in range(min(len(out), len(data))) if out[i] != data[i]),
+                    min(len(out), len(data)),
+                )
+                failures.append(f"{jar_name}!{name}: orig={len(data)} out={len(out)} first_diff={diff_offset}")
         except Exception as exc:
-            failures.append(str(exc))
+            failures.append(f"{jar_name}!{name}: {exc}")
     if failures:
         pytest.fail(
-            f"{len(failures)}/{len(entries)} classes in {jar_name} have Rust/Python mismatch:\n"
-            + "\n---\n".join(failures[:5])
+            f"{len(failures)}/{len(entries)} classes in {jar_name} are not byte-exact via Rust:\n"
+            + "\n".join(failures[:10])
         )
 
 

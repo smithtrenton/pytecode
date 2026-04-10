@@ -248,6 +248,8 @@ class JarFile:
                     if should_rewrite_classes and _is_class_filename(jar_info.filename):
                         model = ClassModel.from_bytes(data, skip_debug=skip_debug)
                         if transform is not None:
+                            model._rust_clean = False  # transform may mutate the model
+                            model._rust_bytes = None
                             result = transform(model)
                             if result is not None:
                                 raise TypeError(

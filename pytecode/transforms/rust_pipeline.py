@@ -15,6 +15,8 @@ Build pipelines from Rust matchers and transforms::
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pytecode._rust import (
     RustClassMatcher,
     RustClassModel,
@@ -68,9 +70,13 @@ class RustPipelineBuilder:
     def on_classes_custom(
         self,
         matcher: RustClassMatcher,
-        callback: object,
+        callback: Callable[[RustClassModel], None],
     ) -> RustPipelineBuilder:
-        """Class step with custom Python callback (receives RustClassModel).
+        """Class step with custom Python callback (receives ``RustClassModel``).
+
+        The callback fires at most once per class that matches *matcher*.
+        If the callback raises an exception, the exception is propagated by
+        ``apply``/``apply_all`` after the current model finishes processing.
 
         Collection properties on ``RustClassModel`` are live views, not eager
         snapshot lists. Use ``list(model.methods)`` / ``list(model.interfaces)``
@@ -82,11 +88,19 @@ class RustPipelineBuilder:
     def on_fields_custom(
         self,
         field_matcher: RustFieldMatcher,
-        callback: object,
+        callback: Callable[[RustClassModel], None],
         *,
         owner_matcher: RustClassMatcher | None = None,
     ) -> RustPipelineBuilder:
-        """Field step with custom Python callback.
+        """Field step with custom Python callback (receives ``RustClassModel``).
+
+        The callback receives the *class* model (not the individual matched
+        field) and fires at most once per class where any field matches
+        *field_matcher*.  This is class-scoped semantics: use the class model
+        to inspect or mutate whichever fields you need.
+
+        If the callback raises an exception, the exception is propagated by
+        ``apply``/``apply_all`` after the current model finishes processing.
 
         Nested Rust bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.
@@ -97,11 +111,19 @@ class RustPipelineBuilder:
     def on_methods_custom(
         self,
         method_matcher: RustMethodMatcher,
-        callback: object,
+        callback: Callable[[RustClassModel], None],
         *,
         owner_matcher: RustClassMatcher | None = None,
     ) -> RustPipelineBuilder:
-        """Method step with custom Python callback.
+        """Method step with custom Python callback (receives ``RustClassModel``).
+
+        The callback receives the *class* model (not the individual matched
+        method) and fires at most once per class where any method matches
+        *method_matcher*.  This is class-scoped semantics: use the class model
+        to inspect or mutate whichever methods you need.
+
+        If the callback raises an exception, the exception is propagated by
+        ``apply``/``apply_all`` after the current model finishes processing.
 
         Nested Rust bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.

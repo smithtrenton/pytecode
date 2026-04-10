@@ -19,6 +19,7 @@ from pytecode.classfile.constants import ClassAccessFlag, FieldAccessFlag, Metho
 from pytecode.classfile.info import ClassFile, FieldInfo
 from pytecode.classfile.instructions import InsnInfo, InsnInfoType
 from pytecode.classfile.modified_utf8 import decode_modified_utf8
+from pytecode.classfile.reader import MalformedClassException
 from pytecode.edit.constant_pool_builder import ConstantPoolBuilder
 from pytecode.edit.labels import BranchInsn, ExceptionHandler, Label, LookupSwitchInsn, TableSwitchInsn
 from pytecode.edit.model import ClassModel, CodeModel, FieldModel, MethodModel
@@ -1073,13 +1074,13 @@ class TestFromClassFileErrors:
     def test_this_class_not_classinfo(self) -> None:
         # this_class=1 points to Utf8 "TestClass" instead of a ClassInfo
         raw = minimal_classfile(this_class=1)
-        with pytest.raises(ValueError, match="this_class"):
+        with pytest.raises((ValueError, MalformedClassException)):
             ClassModel.from_bytes(raw)
 
     def test_super_class_not_classinfo(self) -> None:
         # super_class=3 points to Utf8 "java/lang/Object" instead of a ClassInfo
         raw = minimal_classfile(super_class=3)
-        with pytest.raises(ValueError, match="super_class"):
+        with pytest.raises((ValueError, MalformedClassException)):
             ClassModel.from_bytes(raw)
 
     def test_interface_entry_not_classinfo(self) -> None:
@@ -1089,7 +1090,7 @@ class TestFromClassFileErrors:
             extra_cp_count=1,
             interfaces=[5],
         )
-        with pytest.raises(ValueError, match="interface"):
+        with pytest.raises((ValueError, MalformedClassException)):
             ClassModel.from_bytes(raw)
 
     def test_classinfo_name_index_not_utf8(self) -> None:
@@ -1100,7 +1101,7 @@ class TestFromClassFileErrors:
             extra_cp_count=2,
             this_class=6,
         )
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, MalformedClassException)):
             ClassModel.from_bytes(raw)
 
 

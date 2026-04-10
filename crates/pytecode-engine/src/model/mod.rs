@@ -1020,10 +1020,8 @@ fn instruction_size(
     Ok(match item {
         CodeItem::Label(_) => 0,
         CodeItem::Raw(instruction) => instruction_length(instruction),
-        CodeItem::Field(_)
-        | CodeItem::Method(_)
-        | CodeItem::Type(_)
-        | CodeItem::InvokeDynamic(_) => 3,
+        CodeItem::Field(_) | CodeItem::Method(_) | CodeItem::Type(_) => 3,
+        CodeItem::InvokeDynamic(_) => 5,
         CodeItem::InterfaceMethod(_) => 5,
         CodeItem::MultiANewArray(_) => 4,
         CodeItem::Branch(_) => match branch_encodings

@@ -34,9 +34,9 @@ pub enum ClassTransformSpec {
         name: String,
         descriptor: Option<String>,
     },
-    /// Rename a method (first match).
+    /// Rename all methods with matching name.
     RenameMethod { from: String, to: String },
-    /// Rename a field (first match).
+    /// Rename all fields with matching name.
     RenameField { from: String, to: String },
     /// Set access flags on matching methods.
     SetMethodAccessFlags { name: String, flags: u16 },
@@ -84,13 +84,17 @@ impl ClassTransformSpec {
                 });
             }
             Self::RenameMethod { from, to } => {
-                if let Some(m) = model.methods.iter_mut().find(|m| m.name == *from) {
-                    m.name = to.clone();
+                for m in &mut model.methods {
+                    if m.name == *from {
+                        m.name = to.clone();
+                    }
                 }
             }
             Self::RenameField { from, to } => {
-                if let Some(f) = model.fields.iter_mut().find(|f| f.name == *from) {
-                    f.name = to.clone();
+                for f in &mut model.fields {
+                    if f.name == *from {
+                        f.name = to.clone();
+                    }
                 }
             }
             Self::SetMethodAccessFlags { name, flags } => {
@@ -391,6 +395,32 @@ mod tests {
         assert_eq!(model.name, "test/New");
         assert!(model.access_flags.contains(ClassAccessFlags::FINAL));
         assert!(model.interfaces.is_empty());
+    }
+
+    #[test]
+    fn rename_method_renames_all_overloads() {
+        let mut class = sample_class();
+        class.methods.push(MethodModel::new(
+            MethodAccessFlags::PUBLIC,
+            "foo".to_string(),
+            "()V".to_string(),
+            Some(CodeModel::new(1, 1, DebugInfoState::Fresh)),
+            vec![],
+        ));
+        class.methods.push(MethodModel::new(
+            MethodAccessFlags::PUBLIC,
+            "foo".to_string(),
+            "(I)V".to_string(),
+            Some(CodeModel::new(1, 1, DebugInfoState::Fresh)),
+            vec![],
+        ));
+        ClassTransformSpec::RenameMethod {
+            from: "foo".to_string(),
+            to: "bar".to_string(),
+        }
+        .apply(&mut class);
+        assert_eq!(class.methods.iter().filter(|m| m.name == "bar").count(), 2);
+        assert!(!class.methods.iter().any(|m| m.name == "foo"));
     }
 
     #[test]

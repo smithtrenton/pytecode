@@ -761,8 +761,8 @@ macro_rules! define_numeric_cp_wrapper {
         #[pyclass(module = "pytecode._rust", name = $pyname)]
         #[derive(Clone)]
         pub struct $wrapper {
-            index: usize,
-            inner: $inner,
+            pub(crate) index: usize,
+            pub(crate) inner: $inner,
         }
 
         #[pymethods]
@@ -795,8 +795,8 @@ macro_rules! define_numeric_cp_wrapper {
 #[pyclass(module = "pytecode._rust", name = "Utf8Info")]
 #[derive(Clone)]
 pub struct PyUtf8Info {
-    index: usize,
-    inner: raw::Utf8Info,
+    pub(crate) index: usize,
+    pub(crate) inner: raw::Utf8Info,
 }
 
 #[pymethods]
@@ -947,6 +947,187 @@ define_numeric_cp_wrapper!(
     raw::ConstantPoolTag::Package,
     { name_index: u16 }
 );
+
+pub(crate) fn constant_pool_entry_to_pyobject(
+    py: Python<'_>,
+    index: usize,
+    entry: &raw::ConstantPoolEntry,
+) -> PyResult<PyObject> {
+    use raw::ConstantPoolEntry::*;
+    let obj: PyObject = match entry {
+        Utf8(info) => Py::new(
+            py,
+            PyUtf8Info {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Integer(info) => Py::new(
+            py,
+            PyIntegerInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Float(info) => Py::new(
+            py,
+            PyFloatInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Long(info) => Py::new(
+            py,
+            PyLongInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Double(info) => Py::new(
+            py,
+            PyDoubleInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Class(info) => Py::new(
+            py,
+            PyConstantPoolClassInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        String(info) => Py::new(
+            py,
+            PyStringInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        FieldRef(info) => Py::new(
+            py,
+            PyFieldrefInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        MethodRef(info) => Py::new(
+            py,
+            PyMethodrefInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        InterfaceMethodRef(info) => Py::new(
+            py,
+            PyInterfaceMethodrefInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        NameAndType(info) => Py::new(
+            py,
+            PyNameAndTypeInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        MethodHandle(info) => Py::new(
+            py,
+            PyMethodHandleInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        MethodType(info) => Py::new(
+            py,
+            PyMethodTypeInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Dynamic(info) => Py::new(
+            py,
+            PyDynamicInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        InvokeDynamic(info) => Py::new(
+            py,
+            PyInvokeDynamicInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Module(info) => Py::new(
+            py,
+            PyModuleInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+        Package(info) => Py::new(
+            py,
+            PyPackageInfo {
+                index,
+                inner: info.clone(),
+            },
+        )?
+        .into_bound(py)
+        .into_any()
+        .unbind(),
+    };
+    Ok(obj)
+}
 
 #[pyclass(module = "pytecode._rust", name = "MatchOffsetPair")]
 #[derive(Clone)]

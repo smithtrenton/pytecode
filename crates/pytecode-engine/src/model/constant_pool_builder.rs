@@ -40,6 +40,8 @@ impl ConstantPoolBuilder {
             entries: pool.to_vec(),
             key_to_index: FxHashMap::default(),
         };
+        // First pass: seed key_to_index with the raw (as-stored) keys. or_insert means the first
+        // occurrence of a duplicate entry wins (i.e. the lower index is canonical).
         for (index, entry) in builder.entries.iter().enumerate().skip(1) {
             let Some(entry) = entry else {
                 continue;
@@ -49,6 +51,54 @@ impl ConstantPoolBuilder {
                 .entry(PoolKey::from_entry(entry))
                 .or_insert(index as u16);
         }
+
+        // Build a raw-index → canonical-index lookup table.  For every entry at position `i`, the
+        // canonical index is whatever `key_to_index` mapped to for that entry's raw key.  For
+        // duplicate entries the first (lower) index is the canonical one; later duplicates map back
+        // to that same slot.
+        let index_map: Vec<u16> = builder
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                if i == 0 {
+                    return 0;
+                }
+                match entry {
+                    None => 0,
+                    Some(e) => *builder
+                        .key_to_index
+                        .get(&PoolKey::from_entry(e))
+                        .unwrap_or(&(i as u16)),
+                }
+            })
+            .collect();
+
+        // Second pass: add canonical aliases for compound entries.
+        //
+        // Problem this solves: if the original class file has two Class entries both pointing to
+        // the same Utf8 (e.g. Class@3 and Class@45 → Utf8@21), `or_insert` above maps
+        // Class(21) → 3.  But a Methodref in the original CP might use class_index=45, giving it
+        // the raw key MethodRef(45, 46).  When `add_method_ref()` is called later it resolves the
+        // class name through `add_class()`, which returns index 3 (the canonical class), and then
+        // tries to look up MethodRef(3, 46) — which is NOT in the map — and adds a new duplicate.
+        //
+        // By inserting the canonical key into the map here (pointing to the same output index as
+        // the original entry), the later lookup finds the existing entry and no duplicate is added.
+        for (index, entry) in builder.entries.iter().enumerate().skip(1) {
+            let Some(entry) = entry else {
+                continue;
+            };
+            let canonical_key = PoolKey::canonical_from_entry(entry, &index_map);
+            let raw_key = PoolKey::from_entry(entry);
+            if canonical_key != raw_key {
+                builder
+                    .key_to_index
+                    .entry(canonical_key)
+                    .or_insert(index as u16);
+            }
+        }
+
         if builder.entries.is_empty() {
             builder.entries.push(None);
         }
@@ -57,6 +107,10 @@ impl ConstantPoolBuilder {
 
     pub fn build(&self) -> Vec<Option<ConstantPoolEntry>> {
         self.entries.clone()
+    }
+
+    pub fn entries(&self) -> &[Option<ConstantPoolEntry>] {
+        &self.entries
     }
 
     pub fn count(&self) -> u16 {
@@ -485,6 +539,57 @@ impl PoolKey {
             ),
             ConstantPoolEntry::Module(info) => Self::Module(info.name_index.value()),
             ConstantPoolEntry::Package(info) => Self::Package(info.name_index.value()),
+        }
+    }
+
+    /// Compute the canonical key for a compound entry by replacing each stored sub-index with its
+    /// canonical equivalent (looked up via `index_map[raw_idx]`).  For leaf entries (Utf8,
+    /// Integer, etc.) the key is already canonical, so the same key is returned.
+    fn canonical_from_entry(entry: &ConstantPoolEntry, index_map: &[u16]) -> Self {
+        let remap = |idx: u16| -> u16 {
+            index_map
+                .get(idx as usize)
+                .copied()
+                .filter(|&c| c != 0)
+                .unwrap_or(idx)
+        };
+        match entry {
+            ConstantPoolEntry::Class(info) => Self::Class(remap(info.name_index.value())),
+            ConstantPoolEntry::String(info) => Self::String(remap(info.string_index.value())),
+            ConstantPoolEntry::FieldRef(info) => Self::FieldRef(
+                remap(info.class_index.value()),
+                remap(info.name_and_type_index.value()),
+            ),
+            ConstantPoolEntry::MethodRef(info) => Self::MethodRef(
+                remap(info.class_index.value()),
+                remap(info.name_and_type_index.value()),
+            ),
+            ConstantPoolEntry::InterfaceMethodRef(info) => Self::InterfaceMethodRef(
+                remap(info.class_index.value()),
+                remap(info.name_and_type_index.value()),
+            ),
+            ConstantPoolEntry::NameAndType(info) => Self::NameAndType(
+                remap(info.name_index.value()),
+                remap(info.descriptor_index.value()),
+            ),
+            ConstantPoolEntry::MethodHandle(info) => {
+                Self::MethodHandle(info.reference_kind, remap(info.reference_index.value()))
+            }
+            ConstantPoolEntry::MethodType(info) => {
+                Self::MethodType(remap(info.descriptor_index.value()))
+            }
+            ConstantPoolEntry::Dynamic(info) => Self::Dynamic(
+                info.bootstrap_method_attr_index.value(),
+                remap(info.name_and_type_index.value()),
+            ),
+            ConstantPoolEntry::InvokeDynamic(info) => Self::InvokeDynamic(
+                info.bootstrap_method_attr_index.value(),
+                remap(info.name_and_type_index.value()),
+            ),
+            ConstantPoolEntry::Module(info) => Self::Module(remap(info.name_index.value())),
+            ConstantPoolEntry::Package(info) => Self::Package(remap(info.name_index.value())),
+            // Leaf entries: canonical key == raw key
+            _ => Self::from_entry(entry),
         }
     }
 }

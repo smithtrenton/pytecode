@@ -351,7 +351,7 @@ impl<'a> ClassReader<'a> {
                     ));
                 }
                 let code_bytes = payload_reader.read_bytes(code_length as usize)?;
-                let code = read_code_bytes(code_bytes)?;
+                let code = parse_instructions(code_bytes)?;
                 let exception_table_length = payload_reader.read_u2()? as usize;
                 let exception_table = (0..exception_table_length)
                     .map(|_| {
@@ -1063,7 +1063,7 @@ pub fn parse_class_bytes(bytes: impl AsRef<[u8]>) -> Result<ClassFile> {
     parse_class(bytes.as_ref())
 }
 
-fn read_code_bytes(bytes: &[u8]) -> Result<Vec<Instruction>> {
+pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
     let mut reader = ByteReader::new(bytes);
     let mut instructions = Vec::new();
 

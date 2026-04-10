@@ -17,8 +17,7 @@ from .modified_utf8 import decode_modified_utf8
 __all__ = ["ClassReader", "MalformedClassException"]
 
 
-class MalformedClassException(Exception):
-    """Raised when the input bytes do not conform to the JVM class-file format (JVMS §4)."""
+from .._rust import MalformedClassException as MalformedClassException  # type: ignore[import-untyped]
 
 
 class ClassReader(BytesReader):
@@ -45,18 +44,9 @@ class ClassReader(BytesReader):
         super().__init__(bytes_or_bytearray)
         self.constant_pool: list[constant_pool.ConstantPoolInfo | None] = []
         self._rust_reader = None
-        try:
-            from pytecode import _rust
-        except ModuleNotFoundError:
-            self.read_class()
-            return
+        from pytecode import _rust  # type: ignore[attr-defined]
 
-        try:
-            self._rust_reader = _rust.ClassReader.from_bytes(bytes(bytes_or_bytearray))
-        except _rust.MalformedClassException:
-            self.read_class()
-            return
-
+        self._rust_reader = _rust.ClassReader.from_bytes(bytes(bytes_or_bytearray))
         self.class_info = coerce_python_classfile(self._rust_reader.class_info)
         self.constant_pool = self.class_info.constant_pool
 

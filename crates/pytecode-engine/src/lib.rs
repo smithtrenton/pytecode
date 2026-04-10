@@ -21,5 +21,5 @@ pub use indexes::{
     BootstrapMethodIndex, ClassIndex, CpIndex, FieldRefIndex, MethodRefIndex, ModuleIndex,
     NameAndTypeIndex, PackageIndex, Utf8Index,
 };
-pub use reader::{ClassReader, parse_class, parse_class_bytes};
+pub use reader::{ClassReader, parse_class, parse_class_bytes, parse_instructions};
 pub use writer::{ClassWriter, write_class};

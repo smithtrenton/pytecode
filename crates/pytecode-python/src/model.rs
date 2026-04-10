@@ -400,6 +400,7 @@ enum FieldAccess {
         index: usize,
         generation: u64,
     },
+    Owned(Rc<RefCell<FieldModel>>),
 }
 
 #[derive(Clone)]
@@ -409,6 +410,7 @@ enum MethodAccess {
         index: usize,
         generation: u64,
     },
+    Owned(Rc<RefCell<MethodModel>>),
 }
 
 #[derive(Clone)]
@@ -418,6 +420,7 @@ enum CodeAccess {
         method_index: usize,
         methods_generation: u64,
     },
+    OwnedMethod(Rc<RefCell<MethodModel>>),
 }
 
 #[derive(Clone)]
@@ -444,6 +447,8 @@ enum AttributeOwner {
         method_index: usize,
         methods_generation: u64,
     },
+    OwnedField(Rc<RefCell<FieldModel>>),
+    OwnedMethod(Rc<RefCell<MethodModel>>),
 }
 
 #[derive(Clone, Copy)]
@@ -626,6 +631,8 @@ impl AttributeOwner {
                     .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
                 Ok(code.attributes.len())
             }),
+            AttributeOwner::OwnedField(field) => Ok(field.borrow().attributes.len()),
+            AttributeOwner::OwnedMethod(method) => Ok(method.borrow().attributes.len()),
         }
     }
 
@@ -673,6 +680,16 @@ impl AttributeOwner {
                 let attrs = &code.attributes;
                 crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
             }),
+            AttributeOwner::OwnedField(field) => {
+                let borrowed = field.borrow();
+                let attrs = &borrowed.attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }
+            AttributeOwner::OwnedMethod(method) => {
+                let borrowed = method.borrow();
+                let attrs = &borrowed.attributes;
+                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+            }
         }
     }
 }
@@ -796,6 +813,14 @@ impl PyCodeListView {
                     .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
                 f(code)
             }),
+            CodeAccess::OwnedMethod(method) => {
+                let borrowed = method.borrow();
+                let code = borrowed
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                f(code)
+            }
         }
     }
 }
@@ -828,6 +853,14 @@ impl PyCodeModel {
                     .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
                 f(code)
             }),
+            CodeAccess::OwnedMethod(method) => {
+                let borrowed = method.borrow();
+                let code = borrowed
+                    .code
+                    .as_ref()
+                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
+                f(code)
+            }
         }
     }
 }
@@ -896,6 +929,7 @@ impl PyCodeModel {
                 method_index: *method_index,
                 methods_generation: *methods_generation,
             },
+            CodeAccess::OwnedMethod(method) => AttributeOwner::OwnedMethod(method.clone()),
         };
         PyAttributeListView { owner }
     }
@@ -945,6 +979,29 @@ impl PyFieldModel {
                 }
                 f(&model_state.inner.as_ref().unwrap().fields[*index])
             }),
+            FieldAccess::Owned(field) => f(&field.borrow()),
+        }
+    }
+
+    fn with_field_mut<R>(&self, f: impl FnOnce(&mut FieldModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            FieldAccess::Shared {
+                state,
+                index,
+                generation,
+            } => {
+                let (state, index, generation) = (state.clone(), *index, *generation);
+                with_live_model_mut(&state, |model_state| {
+                    if model_state.fields_generation != generation {
+                        return Err(stale_ref_err("field ref"));
+                    }
+                    f(&mut model_state.inner.as_mut().unwrap().fields[index])
+                })
+            }
+            FieldAccess::Owned(field) => {
+                let mut borrowed = field.borrow_mut();
+                f(&mut borrowed)
+            }
         }
     }
 
@@ -955,9 +1012,33 @@ impl PyFieldModel {
 
 #[pymethods]
 impl PyFieldModel {
+    #[new]
+    fn new(name: String, descriptor: String, access_flags: u16) -> Self {
+        let field = FieldModel {
+            access_flags: pytecode_engine::constants::FieldAccessFlags::from_bits_truncate(
+                access_flags,
+            ),
+            name,
+            descriptor,
+            attributes: Vec::new(),
+        };
+        Self {
+            access: FieldAccess::Owned(Rc::new(RefCell::new(field))),
+        }
+    }
+
     #[getter]
     fn access_flags(&self) -> PyResult<u16> {
         self.with_field(|field| Ok(field.access_flags.bits()))
+    }
+
+    #[setter]
+    fn set_access_flags(&mut self, value: u16) -> PyResult<()> {
+        self.with_field_mut(|field| {
+            field.access_flags =
+                pytecode_engine::constants::FieldAccessFlags::from_bits_truncate(value);
+            Ok(())
+        })
     }
 
     #[getter]
@@ -965,9 +1046,25 @@ impl PyFieldModel {
         self.with_field(|field| Ok(field.name.clone()))
     }
 
+    #[setter]
+    fn set_name(&mut self, value: String) -> PyResult<()> {
+        self.with_field_mut(|field| {
+            field.name = value;
+            Ok(())
+        })
+    }
+
     #[getter]
     fn descriptor(&self) -> PyResult<String> {
         self.with_field(|field| Ok(field.descriptor.clone()))
+    }
+
+    #[setter]
+    fn set_descriptor(&mut self, value: String) -> PyResult<()> {
+        self.with_field_mut(|field| {
+            field.descriptor = value;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -982,6 +1079,7 @@ impl PyFieldModel {
                 index: *index,
                 generation: *generation,
             },
+            FieldAccess::Owned(field) => AttributeOwner::OwnedField(field.clone()),
         };
         PyAttributeListView { owner }
     }
@@ -1010,6 +1108,29 @@ impl PyMethodModel {
                 }
                 f(&model_state.inner.as_ref().unwrap().methods[*index])
             }),
+            MethodAccess::Owned(method) => f(&method.borrow()),
+        }
+    }
+
+    fn with_method_mut<R>(&self, f: impl FnOnce(&mut MethodModel) -> PyResult<R>) -> PyResult<R> {
+        match &self.access {
+            MethodAccess::Shared {
+                state,
+                index,
+                generation,
+            } => {
+                let (state, index, generation) = (state.clone(), *index, *generation);
+                with_live_model_mut(&state, |model_state| {
+                    if model_state.methods_generation != generation {
+                        return Err(stale_ref_err("method ref"));
+                    }
+                    f(&mut model_state.inner.as_mut().unwrap().methods[index])
+                })
+            }
+            MethodAccess::Owned(method) => {
+                let mut borrowed = method.borrow_mut();
+                f(&mut borrowed)
+            }
         }
     }
 
@@ -1020,9 +1141,32 @@ impl PyMethodModel {
 
 #[pymethods]
 impl PyMethodModel {
+    #[new]
+    fn new(name: String, descriptor: String, access_flags: u16) -> Self {
+        let method = MethodModel::new(
+            pytecode_engine::constants::MethodAccessFlags::from_bits_truncate(access_flags),
+            name,
+            descriptor,
+            None,
+            Vec::new(),
+        );
+        Self {
+            access: MethodAccess::Owned(Rc::new(RefCell::new(method))),
+        }
+    }
+
     #[getter]
     fn access_flags(&self) -> PyResult<u16> {
         self.with_method(|method| Ok(method.access_flags.bits()))
+    }
+
+    #[setter]
+    fn set_access_flags(&mut self, value: u16) -> PyResult<()> {
+        self.with_method_mut(|method| {
+            method.access_flags =
+                pytecode_engine::constants::MethodAccessFlags::from_bits_truncate(value);
+            Ok(())
+        })
     }
 
     #[getter]
@@ -1030,9 +1174,25 @@ impl PyMethodModel {
         self.with_method(|method| Ok(method.name.clone()))
     }
 
+    #[setter]
+    fn set_name(&mut self, value: String) -> PyResult<()> {
+        self.with_method_mut(|method| {
+            method.name = value;
+            Ok(())
+        })
+    }
+
     #[getter]
     fn descriptor(&self) -> PyResult<String> {
         self.with_method(|method| Ok(method.descriptor.clone()))
+    }
+
+    #[setter]
+    fn set_descriptor(&mut self, value: String) -> PyResult<()> {
+        self.with_method_mut(|method| {
+            method.descriptor = value;
+            Ok(())
+        })
     }
 
     #[getter]
@@ -1055,7 +1215,24 @@ impl PyMethodModel {
                     },
                 }))
             }),
+            MethodAccess::Owned(method) => {
+                let has_code = method.borrow().code.is_some();
+                Ok(has_code.then(|| PyCodeModel {
+                    access: CodeAccess::OwnedMethod(method.clone()),
+                }))
+            }
         }
+    }
+
+    fn set_raw_code(&mut self, max_stack: u16, max_locals: u16, code_bytes: &[u8]) -> PyResult<()> {
+        let instructions = pytecode_engine::parse_instructions(code_bytes)
+            .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
+        let mut code_model = CodeModel::new(max_stack, max_locals, DebugInfoState::Fresh);
+        code_model.instructions = instructions.into_iter().map(CodeItem::Raw).collect();
+        self.with_method_mut(|method| {
+            method.code = Some(code_model);
+            Ok(())
+        })
     }
 
     #[getter]
@@ -1070,6 +1247,7 @@ impl PyMethodModel {
                 index: *index,
                 generation: *generation,
             },
+            MethodAccess::Owned(method) => AttributeOwner::OwnedMethod(method.clone()),
         };
         PyAttributeListView { owner }
     }
@@ -1279,6 +1457,20 @@ impl PyConstantPoolBuilder {
 
     fn len(&self) -> PyResult<usize> {
         self.with_builder(|builder| Ok(builder.len()))
+    }
+
+    fn raw_constant_pool(&self, py: Python<'_>) -> PyResult<Vec<Option<PyObject>>> {
+        self.with_builder(|builder| {
+            builder
+                .entries()
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| match entry {
+                    Some(e) => crate::constant_pool_entry_to_pyobject(py, index, e).map(Some),
+                    None => Ok(None),
+                })
+                .collect()
+        })
     }
 }
 

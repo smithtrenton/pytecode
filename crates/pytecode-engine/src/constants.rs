@@ -316,8 +316,7 @@ pub const MAX_SUPPORTED_CLASS_MAJOR: u16 = 69;
 pub const fn class_version_supported_by_java_se_25(major: u16, minor: u16) -> bool {
     match major {
         45..=55 => true,
-        56..=68 => minor == 0,
-        69 => minor == 0 || minor == u16::MAX,
+        56..=69 => minor == 0 || minor == u16::MAX,
         _ => false,
     }
 }

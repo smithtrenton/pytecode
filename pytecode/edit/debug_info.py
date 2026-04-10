@@ -173,6 +173,8 @@ def mark_class_debug_info_stale(target: ClassModel) -> ClassModel:
     """
     if has_class_debug_info(target):
         target.debug_info_state = DebugInfoState.STALE
+    target._rust_clean = False
+    target._rust_bytes = None
     return target
 
 
@@ -218,6 +220,8 @@ def mark_code_debug_info_stale(target: object) -> object:
     if isinstance(target, ClassModel):
         for method in target.methods:
             mark_code_debug_info_stale(method)
+        target._rust_clean = False
+        target._rust_bytes = None
         return target
     raise TypeError("code-debug helper expects a CodeModel, MethodModel, or ClassModel")
 
@@ -313,6 +317,8 @@ def strip_debug_info(target: object) -> object:
     if isinstance(target, ClassModel):
         target.attributes[:] = strip_class_debug_attributes(target.attributes)
         target.debug_info_state = DebugInfoState.FRESH
+        target._rust_clean = False
+        target._rust_bytes = None
         for method in target.methods:
             strip_debug_info(method)
         return target

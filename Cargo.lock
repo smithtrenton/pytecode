@@ -413,6 +413,7 @@ dependencies = [
  "pyo3",
  "pytecode-archive",
  "pytecode-engine",
+ "regex",
 ]
 
 [[package]]

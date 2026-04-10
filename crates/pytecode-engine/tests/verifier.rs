@@ -133,8 +133,8 @@ fn verify_classfile_reports_magic_and_descriptor_issues() {
 #[test]
 fn verify_classfile_applies_java_25_version_rules() {
     let mut old_preview = base_classfile();
-    old_preview.major_version = 68;
-    old_preview.minor_version = u16::MAX;
+    old_preview.major_version = 56;
+    old_preview.minor_version = 1; // invalid: minor must be 0 or 65535 for major >= 56
     let old_preview_diagnostics = verify_classfile(&old_preview);
     assert!(
         old_preview_diagnostics

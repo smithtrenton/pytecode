@@ -68,16 +68,6 @@ type CodeItem = InsnInfo | Label
 type RustAttrConverter = Callable[[Any], Any]
 
 
-def _rust_module() -> Any:
-    """Import the Rust extension, returning ``None`` if unavailable."""
-    try:
-        from .. import _rust  # type: ignore[attr-defined]
-
-        return _rust
-    except ImportError:
-        return None
-
-
 # Rust PyO3 attribute classes that need conversion to Python dataclasses.
 _rust_attr_converters: dict[type[object], RustAttrConverter] | None = None
 
@@ -86,10 +76,8 @@ def _get_rust_attr_converters() -> dict[type[object], RustAttrConverter]:
     global _rust_attr_converters  # noqa: PLW0603
     if _rust_attr_converters is not None:
         return _rust_attr_converters
-    rust = _rust_module()
-    if rust is None:
-        _rust_attr_converters = {}
-        return _rust_attr_converters
+    from .. import _rust  # type: ignore[attr-defined]
+
     _rust_attr_converters = {}
     for rust_cls_name, convert_fn in [
         ("ConstantValueAttr", _convert_constant_value_attr),
@@ -99,7 +87,7 @@ def _get_rust_attr_converters() -> dict[type[object], RustAttrConverter]:
         ("ExceptionsAttr", _convert_exceptions_attr),
         ("UnimplementedAttr", _convert_unimplemented_attr),
     ]:
-        cls = getattr(rust, rust_cls_name, None)
+        cls = getattr(_rust, rust_cls_name, None)
         if cls is not None:
             _rust_attr_converters[cls] = convert_fn
     return _rust_attr_converters

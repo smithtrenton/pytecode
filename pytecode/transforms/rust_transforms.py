@@ -62,12 +62,12 @@ def remove_field(name: str, descriptor: str | None = None) -> RustClassTransform
 
 
 def rename_method(from_name: str, to_name: str) -> RustClassTransform:
-    """Rename method *from_name* to *to_name*."""
+    """Rename all methods named *from_name* to *to_name*."""
     return RustClassTransform.rename_method(from_name, to_name)
 
 
 def rename_field(from_name: str, to_name: str) -> RustClassTransform:
-    """Rename field *from_name* to *to_name*."""
+    """Rename all fields named *from_name* to *to_name*."""
     return RustClassTransform.rename_field(from_name, to_name)
 
 

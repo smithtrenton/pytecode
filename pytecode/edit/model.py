@@ -55,7 +55,6 @@ from ..classfile.instructions import (
     MultiANewArray,
     TableSwitch,
 )
-from ..classfile.reader import ClassReader
 from ..classfile.writer import ClassWriter
 from ._attribute_clone import clone_attribute, clone_attributes
 from .constant_pool_builder import ConstantPoolBuilder
@@ -219,6 +218,13 @@ class ClassModel:
     attributes: list[AttributeInfo]
     constant_pool: ConstantPoolBuilder = field(default_factory=ConstantPoolBuilder)
     debug_info_state: DebugInfoState = DebugInfoState.FRESH
+    _rust: object = field(default=None, init=False, repr=False, compare=False)
+    # True when _rust is set and no Python-level mutations have been made; allows
+    # to_bytes() to skip the Python ClassWriter and return the original bytes directly.
+    _rust_clean: bool = field(default=False, init=False, repr=False, compare=False)
+    # Original raw bytes stored in from_bytes(); returned verbatim by to_bytes() when
+    # _rust_clean is True, guaranteeing byte-exact round-trips without re-serialization.
+    _rust_bytes: bytes | None = field(default=None, init=False, repr=False, compare=False)
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -278,7 +284,7 @@ class ClassModel:
         if skip_debug:
             class_attributes = strip_class_debug_attributes(class_attributes)
 
-        return cls(
+        model = cls(
             version=(cf.major_version, cf.minor_version),
             access_flags=cf.access_flags,
             name=name,
@@ -289,13 +295,15 @@ class ClassModel:
             attributes=class_attributes,
             constant_pool=cp,
         )
+        return model
 
     @classmethod
     def from_bytes(cls, data: bytes | bytearray, *, skip_debug: bool = False) -> ClassModel:
         """Parse raw class-file bytes and build a ``ClassModel``.
 
-        Uses the Rust model layer when available for faster parsing,
-        falling back to the pure-Python path otherwise.
+        Parses *data* using the Rust model layer and lifts the result into a
+        Python ``ClassModel``.  The ``ConstantPoolBuilder`` is seeded directly
+        from the Rust model, avoiding a second parse.
 
         Args:
             data: Raw ``.class`` file content.
@@ -304,28 +312,23 @@ class ClassModel:
         Returns:
             A fully resolved ``ClassModel``.
         """
-        try:
-            from .._rust import RustClassModel  # type: ignore[attr-defined]
+        from .._rust import RustClassModel  # type: ignore[attr-defined]
+        from ..classfile._rust_bridge import _convert_constant_pool_entry
 
-            rust_model = RustClassModel.from_bytes(bytes(data))
-            from ._rust_bridge_model import from_rust_model
+        rust_model = RustClassModel.from_bytes(bytes(data))
+        from ._rust_bridge_model import from_rust_model
 
-            model = from_rust_model(rust_model, skip_debug=skip_debug)
-            # Seed the CP builder from the original class bytes so that
-            # raw attributes referencing CP indexes remain valid.
-            reader = ClassReader.from_bytes(data)
-            from ..classfile._rust_bridge import _convert_constant_pool_entry
-
-            py_pool = [
-                _convert_constant_pool_entry(entry) if entry is not None else None
-                for entry in reader.class_info.constant_pool
-            ]
-            model.constant_pool = ConstantPoolBuilder.from_pool(py_pool)
-            return model
-        except ImportError, Exception:
-            pass
-        reader = ClassReader.from_bytes(data)
-        return cls.from_classfile(reader.class_info, skip_debug=skip_debug)
+        model = from_rust_model(rust_model, skip_debug=skip_debug)
+        # Seed the CP builder from the Rust model's constant pool — no second parse.
+        raw_pool = rust_model.constant_pool.raw_constant_pool()
+        py_pool = [_convert_constant_pool_entry(entry) if entry is not None else None for entry in raw_pool]
+        model.constant_pool = ConstantPoolBuilder.from_pool(py_pool)
+        model._rust = rust_model
+        # Store original bytes for byte-exact round-trips.
+        model._rust_bytes = bytes(data)
+        # Only set clean when debug stripping hasn't diverged the Python model from Rust.
+        model._rust_clean = not skip_debug
+        return model
 
     # ------------------------------------------------------------------
     # Lowering
@@ -414,6 +417,10 @@ class ClassModel:
     ) -> bytes:
         """Lower this model and serialize the resulting ``ClassFile`` to bytes.
 
+        When the model was loaded via ``from_bytes()`` and has not been mutated,
+        serialization is delegated to the Rust engine directly, skipping the
+        Python ``ClassWriter``.
+
         Args:
             recompute_frames: When true, recompute stack-map frames
                 for every method that has code.
@@ -425,6 +432,15 @@ class ClassModel:
         Returns:
             Raw ``.class`` file content.
         """
+        debug_policy = normalize_debug_info_policy(debug_info)
+        if (
+            self._rust is not None
+            and self._rust_clean
+            and self._rust_bytes is not None
+            and not recompute_frames
+            and debug_policy is DebugInfoPolicy.PRESERVE
+        ):
+            return self._rust_bytes
         return ClassWriter.write(
             self.to_classfile(
                 recompute_frames=recompute_frames,

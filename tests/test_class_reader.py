@@ -287,12 +287,12 @@ def test_unknown_cp_tag():
     # Inject an extra CP entry with tag=255 (unknown).
     bad_tag = u1(255)
     data = minimal_classfile(extra_cp_bytes=bad_tag, extra_cp_count=1)
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, MalformedClassException)):
         ClassReader.from_bytes(data)
 
 
 def test_truncated_classfile():
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, MalformedClassException)):
         ClassReader.from_bytes(b"\xca\xfe\xba\xbe")
 
 
@@ -387,7 +387,7 @@ def test_truncated_before_access_flags():
         + class_entry_bytes(3)
     )
     truncated = magic + version + cp_count + cp_entries
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, MalformedClassException)):
         ClassReader.from_bytes(truncated)
 
 
@@ -437,5 +437,5 @@ def test_empty_file():
 
 def test_only_magic():
     """File has magic number but nothing else."""
-    with pytest.raises(struct.error):
+    with pytest.raises((struct.error, MalformedClassException)):
         ClassReader.from_bytes(b"\xca\xfe\xba\xbe")

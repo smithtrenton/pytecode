@@ -440,6 +440,27 @@ class TestPipelineApply:
         assert isinstance(result, bytes)
         assert len(result) > 0
 
+    def test_rename_method_all_matching(self, class_bytes: bytes) -> None:
+        """rename_method renames every method with the given name (rename-all)."""
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        methods = list(m.methods)
+        if not methods:
+            pytest.skip("fixture class has no methods")
+
+        original_name = methods[0].name
+        count_before = sum(1 for mth in methods if mth.name == original_name)
+
+        p = RustPipelineBuilder()
+        p.on_classes(class_named(m.name), rename_method(original_name, "__renamed__"))
+        p.build().apply(m)
+
+        renamed = [mth for mth in list(m.methods) if mth.name == "__renamed__"]
+        assert len(renamed) == count_before
+        # No method should still have the original name
+        assert not any(mth.name == original_name for mth in list(m.methods))
+
 
 # ---------------------------------------------------------------------------
 # Custom callback tests (T4)
@@ -519,8 +540,8 @@ class TestCustomCallbacks:
         # At least some classes should have <init>
         assert len(transformed) > 0
 
-    def test_callback_exception_handled(self, class_bytes: bytes) -> None:
-        """Python exception in callback should not crash."""
+    def test_callback_exception_propagates(self, class_bytes: bytes) -> None:
+        """Python exception in callback must propagate to the caller."""
         from pytecode._rust import RustClassModel
 
         m = RustClassModel.from_bytes(class_bytes)
@@ -531,8 +552,58 @@ class TestCustomCallbacks:
 
         p = RustPipelineBuilder()
         p.on_classes_custom(class_named(original), bad_callback)
-        # Should not crash — error is printed but not propagated
+        with pytest.raises(ValueError, match="intentional error"):
+            p.build().apply(m)
+
+    def test_callback_exception_after_mutation_propagates(self, class_bytes: bytes) -> None:
+        """Callback that mutates then raises: error propagates, model reflects mutation."""
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        original_name = m.name
+
+        def mutate_then_raise(model: object) -> None:
+            model.name = "com/partial/Renamed"  # type: ignore[attr-defined]
+            raise RuntimeError("mutation then error")
+
+        p = RustPipelineBuilder()
+        p.on_classes_custom(class_named(original_name), mutate_then_raise)
+        with pytest.raises(RuntimeError, match="mutation then error"):
+            p.build().apply(m)
+        # Mutation happened before the raise; model reflects it
+        assert m.name == "com/partial/Renamed"
+
+    def test_on_methods_custom_class_scoped(self, class_bytes: bytes) -> None:
+        """on_methods_custom fires at most once per class (class-scoped, not per-method)."""
+        from pytecode._rust import RustClassModel
+
+        m = RustClassModel.from_bytes(class_bytes)
+        invocations: list[int] = []
+
+        def track(model: object) -> None:
+            invocations.append(1)
+
+        p = RustPipelineBuilder()
+        p.on_methods_custom(has_code(), track)
         p.build().apply(m)
+
+        # Fires at most once per class regardless of how many methods have code
+        assert len(invocations) <= 1
+
+    def test_invalid_regex_raises_at_construction(self) -> None:
+        """Invalid regex pattern should raise ValueError at matcher construction time."""
+        from pytecode._rust import RustClassMatcher, RustFieldMatcher, RustMethodMatcher
+
+        with pytest.raises(ValueError, match="invalid regex"):
+            RustClassMatcher.name_matches("[invalid")
+        with pytest.raises(ValueError, match="invalid regex"):
+            RustFieldMatcher.name_matches("[invalid")
+        with pytest.raises(ValueError, match="invalid regex"):
+            RustFieldMatcher.descriptor_matches("[invalid")
+        with pytest.raises(ValueError, match="invalid regex"):
+            RustMethodMatcher.name_matches("[invalid")
+        with pytest.raises(ValueError, match="invalid regex"):
+            RustMethodMatcher.descriptor_matches("[invalid")
 
     def test_compiled_with_callback(self, class_bytes: bytes) -> None:
         from pytecode._rust import RustClassModel

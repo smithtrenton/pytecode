@@ -16,34 +16,15 @@ from dataclasses import dataclass
 from enum import IntFlag
 from typing import Any, Protocol, cast
 
+from .._rust import RustClassMatcher as RustClassMatcher  # type: ignore[import-untyped]  # noqa: I001
+from .._rust import RustClassTransform as RustClassTransform  # type: ignore[import-untyped]
+from .._rust import RustFieldMatcher as RustFieldMatcher  # type: ignore[import-untyped]
+from .._rust import RustMethodMatcher as RustMethodMatcher  # type: ignore[import-untyped]
+from .._rust import RustPipeline as RustPipeline  # type: ignore[import-untyped]
 from ..classfile.constants import ClassAccessFlag, FieldAccessFlag, MethodAccessFlag
 from ..classfile.descriptors import VoidType, parse_method_descriptor, to_descriptor
 from ..edit.model import ClassModel, CodeModel, FieldModel, MethodModel
-
-_has_rust = False
-try:
-    from .._rust import RustClassMatcher as RustClassMatcher  # type: ignore[import-untyped]  # noqa: I001
-    from .._rust import RustClassTransform as RustClassTransform  # type: ignore[import-untyped]
-    from .._rust import RustFieldMatcher as RustFieldMatcher  # type: ignore[import-untyped]
-    from .._rust import RustMethodMatcher as RustMethodMatcher  # type: ignore[import-untyped]
-    from .._rust import RustPipeline as RustPipeline  # type: ignore[import-untyped]
-    from .rust_pipeline import RustPipelineBuilder as RustPipelineBuilder
-
-    _has_rust = True
-except ImportError:
-
-    class _Stub:
-        """Placeholder when the Rust extension is unavailable."""
-
-        def __getattr__(self, _name: str) -> Any:
-            raise ImportError("pytecode._rust extension not available")
-
-    RustClassMatcher: Any = _Stub()
-    RustFieldMatcher: Any = _Stub()
-    RustMethodMatcher: Any = _Stub()
-    RustClassTransform: Any = _Stub()
-    RustPipeline: Any = _Stub()
-    RustPipelineBuilder: Any = _Stub()
+from .rust_pipeline import RustPipelineBuilder as RustPipelineBuilder
 
 type Predicate[T] = Callable[[T], bool]
 type ClassPredicate = Predicate[ClassModel]
@@ -397,14 +378,16 @@ def not_[T](predicate: Predicate[T] | Matcher[T]) -> Matcher[T]:
 def class_named(name: str) -> ClassMatcher:
     """Match classes by internal name."""
 
-    rust_spec = RustClassMatcher.named(name) if _has_rust else None
+    rust_spec = RustClassMatcher.named(name)
     return Matcher(lambda model: model.name == name, f"class_named({name!r})", rust_spec)
 
 
 def class_name_matches(pattern: str) -> ClassMatcher:
     """Match classes by internal-name regex."""
-
-    rust_spec = RustClassMatcher.name_matches(pattern) if _has_rust else None
+    try:
+        rust_spec = RustClassMatcher.name_matches(pattern)
+    except ValueError as e:
+        raise re.error(str(e)) from e
     return _regex_matcher(
         lambda model: model.name,
         pattern,
@@ -416,7 +399,7 @@ def class_name_matches(pattern: str) -> ClassMatcher:
 def class_access(flags: ClassAccessFlag) -> ClassMatcher:
     """Match classes containing all requested access flags."""
 
-    rust_spec = RustClassMatcher.access_all(int(flags)) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(int(flags))
     return _all_flags_matcher(
         lambda model: model.access_flags,
         flags,
@@ -428,7 +411,7 @@ def class_access(flags: ClassAccessFlag) -> ClassMatcher:
 def class_access_any(flags: ClassAccessFlag) -> ClassMatcher:
     """Match classes containing any requested access flag."""
 
-    rust_spec = RustClassMatcher.access_any(int(flags)) if _has_rust else None
+    rust_spec = RustClassMatcher.access_any(int(flags))
     return _any_flags_matcher(
         lambda model: model.access_flags,
         flags,
@@ -440,7 +423,7 @@ def class_access_any(flags: ClassAccessFlag) -> ClassMatcher:
 def class_is_public() -> ClassMatcher:
     """Match public classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x0001) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x0001)
     return Matcher(
         lambda model: ClassAccessFlag.PUBLIC in model.access_flags,
         "class_is_public()",
@@ -451,7 +434,7 @@ def class_is_public() -> ClassMatcher:
 def class_is_package_private() -> ClassMatcher:
     """Match package-private classes."""
 
-    rust_spec = RustClassMatcher.is_package_private() if _has_rust else None
+    rust_spec = RustClassMatcher.is_package_private()
     return Matcher(
         lambda model: ClassAccessFlag.PUBLIC not in model.access_flags,
         "class_is_package_private()",
@@ -462,7 +445,7 @@ def class_is_package_private() -> ClassMatcher:
 def class_is_final() -> ClassMatcher:
     """Match final classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x0010) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x0010)
     m = class_access(ClassAccessFlag.FINAL)
     return Matcher(m._predicate, "class_is_final()", rust_spec)
 
@@ -470,7 +453,7 @@ def class_is_final() -> ClassMatcher:
 def class_is_interface() -> ClassMatcher:
     """Match interface classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x0200) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x0200)
     m = class_access(ClassAccessFlag.INTERFACE)
     return Matcher(m._predicate, "class_is_interface()", rust_spec)
 
@@ -478,7 +461,7 @@ def class_is_interface() -> ClassMatcher:
 def class_is_abstract() -> ClassMatcher:
     """Match abstract classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x0400) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x0400)
     m = class_access(ClassAccessFlag.ABSTRACT)
     return Matcher(m._predicate, "class_is_abstract()", rust_spec)
 
@@ -486,7 +469,7 @@ def class_is_abstract() -> ClassMatcher:
 def class_is_synthetic() -> ClassMatcher:
     """Match synthetic classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x1000) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x1000)
     m = class_access(ClassAccessFlag.SYNTHETIC)
     return Matcher(m._predicate, "class_is_synthetic()", rust_spec)
 
@@ -494,7 +477,7 @@ def class_is_synthetic() -> ClassMatcher:
 def class_is_annotation() -> ClassMatcher:
     """Match annotation classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x2000) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x2000)
     m = class_access(ClassAccessFlag.ANNOTATION)
     return Matcher(m._predicate, "class_is_annotation()", rust_spec)
 
@@ -502,7 +485,7 @@ def class_is_annotation() -> ClassMatcher:
 def class_is_enum() -> ClassMatcher:
     """Match enum classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x4000) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x4000)
     m = class_access(ClassAccessFlag.ENUM)
     return Matcher(m._predicate, "class_is_enum()", rust_spec)
 
@@ -510,7 +493,7 @@ def class_is_enum() -> ClassMatcher:
 def class_is_module() -> ClassMatcher:
     """Match module-info classes."""
 
-    rust_spec = RustClassMatcher.access_all(0x8000) if _has_rust else None
+    rust_spec = RustClassMatcher.access_all(0x8000)
     m = class_access(ClassAccessFlag.MODULE)
     return Matcher(m._predicate, "class_is_module()", rust_spec)
 
@@ -518,14 +501,14 @@ def class_is_module() -> ClassMatcher:
 def extends(name: str) -> ClassMatcher:
     """Match classes with the given direct superclass."""
 
-    rust_spec = RustClassMatcher.extends(name) if _has_rust else None
+    rust_spec = RustClassMatcher.extends(name)
     return _equals_matcher(lambda model: model.super_name, name, f"extends({name!r})", rust_spec=rust_spec)
 
 
 def implements(name: str) -> ClassMatcher:
     """Match classes declaring the given direct interface."""
 
-    rust_spec = RustClassMatcher.implements(name) if _has_rust else None
+    rust_spec = RustClassMatcher.implements(name)
     return _contains_matcher(
         lambda model: model.interfaces,
         name,
@@ -537,14 +520,14 @@ def implements(name: str) -> ClassMatcher:
 def class_version(major: int) -> ClassMatcher:
     """Match classes with the given major version."""
 
-    rust_spec = RustClassMatcher.version(major) if _has_rust else None
+    rust_spec = RustClassMatcher.version(major)
     return _equals_matcher(lambda model: model.version[0], major, f"class_version({major})", rust_spec=rust_spec)
 
 
 def class_version_at_least(major: int) -> ClassMatcher:
     """Match classes whose major version is at least *major*."""
 
-    rust_spec = RustClassMatcher.version_at_least(major) if _has_rust else None
+    rust_spec = RustClassMatcher.version_at_least(major)
     return Matcher(
         lambda model: model.version[0] >= major,
         f"class_version_at_least({major})",
@@ -555,7 +538,7 @@ def class_version_at_least(major: int) -> ClassMatcher:
 def class_version_below(major: int) -> ClassMatcher:
     """Match classes whose major version is below *major*."""
 
-    rust_spec = RustClassMatcher.version_below(major) if _has_rust else None
+    rust_spec = RustClassMatcher.version_below(major)
     return Matcher(
         lambda model: model.version[0] < major,
         f"class_version_below({major})",
@@ -566,14 +549,16 @@ def class_version_below(major: int) -> ClassMatcher:
 def field_named(name: str) -> FieldMatcher:
     """Match fields by name."""
 
-    rust_spec = RustFieldMatcher.named(name) if _has_rust else None
+    rust_spec = RustFieldMatcher.named(name)
     return _equals_matcher(lambda field: field.name, name, f"field_named({name!r})", rust_spec=rust_spec)
 
 
 def field_name_matches(pattern: str) -> FieldMatcher:
     """Match fields by name regex."""
-
-    rust_spec = RustFieldMatcher.name_matches(pattern) if _has_rust else None
+    try:
+        rust_spec = RustFieldMatcher.name_matches(pattern)
+    except ValueError as e:
+        raise re.error(str(e)) from e
     return _regex_matcher(
         lambda field: field.name,
         pattern,
@@ -585,7 +570,7 @@ def field_name_matches(pattern: str) -> FieldMatcher:
 def field_descriptor(descriptor: str) -> FieldMatcher:
     """Match fields by descriptor."""
 
-    rust_spec = RustFieldMatcher.descriptor(descriptor) if _has_rust else None
+    rust_spec = RustFieldMatcher.descriptor(descriptor)
     return _equals_matcher(
         lambda field: field.descriptor,
         descriptor,
@@ -596,8 +581,10 @@ def field_descriptor(descriptor: str) -> FieldMatcher:
 
 def field_descriptor_matches(pattern: str) -> FieldMatcher:
     """Match fields by descriptor regex."""
-
-    rust_spec = RustFieldMatcher.descriptor_matches(pattern) if _has_rust else None
+    try:
+        rust_spec = RustFieldMatcher.descriptor_matches(pattern)
+    except ValueError as e:
+        raise re.error(str(e)) from e
     return _regex_matcher(
         lambda field: field.descriptor,
         pattern,
@@ -609,7 +596,7 @@ def field_descriptor_matches(pattern: str) -> FieldMatcher:
 def field_access(flags: FieldAccessFlag) -> FieldMatcher:
     """Match fields containing all requested access flags."""
 
-    rust_spec = RustFieldMatcher.access_all(int(flags)) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(int(flags))
     return _all_flags_matcher(
         lambda field: field.access_flags,
         flags,
@@ -621,7 +608,7 @@ def field_access(flags: FieldAccessFlag) -> FieldMatcher:
 def field_access_any(flags: FieldAccessFlag) -> FieldMatcher:
     """Match fields containing any requested access flag."""
 
-    rust_spec = RustFieldMatcher.access_any(int(flags)) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_any(int(flags))
     return _any_flags_matcher(
         lambda field: field.access_flags,
         flags,
@@ -633,7 +620,7 @@ def field_access_any(flags: FieldAccessFlag) -> FieldMatcher:
 def field_is_public() -> FieldMatcher:
     """Match public fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0001) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0001)
     m = field_access(FieldAccessFlag.PUBLIC)
     return Matcher(m._predicate, "field_is_public()", rust_spec)
 
@@ -641,7 +628,7 @@ def field_is_public() -> FieldMatcher:
 def field_is_private() -> FieldMatcher:
     """Match private fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0002) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0002)
     m = field_access(FieldAccessFlag.PRIVATE)
     return Matcher(m._predicate, "field_is_private()", rust_spec)
 
@@ -649,7 +636,7 @@ def field_is_private() -> FieldMatcher:
 def field_is_protected() -> FieldMatcher:
     """Match protected fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0004) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0004)
     m = field_access(FieldAccessFlag.PROTECTED)
     return Matcher(m._predicate, "field_is_protected()", rust_spec)
 
@@ -657,7 +644,7 @@ def field_is_protected() -> FieldMatcher:
 def field_is_package_private() -> FieldMatcher:
     """Match package-private fields."""
 
-    rust_spec = RustFieldMatcher.is_package_private() if _has_rust else None
+    rust_spec = RustFieldMatcher.is_package_private()
     return Matcher(
         lambda field: not (field.access_flags & _FIELD_VISIBILITY_FLAGS),
         "field_is_package_private()",
@@ -668,7 +655,7 @@ def field_is_package_private() -> FieldMatcher:
 def field_is_static() -> FieldMatcher:
     """Match static fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0008) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0008)
     m = field_access(FieldAccessFlag.STATIC)
     return Matcher(m._predicate, "field_is_static()", rust_spec)
 
@@ -676,7 +663,7 @@ def field_is_static() -> FieldMatcher:
 def field_is_final() -> FieldMatcher:
     """Match final fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0010) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0010)
     m = field_access(FieldAccessFlag.FINAL)
     return Matcher(m._predicate, "field_is_final()", rust_spec)
 
@@ -684,7 +671,7 @@ def field_is_final() -> FieldMatcher:
 def field_is_volatile() -> FieldMatcher:
     """Match volatile fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0040) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0040)
     m = field_access(FieldAccessFlag.VOLATILE)
     return Matcher(m._predicate, "field_is_volatile()", rust_spec)
 
@@ -692,7 +679,7 @@ def field_is_volatile() -> FieldMatcher:
 def field_is_transient() -> FieldMatcher:
     """Match transient fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x0080) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x0080)
     m = field_access(FieldAccessFlag.TRANSIENT)
     return Matcher(m._predicate, "field_is_transient()", rust_spec)
 
@@ -700,7 +687,7 @@ def field_is_transient() -> FieldMatcher:
 def field_is_synthetic() -> FieldMatcher:
     """Match synthetic fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x1000) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x1000)
     m = field_access(FieldAccessFlag.SYNTHETIC)
     return Matcher(m._predicate, "field_is_synthetic()", rust_spec)
 
@@ -708,7 +695,7 @@ def field_is_synthetic() -> FieldMatcher:
 def field_is_enum_constant() -> FieldMatcher:
     """Match enum-constant fields."""
 
-    rust_spec = RustFieldMatcher.access_all(0x4000) if _has_rust else None
+    rust_spec = RustFieldMatcher.access_all(0x4000)
     m = field_access(FieldAccessFlag.ENUM)
     return Matcher(m._predicate, "field_is_enum_constant()", rust_spec)
 
@@ -716,14 +703,16 @@ def field_is_enum_constant() -> FieldMatcher:
 def method_named(name: str) -> MethodMatcher:
     """Match methods by name."""
 
-    rust_spec = RustMethodMatcher.named(name) if _has_rust else None
+    rust_spec = RustMethodMatcher.named(name)
     return _equals_matcher(lambda method: method.name, name, f"method_named({name!r})", rust_spec=rust_spec)
 
 
 def method_name_matches(pattern: str) -> MethodMatcher:
     """Match methods by name regex."""
-
-    rust_spec = RustMethodMatcher.name_matches(pattern) if _has_rust else None
+    try:
+        rust_spec = RustMethodMatcher.name_matches(pattern)
+    except ValueError as e:
+        raise re.error(str(e)) from e
     return _regex_matcher(
         lambda method: method.name,
         pattern,
@@ -735,7 +724,7 @@ def method_name_matches(pattern: str) -> MethodMatcher:
 def method_descriptor(descriptor: str) -> MethodMatcher:
     """Match methods by descriptor."""
 
-    rust_spec = RustMethodMatcher.descriptor(descriptor) if _has_rust else None
+    rust_spec = RustMethodMatcher.descriptor(descriptor)
     return _equals_matcher(
         lambda method: method.descriptor,
         descriptor,
@@ -746,8 +735,10 @@ def method_descriptor(descriptor: str) -> MethodMatcher:
 
 def method_descriptor_matches(pattern: str) -> MethodMatcher:
     """Match methods by descriptor regex."""
-
-    rust_spec = RustMethodMatcher.descriptor_matches(pattern) if _has_rust else None
+    try:
+        rust_spec = RustMethodMatcher.descriptor_matches(pattern)
+    except ValueError as e:
+        raise re.error(str(e)) from e
     return _regex_matcher(
         lambda method: method.descriptor,
         pattern,
@@ -759,7 +750,7 @@ def method_descriptor_matches(pattern: str) -> MethodMatcher:
 def method_access(flags: MethodAccessFlag) -> MethodMatcher:
     """Match methods containing all requested access flags."""
 
-    rust_spec = RustMethodMatcher.access_all(int(flags)) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(int(flags))
     return _all_flags_matcher(
         lambda method: method.access_flags,
         flags,
@@ -771,7 +762,7 @@ def method_access(flags: MethodAccessFlag) -> MethodMatcher:
 def method_access_any(flags: MethodAccessFlag) -> MethodMatcher:
     """Match methods containing any requested access flag."""
 
-    rust_spec = RustMethodMatcher.access_any(int(flags)) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_any(int(flags))
     return _any_flags_matcher(
         lambda method: method.access_flags,
         flags,
@@ -783,7 +774,7 @@ def method_access_any(flags: MethodAccessFlag) -> MethodMatcher:
 def method_is_public() -> MethodMatcher:
     """Match public methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0001) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0001)
     m = method_access(MethodAccessFlag.PUBLIC)
     return Matcher(m._predicate, "method_is_public()", rust_spec)
 
@@ -791,7 +782,7 @@ def method_is_public() -> MethodMatcher:
 def method_is_private() -> MethodMatcher:
     """Match private methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0002) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0002)
     m = method_access(MethodAccessFlag.PRIVATE)
     return Matcher(m._predicate, "method_is_private()", rust_spec)
 
@@ -799,7 +790,7 @@ def method_is_private() -> MethodMatcher:
 def method_is_protected() -> MethodMatcher:
     """Match protected methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0004) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0004)
     m = method_access(MethodAccessFlag.PROTECTED)
     return Matcher(m._predicate, "method_is_protected()", rust_spec)
 
@@ -807,7 +798,7 @@ def method_is_protected() -> MethodMatcher:
 def method_is_package_private() -> MethodMatcher:
     """Match package-private methods."""
 
-    rust_spec = RustMethodMatcher.is_package_private() if _has_rust else None
+    rust_spec = RustMethodMatcher.is_package_private()
     return Matcher(
         lambda method: not (method.access_flags & _METHOD_VISIBILITY_FLAGS),
         "method_is_package_private()",
@@ -818,7 +809,7 @@ def method_is_package_private() -> MethodMatcher:
 def method_is_static() -> MethodMatcher:
     """Match static methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0008) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0008)
     m = method_access(MethodAccessFlag.STATIC)
     return Matcher(m._predicate, "method_is_static()", rust_spec)
 
@@ -826,7 +817,7 @@ def method_is_static() -> MethodMatcher:
 def method_is_final() -> MethodMatcher:
     """Match final methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0010) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0010)
     m = method_access(MethodAccessFlag.FINAL)
     return Matcher(m._predicate, "method_is_final()", rust_spec)
 
@@ -834,7 +825,7 @@ def method_is_final() -> MethodMatcher:
 def method_is_synchronized() -> MethodMatcher:
     """Match synchronized methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0020) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0020)
     m = method_access(MethodAccessFlag.SYNCHRONIZED)
     return Matcher(m._predicate, "method_is_synchronized()", rust_spec)
 
@@ -842,7 +833,7 @@ def method_is_synchronized() -> MethodMatcher:
 def method_is_bridge() -> MethodMatcher:
     """Match bridge methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0040) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0040)
     m = method_access(MethodAccessFlag.BRIDGE)
     return Matcher(m._predicate, "method_is_bridge()", rust_spec)
 
@@ -850,7 +841,7 @@ def method_is_bridge() -> MethodMatcher:
 def method_is_varargs() -> MethodMatcher:
     """Match varargs methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0080) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0080)
     m = method_access(MethodAccessFlag.VARARGS)
     return Matcher(m._predicate, "method_is_varargs()", rust_spec)
 
@@ -858,7 +849,7 @@ def method_is_varargs() -> MethodMatcher:
 def method_is_native() -> MethodMatcher:
     """Match native methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0100) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0100)
     m = method_access(MethodAccessFlag.NATIVE)
     return Matcher(m._predicate, "method_is_native()", rust_spec)
 
@@ -866,7 +857,7 @@ def method_is_native() -> MethodMatcher:
 def method_is_abstract() -> MethodMatcher:
     """Match abstract methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0400) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0400)
     m = method_access(MethodAccessFlag.ABSTRACT)
     return Matcher(m._predicate, "method_is_abstract()", rust_spec)
 
@@ -874,7 +865,7 @@ def method_is_abstract() -> MethodMatcher:
 def method_is_strict() -> MethodMatcher:
     """Match strictfp methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x0800) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x0800)
     m = method_access(MethodAccessFlag.STRICT)
     return Matcher(m._predicate, "method_is_strict()", rust_spec)
 
@@ -882,7 +873,7 @@ def method_is_strict() -> MethodMatcher:
 def method_is_synthetic() -> MethodMatcher:
     """Match synthetic methods."""
 
-    rust_spec = RustMethodMatcher.access_all(0x1000) if _has_rust else None
+    rust_spec = RustMethodMatcher.access_all(0x1000)
     m = method_access(MethodAccessFlag.SYNTHETIC)
     return Matcher(m._predicate, "method_is_synthetic()", rust_spec)
 
@@ -890,14 +881,14 @@ def method_is_synthetic() -> MethodMatcher:
 def has_code() -> MethodMatcher:
     """Match methods that currently have a ``CodeModel``."""
 
-    rust_spec = RustMethodMatcher.has_code() if _has_rust else None
+    rust_spec = RustMethodMatcher.has_code()
     return Matcher(lambda method: method.code is not None, "has_code()", rust_spec)
 
 
 def is_constructor() -> MethodMatcher:
     """Match methods named ``<init>``."""
 
-    rust_spec = RustMethodMatcher.is_constructor() if _has_rust else None
+    rust_spec = RustMethodMatcher.is_constructor()
     m = method_named("<init>")
     return Matcher(m._predicate, "is_constructor()", rust_spec)
 
@@ -905,7 +896,7 @@ def is_constructor() -> MethodMatcher:
 def is_static_initializer() -> MethodMatcher:
     """Match methods named ``<clinit>``."""
 
-    rust_spec = RustMethodMatcher.is_static_initializer() if _has_rust else None
+    rust_spec = RustMethodMatcher.is_static_initializer()
     m = method_named("<clinit>")
     return Matcher(m._predicate, "is_static_initializer()", rust_spec)
 
@@ -913,7 +904,7 @@ def is_static_initializer() -> MethodMatcher:
 def method_returns(descriptor: str) -> MethodMatcher:
     """Match methods by return-type descriptor."""
 
-    rust_spec = RustMethodMatcher.returns(descriptor) if _has_rust else None
+    rust_spec = RustMethodMatcher.returns(descriptor)
     return Matcher(
         lambda method: _method_return_descriptor(method.descriptor) == descriptor,
         f"method_returns({descriptor!r})",

@@ -188,6 +188,12 @@ impl PipelineSpec {
     }
 
     /// Apply this pipeline to a single class model.
+    ///
+    /// # Performance note
+    ///
+    /// This method re-compiles all regex matchers on every call. For hot loops
+    /// over many models, prefer [`PipelineSpec::compile`] + [`CompiledPipeline::apply`]
+    /// in a loop (or use [`PipelineSpec::apply_all`] which compiles once internally).
     pub fn apply(&self, model: &mut ClassModel) {
         let compiled = self.compile();
         compiled.apply(model);
