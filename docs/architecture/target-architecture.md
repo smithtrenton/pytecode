@@ -29,41 +29,15 @@ Responsibilities:
 
 This is the layer you already have today.
 
-## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — Phases 1-2 landed)
+## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — now Rust-owned)
 
-Phase 1 of this layer is now implemented via `ClassModel`, `MethodModel`, `FieldModel`, and `CodeModel`, and the Phase 2 extension now lives in `pytecode.transforms`. Together, these give pytecode a higher-level object model plus a lightweight composition layer for safe manipulation. Users no longer need to hand-edit raw constant-pool indexes and branch offsets for the major editing workflows already covered by labels, symbolic operands, `ConstantPoolBuilder`, callable transform pipelines, and the richer matcher DSL.
+The mutable editing model is now fully Rust-owned via `RustClassModel` (aliased as `pytecode.ClassModel`). The Rust engine handles symbolic references, label resolution, bytecode lowering, constant-pool management, and branch widening natively. Python exposes this through thin PyO3 bindings.
 
-Responsibilities:
-
-- editable classes, fields, methods, and attributes
-- symbolic references instead of bare indexes where possible
-- labels for branch targets (supporting forward references)
-- helpers for adding, removing, and replacing instructions
-- helpers for creating or updating constants and descriptors
-- automatic offset and padding recalculation (including `TABLESWITCH`/`LOOKUPSWITCH` alignment)
-- exception handler ranges bound to labels, not byte offsets
-- transparent `WIDE` instruction handling (users should never need to think about wide-form variants)
-- preservation of unknown attributes through transformations
-- composable class/method/field/code transforms with deterministic pass ordering, owner-filtered lifting, and composable selection predicates
-
-This layer still describes the legacy Python-owned editing surface, but it is no longer the canonical production manipulation API. The Rust-first package surface now prefers `pytecode.ClassModel`, `pytecode.ClassReader`, and `pytecode.ClassWriter` for parse/edit/write flows, plus `pytecode.transforms.rust` (`RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories) for production transform execution. The older Python `Pipeline`, `pipeline()`, `Matcher`, and `on_*` lifting helpers remain available only as compatibility and callback-oriented surfaces during the migration.
-
-After evaluating five candidate designs — **(A)** direct mutable dataclasses, **(B)** builder objects (BCEL-style), **(C)** visitor/transformer pattern (ASM-style), **(D)** pass pipelines, and **(E)** dual tree+visitor — **Design A (Mutable Dataclasses)** was chosen as the primary editing API. The tree model is designed so that pass-style composition (Design D) can be layered on top, and a visitor layer (Design E) can be added later if streaming becomes necessary. See [editing model design rationale](../design/editing-model.md) for the full analysis, comparative feature matrix, library survey, and phased implementation plan.
+The Rust-first package surface uses `pytecode.ClassModel`, `pytecode.ClassReader`, and `pytecode.ClassWriter` for parse/edit/write flows, plus `pytecode.transforms.rust` (`RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories) for production transform execution.
 
 ### 3a. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 
-Descriptor and signature utilities are now implemented in `pytecode.classfile.descriptors`.
-
-Responsibilities:
-
-- parse method descriptors into structured parameter and return types
-- parse field descriptors into structured type representations
-- parse generic signatures (Signature attribute)
-- compute parameter slot counts (accounting for long/double two-slot types)
-- construct descriptor strings from structured type objects
-- validate descriptor well-formedness
-
-This is a cross-cutting concern used by the editing model, frame computation, constant-pool management, and validation. Without it, descriptor parsing will be scattered ad hoc throughout the codebase.
+Descriptor and signature parsing is now handled by the Rust engine (`pytecode-engine`). The Python `pytecode.classfile.descriptors` module has been removed.
 
 ## 4. Analysis and control-flow layer ([#9](https://github.com/smithtrenton/pytecode/issues/9) — done)
 

@@ -209,6 +209,9 @@ def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
     [
         "pytecode.classfile.reader",
         "pytecode.classfile.writer",
+        "pytecode.classfile.info",
+        "pytecode.classfile.constant_pool",
+        "pytecode.classfile.descriptors",
         "pytecode.edit.model",
         "pytecode.edit.labels",
         "pytecode.edit.operands",
@@ -219,3 +222,31 @@ def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
 def test_legacy_modules_removed(module_name: str) -> None:
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module(module_name)
+
+
+# --- Error-case tests ---
+
+
+def test_class_reader_rejects_truncated_bytes() -> None:
+    with pytest.raises(Exception):
+        rust.ClassReader.from_bytes(b"\xca\xfe\xba\xbe\x00")
+
+
+def test_class_reader_rejects_invalid_magic() -> None:
+    with pytest.raises(Exception):
+        rust.ClassReader.from_bytes(b"\xde\xad\xbe\xef" + b"\x00" * 20)
+
+
+def test_class_reader_rejects_empty_input() -> None:
+    with pytest.raises(Exception):
+        rust.ClassReader.from_bytes(b"")
+
+
+def test_classmodel_rejects_invalid_bytes() -> None:
+    with pytest.raises(Exception):
+        pytecode.ClassModel.from_bytes(b"not a classfile")
+
+
+def test_verify_classfile_rejects_wrong_type() -> None:
+    with pytest.raises(TypeError):
+        pytecode.verify_classfile(12345)  # type: ignore[arg-type]

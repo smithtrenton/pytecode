@@ -1,6 +1,6 @@
 # Current architecture
 
-The codebase is currently organized as a parser/lowering/emission pipeline with a strongly typed read model.
+The codebase is a Rust engine (`pytecode-engine`, `pytecode-archive`) with thin Python bindings via PyO3.
 
 ## Runtime and packaging
 
@@ -11,31 +11,27 @@ The codebase is currently organized as a parser/lowering/emission pipeline with 
 
 ## Public entry points
 
-- `pytecode.ClassReader`
-  - Constructed directly from classfile bytes, or via `ClassReader.from_bytes()` / `ClassReader.from_file()`
-  - Parses eagerly during initialization
-  - Produces `class_info`, an `info.ClassFile` dataclass tree
-- `pytecode.ClassWriter`
-  - Stateless serializer for `info.ClassFile`
-  - Writes classfile structures back to bytes in JVM spec order
-  - Recomputes emitted lengths/counts from the live dataclass tree and preserves unknown attribute payloads verbatim
+- `pytecode.ClassReader` (Rust-backed via `pytecode._rust`)
+  - `ClassReader.from_bytes()` / `ClassReader.from_file()` parse classfiles through the Rust parser
+  - Produces `class_info`, a Rust-backed `ClassFile` spec model
+- `pytecode.ClassWriter` (Rust-backed via `pytecode._rust`)
+  - `ClassWriter.write(classfile)` serializes a Rust `ClassFile` back to bytes
 - `pytecode.JarFile`
   - Reads the contents of a JAR
   - Separates `.class` entries from non-class resources
   - Parses classes via `ClassReader`
   - Supports explicit archive entry mutation via `add_file()` / `remove_file()`
-  - Rewrites archives safely via `rewrite()`, optionally lowering `.class` entries through `ClassModel`
+  - Rewrites archives safely via `rewrite()`, delegating unchanged-on-disk archives with Rust-backed transforms to the Rust archive crate
   - Preserves signature artifacts as pass-through resources but does not re-sign modified archives
-
-- `pytecode.ClassModel`
+- `pytecode.ClassModel` (alias for `RustClassModel`, Rust-backed)
   - Mutable editing model for JVM class files
   - Uses symbolic (resolved) references instead of raw constant-pool indexes
-  - Constructed from a parsed `ClassFile` via `ClassModel.from_classfile()` or from raw bytes via `ClassModel.from_bytes()`
-  - Produces a spec-faithful `ClassFile` via `to_classfile()` and can serialize directly via `to_bytes()`
+  - Constructed from bytes via `ClassModel.from_bytes()` or from a parsed `ClassFile` via `ClassModel.from_classfile()`
+  - Serializes directly via `to_bytes()`
 
 These are the current public exports in `pytecode.__init__`.
 
-Advanced transform-composition helpers intentionally live in `pytecode.transforms` rather than `pytecode.__init__`, keeping the top-level API small while still exposing a supported submodule for pipelines, matchers, lifting helpers, and selectors.
+Advanced transform-composition helpers live in `pytecode.transforms` rather than `pytecode.__init__`, keeping the top-level API small while still exposing a supported submodule for Rust-backed pipelines, matchers, and transforms.
 
 ## Module responsibilities
 
@@ -47,27 +43,14 @@ Low-level big-endian binary I/O primitives for both reading and writing. This is
 
 **Write side**: Standalone `_write_u1/i1/u2/i2/u4/i4/_write_bytes` helper functions and a stateful `BytesWriter` that appends to an internal buffer. `BytesWriter` provides `write_u1/i1/u2/i2/u4/i4/bytes` methods, `align(n)` for opcode-alignment padding, and a full set of `reserve_u1/i1/u2/i2/u4/i4` and `patch_u1/i1/u2/i2/u4/i4` methods for deferred length-prefixed structures.
 
-### `pytecode/classfile/reader.py`
+### `pytecode/_rust` (Rust extension module)
 
-`ClassReader` is now primarily a compatibility wrapper over the Rust parser.
-Whole-class parses (`ClassReader(...)`, `from_bytes()`, `from_file()`) go through
-the `pytecode._rust` extension and are then converted into the public Python
-raw dataclasses. The old Python byte-level helper methods still exist only for
-low-level decoding tests and niche callers that exercise instruction or
-constant-pool decoding directly.
+`ClassReader` and `ClassWriter` are direct exports from the Rust extension module built via PyO3:
+- `ClassReader.from_bytes(bytes)` and `ClassReader.from_file(path)` parse classfiles through the Rust parser and return a `ClassFile` spec model on the `class_info` property.
+- `ClassWriter.write(classfile)` serializes a spec-model `ClassFile` back to bytes via Rust.
+- `RustClassModel` provides the mutable editing model with symbolic references, constructed via `from_bytes()` or `from_classfile()`, serialized via `to_bytes()`.
 
-### `pytecode/classfile/writer.py`
-
-`ClassWriter.write()` remains the compatibility serializer for public Python
-`ClassFile` dataclasses. It still performs deterministic spec-order emission for
-that raw surface, but it is no longer the primary serialization path for
-`ClassModel`: the editable model now prefers Rust-backed serialization for clean
-roundtrips and normal code-mutation writes, falling back to the Python writer
-only when the remaining raw-attribute compatibility surface requires it.
-
-### `pytecode/classfile/constant_pool.py`
-
-Typed dataclasses for all 17 constant-pool entry types plus the `ConstantPoolInfoType` enum mapping tags to dataclasses. The enum embeds both the numeric tag and the corresponding dataclass, so new constant types only require adding an enum member.
+These are the canonical implementations, not Python wrapper layers.
 
 ### `pytecode/classfile/modified_utf8.py`
 
@@ -78,192 +61,97 @@ centralizes spec-correct encoding and decoding of:
 - supplementary characters via UTF-16 surrogate pairs
 - malformed byte-sequence rejection (for example, illegal four-byte UTF-8 forms)
 
-It is used by `ConstantPoolBuilder`, `ClassReader`, and test helpers so
-constant-pool string handling stays consistent across parsing, editing, and
-fixtures.
-
 ### `pytecode/classfile/attributes.py`
 
-Typed dataclasses for classfile attributes and nested structures (verification types, stack map frames, annotations, type annotations, module info, record components, etc.). It also defines `AttributeInfoType`, which maps attribute names to concrete dataclasses via an enum with a `_missing_` fallback. Unknown attribute names are routed to `UnimplementedAttr`, allowing parse-time preservation of vendor or future attributes.
+Typed dataclasses for classfile attributes and nested structures (verification types, stack map frames, annotations, type annotations, module info, record components, etc.). The Rust bindings instantiate these Python classes directly when materializing raw attribute metadata for the Python API surface.
 
 ### `pytecode/classfile/instructions.py`
 
-Typed dataclasses for decoded bytecode instructions and operand shapes covering local indexes, constant-pool indexes, branches, switches, and other operand families, plus the `InsnInfoType` opcode enum that maps supported JVM instruction encodings to instruction record types, and an `ArrayType` enum for `newarray`.
-
-### `pytecode/classfile/info.py`
-
-Top-level dataclasses representing the parsed classfile structure:
-
-- `ClassFile`
-- `FieldInfo`
-- `MethodInfo`
-
-These dataclasses hold references to attribute and constant-pool structures defined elsewhere.
+Typed dataclasses for decoded bytecode instructions and operand shapes covering local indexes, constant-pool indexes, branches, switches, and other operand families. The Rust bindings instantiate these Python classes when materializing bytecode instructions.
 
 ### `pytecode/classfile/constants.py`
 
-Enums and flags representing JVM constants, access flags, verification types, and target-type metadata. (The former `FieldType` enum was removed here and superseded by `BaseType` in `descriptors.py`.)
+Enums and flags representing JVM constants, access flags, verification types, and target-type metadata. Used by both the Rust bindings and Python-side analysis helpers.
 
-### `pytecode/classfile/descriptors.py`
+### Removed modules (now Rust-owned)
 
-Descriptor and generic signature utilities. Provides:
+The following Python modules have been removed. Their functionality is now entirely owned by the Rust engine (`pytecode-engine`):
 
-- **Data model**: `BaseType` enum (8 JVM primitives), `VoidType`, `ObjectType`, `ArrayType`, `MethodDescriptor` frozen dataclasses, and a full generic signature type hierarchy (`ClassTypeSignature`, `TypeVariable`, `ArrayTypeSignature`, `TypeArgument`, `TypeParameter`, `ClassSignature`, `MethodSignature`)
-- **Parsing**: `parse_field_descriptor()`, `parse_method_descriptor()`, `parse_class_signature()`, `parse_method_signature()`, `parse_field_signature()` — all recursive-descent, raising `ValueError` with position context on malformed input, including malformed internal names, empty path segments, and empty inner-class suffixes
-- **Construction**: `to_descriptor()` — converts structured types back to JVM descriptor strings (round-trip)
-- **Slot helpers**: `slot_size()` and `parameter_slot_count()` — category-aware (long/double occupy 2 slots)
-- **Validation**: `is_valid_field_descriptor()` and `is_valid_method_descriptor()` with spec-aware internal-name checks
-
-All types are imported directly from `pytecode.classfile.descriptors`.
-
-### `pytecode/edit/constant_pool_builder.py`
-
-Constant-pool management utilities for building and editing JVM constant pools. Provides `ConstantPoolBuilder`, a mutable accumulator with:
-
-- **Deduplication on insertion** — identical entries return the existing index rather than growing the pool; both structural (raw-index-based via `add_entry`) and semantic (value-based via convenience methods) deduplication are supported
-- **High-level convenience methods** — `add_utf8`, `add_class`, `add_methodref`, `add_fieldref`, etc. automatically create and deduplicate all prerequisite entries (e.g. `add_class("Foo")` creates the `CONSTANT_Utf8` name entry first), and `add_utf8()` uses JVM Modified UTF-8 with the JVM `u2` byte-length limit
-- **Symbol-table lookups** — `find_utf8`, `find_class`, `find_name_and_type`, and `resolve_utf8` enable index-free lookups by value using spec-correct Modified UTF-8
-- **Double-slot handling** — Long and Double entries automatically occupy two consecutive slots, consistent with the JVM spec
-- **Spec hardening** — `add_method_handle()` validates reference kind, target entry type, and special-method rules; direct/imported `Utf8Info` entries are validated for length and Modified UTF-8 correctness
-- **Deterministic ordering** — entries are assigned indexes in insertion order; deduplication never reorders existing entries
-- **Import from parsed pools** — `ConstantPoolBuilder.from_pool(list)` seeds the builder from an existing `ClassFile.constant_pool`, preserving all original indexes so existing CP references remain valid; it now also validates index-0 placeholder rules, Long/Double gap slots, Utf8 payload consistency, and MethodHandle constraints before accepting the imported pool
-- **Export to spec format** — `build()` returns a defensive-copy `list[ConstantPoolInfo | None]` identical in structure to `ClassFile.constant_pool`, and `get()` also returns defensive copies so caller mutation cannot corrupt builder state
-- **Pool size guard** — raises `ValueError` if an allocation would exceed the JVM's u2 maximum (65 534 single-slot or 65 533 double-slot)
-
-### `pytecode/edit/model.py`
-
-Mutable editing model for safe classfile manipulation. This module provides the higher-level object model described in issue [#6](https://github.com/smithtrenton/pytecode/issues/6), implementing Design A (Mutable Dataclasses). Four core types form the user-facing editing layer, with label-specific helpers delegated to `pytecode/edit/labels.py`:
-
-- **`ClassModel`** — top-level mutable representation of a class file. Fields use symbolic (resolved) references: `name: str`, `super_name: str | None`, `interfaces: list[str]`, along with `access_flags`, `version: tuple[int, int]`, lists of `FieldModel` and `MethodModel`, class-level attributes, and a `ConstantPoolBuilder`. Provides `from_classfile()` and `from_bytes()` factory methods for construction, `to_classfile()` for lowering back to a spec-faithful `ClassFile`, and `to_bytes()` for direct emission via `ClassWriter`.
-- **`MethodModel`** — mutable representation of a method with resolved `name: str` and `descriptor: str`, `access_flags`, an optional `CodeModel` (`None` for abstract/native methods), and non-Code attributes. The raw `Code` attribute is lifted out of the attribute list into the dedicated `code` field.
-- **`FieldModel`** — mutable representation of a field with resolved `name: str` and `descriptor: str`, `access_flags`, and attributes.
-- **`CodeModel`** — wraps a mixed instruction stream (`InsnInfo` plus `Label` pseudo-instructions), symbolic exception handlers, lifted line/local-variable debug tables, `max_stack`, `max_locals`, and residual nested Code attributes. During `from_classfile()`, all supported instruction families are lifted to symbolic wrappers: branch/switch instructions become `BranchInsn`/`LookupSwitchInsn`/`TableSwitchInsn`; field/method/type/LDC/invoke-dynamic/multianewarray constant-pool instructions become their corresponding operand wrappers from `pytecode.edit.operands`; local-variable slot instructions (including all implicit `ILOAD_0`–`ASTORE_3` variants and WIDE forms) become `VarInsn`. All symbolic wrappers lower back to spec-shaped raw instructions during `to_classfile()`.
-
- The model carries a `ConstantPoolBuilder` seeded from the original constant pool so that raw attributes and any still-raw instruction operands remain valid through editing. Symbolic references are resolved during `from_classfile()` and re-allocated during `to_classfile()`. Both conversion directions use deep copies for all mutable raw structures they retain (attribute lists, instruction records, and constant-pool-backed payloads) so the `ClassModel` owns its data independently from the source `ClassFile` — consistent with the defensive-copy convention already used by `ConstantPoolBuilder`. `CodeModel` also preserves nested `Code`-attribute ordering metadata so unmodified `ClassModel.to_bytes()` roundtrips can remain byte-identical.
-
-For the design rationale behind this editing model, see [editing model design rationale](../design/editing-model.md).
+- `pytecode/edit/model.py` — `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` (replaced by `RustClassModel`)
+- `pytecode/edit/labels.py` — label resolution and bytecode lowering
+- `pytecode/edit/operands.py` — symbolic instruction wrappers
+- `pytecode/edit/constant_pool_builder.py` — constant pool management
+- `pytecode/classfile/reader.py` — classfile parsing (replaced by `ClassReader` in `_rust`)
+- `pytecode/classfile/writer.py` — classfile serialization (replaced by `ClassWriter` in `_rust`)
+- `pytecode/classfile/info.py` — `ClassFile`, `FieldInfo`, `MethodInfo` dataclasses (replaced by Rust `ClassFile`)
+- `pytecode/classfile/constant_pool.py` — constant pool entry dataclasses
+- `pytecode/classfile/descriptors.py` — descriptor and signature parsing
 
 ### `pytecode/transforms/__init__.py`
 
-Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
+Composable transform helpers for JVM class manipulation:
 
-- **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes. `FieldTransform` and `MethodTransform` receive the owning `ClassModel` as a second argument; `CodeTransform` receives the owning `MethodModel` and `ClassModel` so transforms can inspect their traversal context
 - **Rust-first transform surface** — `pytecode.transforms.rust` is the canonical production API, centered on `RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories that execute natively in Rust
-- **Legacy Python transform DSL** — `Pipeline`, `pipeline()`, and the `on_*` lifting helpers remain available as compatibility surfaces for Python-owned model flows and callback-oriented extensions, but they are no longer the primary hot-path architecture
-- **`Matcher` DSL** — callable `Matcher` predicates with `&` / `|` / `~` composition and readable reprs
-- **Selection helpers** — exact-match, regex, semantic, and access-flag convenience helpers for classes, fields, and methods, plus predicate combinators `all_of()`, `any_of()`, and `not_()` for callers that prefer functional composition
-
-Traversal of fields and methods uses collection snapshots so transforms can mutate `ClassModel.fields` / `ClassModel.methods` without changing which original elements are visited during the current pass.
+- **Compatibility callback surface** — `Pipeline`, `pipeline()`, and the `on_*` lifting helpers remain available for callback-oriented extensions, but they are explicitly non-hot-path and operate on Rust-owned models
 
 ### `pytecode/analysis/hierarchy.py`
 
-Hierarchy-resolution helpers introduced for issue [#8](https://github.com/smithtrenton/pytecode/issues/8). This module provides:
+Hierarchy-resolution helpers, now primarily delegating to Rust-backed implementations:
 
 - **Resolved snapshots** — `ResolvedClass` and `ResolvedMethod` frozen dataclasses for hierarchy-relevant class metadata, plus `InheritedMethod` for reporting matching inherited declarations
 - **Pluggable interface** — `ClassResolver`, a minimal protocol that resolves an internal class name to a `ResolvedClass | None`
-- **Built-in implementation** — `MappingClassResolver` for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
-- **Query helpers** — `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()`
-- **Explicit failure modes** — `UnresolvedClassError` for missing classes and `HierarchyCycleError` for malformed ancestry loops
-
-To keep ordinary project graphs ergonomic, the module treats `java/lang/Object` as an implicit root if a resolver does not provide it explicitly; otherwise missing hierarchy data is surfaced as an error rather than guessed.
-
-### `pytecode/edit/operands.py`
-
-Symbolic editing-model wrappers for non-control-flow instructions, introduced for issue [#16](https://github.com/smithtrenton/pytecode/issues/16). All wrappers inherit from `InsnInfo` so that the existing `type CodeItem = InsnInfo | Label` alias requires no changes.
-
-**Instruction wrappers:**
-
-- **`FieldInsn`** — `GETFIELD`, `PUTFIELD`, `GETSTATIC`, `PUTSTATIC`; fields `owner: str`, `name: str`, `descriptor: str`
-- **`MethodInsn`** — `INVOKEVIRTUAL`, `INVOKESPECIAL`, `INVOKESTATIC`; fields `owner`, `name`, `descriptor`, `is_interface: bool` (needed for interface-targeted INVOKESTATIC/INVOKESPECIAL since Java 8+)
-- **`InterfaceMethodInsn`** — `INVOKEINTERFACE`; fields `owner`, `name`, `descriptor`; `count` is auto-computed from the descriptor during lowering
-- **`TypeInsn`** — `NEW`, `CHECKCAST`, `INSTANCEOF`, `ANEWARRAY`; field `class_name: str`
-- **`VarInsn`** — all local-variable load/store/RET opcodes including implicit `ILOAD_0`–`ASTORE_3` (40 variants) and WIDE forms, normalized to a canonical `(base_opcode, slot)` pair; slots are validated to fit the JVM `u2` range, and lowering selects the optimal encoding (implicit → explicit → WIDE, including `RETW`)
-- **`IIncInsn`** — `IINC` and `IINCW`, normalized to `(slot, increment)`; `slot` is validated to fit `u2`, `increment` is validated to fit `i2`, and lowering picks narrow or wide form based on operand range
-- **`LdcInsn`** — `LDC`, `LDC_W`, `LDC2_W`; field `value: LdcValue`; lowering selects the minimal encoding: `LDC` (2 bytes) when the CP index fits in one byte (≤ 255), `LDC_W` (3 bytes) otherwise; double-category constants always use `LDC2_W` (3 bytes)
-- **`InvokeDynamicInsn`** — `INVOKEDYNAMIC`; fields `bootstrap_method_attr_index: int`, `name: str`, `descriptor: str`; bootstrap indexes are validated to fit JVM `u2`
-- **`MultiANewArrayInsn`** — `MULTIANEWARRAY`; fields `class_name: str`, `dimensions: int`; dimensions are validated to fit JVM `u1` range `1..255`
-
-**LDC value type hierarchy** (`LdcValue` union):
-`LdcInt`, `LdcFloat`, `LdcLong`, `LdcDouble`, `LdcString`, `LdcClass`, `LdcMethodType`, `LdcMethodHandle`, `LdcDynamic` — frozen dataclasses carrying the typed constant payload.
-
-**Mapping tables:** `_IMPLICIT_VAR_SLOTS` / `_VAR_SHORTCUTS` (40 implicit-slot ↔ base-opcode/slot pairs), `_WIDE_TO_BASE` / `_BASE_TO_WIDE` (11 WIDE variant ↔ base opcode pairs).
-
-### `pytecode/edit/labels.py`
-
-Label-based bytecode editing helpers and lowering utilities introduced for issue [#7](https://github.com/smithtrenton/pytecode/issues/7). This module owns the symbolic control-flow layer:
-
-- **`Label`** — identity-based pseudo-instruction marker for bytecode positions
-- **`BranchInsn` / `LookupSwitchInsn` / `TableSwitchInsn`** — editing-model control-flow instructions that target labels instead of raw offsets
-- **`ExceptionHandler` / `LineNumberEntry` / `LocalVariableEntry` / `LocalVariableTypeEntry`** — lifted exception/debug metadata bound to labels rather than byte offsets
-- **`resolve_labels()`** — computes byte offsets for labels and instructions in a mixed `InsnInfo | Label` stream; for single-slot `LdcInsn` values, exact sizing uses a provided `ConstantPoolBuilder` context without mutating the live pool
-- **`lower_code()`** — lowers symbolic code back to a raw `CodeAttr`, recalculating offsets and switch padding, promoting `GOTO`/`JSR` to wide forms, inverting overflowing conditional branches, reconstructing lifted debug attributes, and lowering all operand wrappers from `pytecode.edit.operands` to spec-shaped raw instructions with correct CP index allocation
-
-For the broader design rationale, trade-offs, and future phases behind this editing model, see [editing model design rationale](../design/editing-model.md).
+- **Built-in Rust-backed implementation** — `MappingClassResolver` (backed by `RustMappingClassResolver`) for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
+- **Query helpers** — `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — delegating to Rust when using a Rust resolver
 
 ### `pytecode/analysis/__init__.py`
 
-Control-flow graph construction and stack/local simulation introduced for issue [#9](https://github.com/smithtrenton/pytecode/issues/9). This module provides the analysis layer that sits between the editing model, frame computation, and validation:
+Re-exports Rust-backed verification and hierarchy helpers. The analysis package provides:
 
-- **Verification type system** — a `VType` union (VTop, VInteger, VFloat, VLong, VDouble, VNull, VObject, VUninitializedThis, VUninitialized) mirroring JVM spec §4.10.1.2. Helper functions `vtype_from_descriptor()`, `is_category2()`, `is_reference()`, and `merge_vtypes()` for type conversions and join-point merging.
-- **Opcode metadata** — an `OpcodeEffect` dataclass and `OPCODE_EFFECTS` lookup table covering the supported JVM instruction set with stack pop/push counts, branch/switch/return/unconditional flags. Variable-effect instructions (invoke, field access, LDC, multianewarray) use sentinel values and are computed dynamically during simulation.
-- **Frame state** — a frozen `FrameState` dataclass tracking operand stack and local variable slots as `VType` tuples, with category-2-aware `push`/`pop`/`set_local`/`get_local` operations. `initial_frame()` builds the entry frame from a `MethodModel`'s descriptor and access flags.
-- **CFG construction** — `build_cfg()` partitions a `CodeModel`'s instruction stream into `BasicBlock` nodes with fall-through, branch, switch, and exception-handler edges. Block leaders are identified from branch targets, exception handler labels, and post-terminal instructions.
-- **Stack simulation** — `simulate()` performs forward dataflow analysis over the CFG using a worklist algorithm, propagating `FrameState` through each instruction and merging at join points. Returns a `SimulationResult` with per-block entry/exit states, computed `max_stack`, and `max_locals`.
-- **Error types** — `AnalysisError`, `StackUnderflowError`, `InvalidLocalError`, and `TypeMergeError` for structured simulation diagnostics.
-
-The module operates on `CodeModel` (the symbolic editing model) and accepts an optional `ClassResolver` from `pytecode.analysis.hierarchy` for reference-type merging at join points, defaulting to conservative `java/lang/Object` collapse when unavailable. It now provides max_stack/max_locals recomputation and StackMapTable generation ([#10](https://github.com/smithtrenton/pytecode/issues/10)) and is consumed by the validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11)).
+- `verify_classfile()` and `verify_classmodel()` — thin wrappers around Rust verifier
+- `MappingClassResolver` — Rust-backed hierarchy resolver
+- `Diagnostic` — structured validation diagnostic type
 
 ### `pytecode/analysis/verify.py`
 
-Structural classfile validation with structured diagnostics, introduced for issue [#11](https://github.com/smithtrenton/pytecode/issues/11). This module validates both the parsed `ClassFile` model and the mutable `ClassModel`:
+Thin facade over the Rust verifier. Entry points `verify_classfile()` and `verify_classmodel()` accept Rust-native classfiles, readers, and models, normalizing inputs before delegating to the Rust extension.
 
-- **Diagnostics model** — `Diagnostic` dataclass with `severity` (`Severity`: ERROR, WARNING, INFO), `category` (`Category`: MAGIC, VERSION, CONSTANT_POOL, ACCESS_FLAGS, CLASS_STRUCTURE, FIELD, METHOD, CODE, ATTRIBUTE, DESCRIPTOR), `location` (`Location` with optional class name, method/field, CP index, bytecode offset), and a human-readable `message`
-- **Entry points** — `verify_classfile(cf, *, fail_fast=False)` validates a parsed `ClassFile`; `verify_classmodel(cm, *, fail_fast=False)` validates a mutable `ClassModel`. Both return `list[Diagnostic]` collecting all issues by default; with `fail_fast=True` they raise `FailFastError` on the first ERROR-severity diagnostic
-- **Checks performed** — magic number, version range, constant-pool well-formedness (tag validity, index bounds, structural constraints), access flag mutual exclusions, class structure (this_class, super_class, interfaces), field and method constraints, Code attribute validation (branches, exception handlers, CP reference validity), attribute versioning, descriptor validation, and ClassModel-specific label validity
+### `pytecode/analysis/hierarchy.py`
 
-Not exported from `pytecode.__init__`; import directly: `from pytecode.analysis.verify import verify_classfile, verify_classmodel`.
+Hierarchy-resolution helpers, now primarily delegating to Rust-backed implementations:
 
-### CFG differential validation infrastructure
-
-Issue [#17](https://github.com/smithtrenton/pytecode/issues/17) added a JVM-backed differential validation layer for `build_cfg()` in the test suite:
-
-- **`tests/resources/oracle/RecordingAnalyzer.java`** compiles against ASM 9.7.1 (`asm`, `asm-tree`, `asm-analysis`, `asm-util`) and records instruction-level normal edges, exceptional edges, and try/catch table entries as JSON.
-- **`tests/cfg_oracle.py`** parses that JSON and normalizes both ASM output and `pytecode.analysis.ControlFlowGraph` instances into the same block-level comparison model: block spans, normal successor sets, exception handler sets, and entry block identity.
-- **`tests/test_cfg_oracle.py`** differentially validates both `tests/resources/CfgFixture.java` and `tests/resources/CfgEdgeCaseFixture.java`. The suite uses the `oracle` pytest marker, skips cleanly when the JVM or ASM jars are unavailable, and caches downloaded ASM jars under `.pytest_cache/pytecode-oracle` while also honoring `tests/resources/oracle/lib`.
+- **Resolved snapshots** — `ResolvedClass` and `ResolvedMethod` frozen dataclasses for hierarchy-relevant class metadata, plus `InheritedMethod` for reporting matching inherited declarations
+- **Pluggable interface** — `ClassResolver`, a minimal protocol that resolves an internal class name to a `ResolvedClass | None`
+- **Built-in Rust-backed implementation** — `MappingClassResolver` (backed by `RustMappingClassResolver`) for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
+- **Query helpers** — `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — delegating to Rust when using a Rust resolver
 
 ### `pytecode/archive/__init__.py`
 
-JAR container support. This module now covers archive reading, class/non-class separation, in-memory entry mutation, and safe rewrite-to-disk behavior. `JarFile.add_file()` and `remove_file()` update the in-memory archive state, while `JarFile.rewrite()` can either copy entries verbatim or lift `.class` entries through `ClassModel` for in-place transforms before writing a temporary archive and replacing the destination. The `transform=` parameter accepts any supported class transform, including callable `Pipeline` objects from `pytecode.transforms`. Signature-related files are preserved as ordinary resources and are not re-signed automatically.
+JAR container support. `JarFile` reads archive contents, separates `.class` entries from non-class resources, and supports safe rewrite workflows. `JarFile.rewrite()` delegates unchanged-on-disk archives with Rust-backed transforms to the Rust archive crate (`pytecode-archive`), keeping the hot rewrite loop in Rust. The Python fallback path handles in-memory archive edits and Python callback transforms.
 
 ### `run.py`
 
-A repository smoke-test script that parses a JAR, writes pretty-printed parsed class output under a `parsed` subtree, and writes `.class` files from lifted `ClassModel` instances under a `rewritten` subtree alongside copied resource files. This is primarily a manual validation utility for ad hoc inspection of real archives during development.
+A repository smoke-test script for ad hoc inspection of real archives during development.
 
 ## Current data flow
 
 ### Class parsing
 
-1. Raw bytes are wrapped in `BytesReader`.
-2. `ClassReader.read_class()` validates the header and version.
-3. Constant-pool entries are decoded into typed objects.
-4. Field, method, and class attributes are parsed recursively.
-5. `Code` attributes are decoded into typed instruction objects.
-6. The final parsed result is stored as an `info.ClassFile` object on `ClassReader.class_info`.
+1. `ClassReader.from_bytes()` (Rust-backed) parses classfile bytes through the Rust engine.
+2. The parsed result is a Rust-backed `ClassFile` spec model on `ClassReader.class_info`.
+3. For editing, `ClassModel.from_bytes()` or `ClassModel.from_classfile()` produces a Rust-backed mutable model.
 
 ### JAR parsing
 
 1. `JarFile` reads each ZIP entry into memory.
-2. Entries ending in `.class` are parsed with `ClassReader`.
+2. Entries ending in `.class` are parsed with `ClassReader` (Rust-backed).
 3. Non-class resources are preserved as raw bytes.
-4. Callers receive `(JarInfo, ClassReader)` pairs for classes and `JarInfo` records for other files.
 
 ### JAR rewriting
 
 1. Callers optionally mutate the in-memory archive state with `JarFile.add_file()` / `remove_file()`.
-2. `JarFile.rewrite()` iterates the current entry order and copies non-class resources verbatim.
-3. When class rewriting is requested, `.class` entries are lifted through `ClassModel`, transformed in place, and lowered back to bytes with the existing classfile emission stack.
-4. The updated archive is written to a temporary ZIP and atomically replaced at the destination path.
-5. After a successful rewrite, `JarFile` refreshes itself from disk so its in-memory state matches the written archive metadata.
+2. `JarFile.rewrite()` delegates to the Rust archive crate for unchanged-on-disk archives with Rust transforms.
+3. The Rust archive crate iterates entries, applies transforms, and writes the output archive.
+4. After a successful rewrite, `JarFile` refreshes itself from disk so its in-memory state matches the written archive metadata.
 
 ## Design characteristics
 

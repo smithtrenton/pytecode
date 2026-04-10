@@ -102,8 +102,8 @@ For code-shape changes, pass `recompute_frames=True`. For an ASM-like lift path 
 
 Top-level exports:
 
-- `pytecode.ClassReader`, `pytecode.ClassWriter`, `pytecode.RustClassReader`, and `pytecode.RustClassWriter` for Rust-backed raw classfile parsing and emission.
-- `pytecode.ClassModel` and `pytecode.RustClassModel` for Rust-owned mutable editing.
+- `pytecode.ClassReader` / `pytecode.ClassWriter` for Rust-backed raw classfile parsing and emission (also available as `RustClassReader` / `RustClassWriter`).
+- `pytecode.ClassModel` for Rust-owned mutable editing (also available as `RustClassModel`).
 - `pytecode.MappingClassResolver`, `pytecode.verify_classfile`, and `pytecode.verify_classmodel` for Rust-backed analysis and verification.
 - `pytecode.JarFile` for Rust-backed archive reads and rewrite workflows.
 

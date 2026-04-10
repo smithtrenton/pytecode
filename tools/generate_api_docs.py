@@ -21,7 +21,6 @@ PUBLIC_MODULES: list[str] = [
     "pytecode",
     "pytecode.analysis",
     "pytecode.classfile.constants",
-    "pytecode.classfile.descriptors",
     "pytecode.analysis.hierarchy",
     "pytecode.archive",
     "pytecode.classfile.modified_utf8",
