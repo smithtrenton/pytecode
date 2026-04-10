@@ -1,20 +1,23 @@
-"""Rust-first transform helpers for pytecode."""
+"""Canonical Rust-first transform API.
+
+This module collects the Rust-backed matcher factories, transform factories,
+and pipeline builder into a single import surface:
+
+    from pytecode.transforms.rust import (
+        RustPipelineBuilder,
+        add_access_flags,
+        class_named,
+        method_is_public,
+    )
+
+Use this module for production transform workflows. The older
+``pytecode.transforms`` Python matcher/pipeline DSL remains available only as
+the compatibility path during migration.
+"""
 
 from __future__ import annotations
 
-from .._rust import (
-    RustClassMatcher,
-    RustClassTransform,
-    RustCompiledPipeline,
-    RustFieldMatcher,
-    RustMethodMatcher,
-    RustPipeline,
-)
-from . import rust
-from .rust import (
-    RustPipelineBuilder,
-    add_access_flags,
-    add_interface,
+from .rust_matchers import (
     class_access,
     class_access_any,
     class_is_abstract,
@@ -72,6 +75,11 @@ from .rust import (
     method_name_matches,
     method_named,
     method_returns,
+)
+from .rust_pipeline import RustPipelineBuilder
+from .rust_transforms import (
+    add_access_flags,
+    add_interface,
     remove_access_flags,
     remove_field,
     remove_interface,
@@ -87,12 +95,6 @@ from .rust import (
 )
 
 __all__ = [
-    "RustClassMatcher",
-    "RustClassTransform",
-    "RustCompiledPipeline",
-    "RustFieldMatcher",
-    "RustMethodMatcher",
-    "RustPipeline",
     "RustPipelineBuilder",
     "add_access_flags",
     "add_interface",
@@ -160,7 +162,6 @@ __all__ = [
     "rename_class",
     "rename_field",
     "rename_method",
-    "rust",
     "sequence",
     "set_access_flags",
     "set_field_access_flags",

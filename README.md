@@ -47,21 +47,21 @@ print(classfile.methods_count)
 Path("HelloWorld-copy.class").write_bytes(ClassWriter.write(classfile))
 ```
 
-### Lift to the editable model
+### Edit through the Rust-owned model
 
 ```python
 from pathlib import Path
 
-from pytecode import ClassModel
+from pytecode import RustClassModel
 
-model = ClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
+model = RustClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
 print(model.name)
 
 updated_bytes = model.to_bytes()
 Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 ```
 
-Use `recompute_frames=True` when an edit changes control flow or stack/local layout.
+Use `to_bytes_with_options(recompute_frames=True)` when an edit changes control flow or stack/local layout.
 
 ## JAR rewriting example
 
@@ -69,56 +69,65 @@ Use `recompute_frames=True` when an edit changes control flow or stack/local lay
 
 ```python
 from pytecode import JarFile
-from pytecode.classfile.constants import MethodAccessFlag
-from pytecode.edit.model import ClassModel, MethodModel
-from pytecode.transforms import (
+from pytecode.transforms.rust import (
+    RustPipelineBuilder,
+    add_access_flags,
     class_named,
     method_is_public,
     method_is_static,
     method_name_matches,
-    on_methods,
-    pipeline,
 )
 
 
-def make_final(method: MethodModel, _owner: ClassModel) -> None:
-    method.access_flags |= MethodAccessFlag.FINAL
+pipeline = (
+    RustPipelineBuilder()
+    .on_methods(
+        method_name_matches(r"main") & method_is_public() & method_is_static(),
+        add_access_flags(0x0010),
+        owner_matcher=class_named("HelloWorld"),
+    )
+    .build()
+)
 
 
 JarFile("input.jar").rewrite(
     "output.jar",
-    transform=pipeline(
-        on_methods(
-            make_final,
-            where=method_name_matches(r"main") & method_is_public() & method_is_static(),
-            owner=class_named("HelloWorld"),
-        )
-    ),
+    transform=pipeline.apply,
 )
 ```
 
-Transforms must mutate models in place and return `None`. For code-shape changes, pass `recompute_frames=True`. For an ASM-like lift path that omits debug metadata, pass `skip_debug=True`.
+For code-shape changes, pass `recompute_frames=True`. For an ASM-like lift path that omits debug metadata, pass `skip_debug=True`.
 
 ## Public surface
 
 Top-level exports:
 
-- `pytecode.ClassReader` and `pytecode.ClassWriter` for raw classfile parsing and emission.
-- `pytecode.JarFile` for archive reads, mutation, and safe rewrite-to-disk.
-- `pytecode.ClassModel` for mutable editing with symbolic references.
+- `pytecode.ClassReader`, `pytecode.ClassWriter`, `pytecode.RustClassReader`, and `pytecode.RustClassWriter` for Rust-backed raw classfile parsing and emission.
+- `pytecode.ClassModel` and `pytecode.RustClassModel` for Rust-owned mutable editing.
+- `pytecode.MappingClassResolver`, `pytecode.verify_classfile`, and `pytecode.verify_classmodel` for Rust-backed analysis and verification.
+- `pytecode.JarFile` for Rust-backed archive reads and rewrite workflows.
+
+### Rust-first API map
+
+| Removed entry point | Current replacement |
+| --- | --- |
+| `pytecode.classfile.reader.ClassReader(...)` | `pytecode.ClassReader.from_bytes(...)` |
+| `pytecode.classfile.writer.ClassWriter.write(...)` | `pytecode.ClassWriter.write(...)` |
+| `pytecode.edit.model.ClassModel.from_bytes(...)` | `pytecode.ClassModel.from_bytes(...)` |
+| `pytecode.analysis.verify.verify_classfile(...)` | `pytecode.verify_classfile(...)` |
+| `pytecode.analysis.verify.verify_classmodel(...)` | `pytecode.verify_classmodel(...)` |
+| `pytecode.analysis.hierarchy.MappingClassResolver` | `pytecode.MappingClassResolver` |
+| Legacy Python matcher / transform DSL | `pytecode.transforms.rust.RustPipelineBuilder` plus `pytecode.transforms.rust` helpers |
 
 Supported submodules:
 
-- `pytecode.transforms` for composable class, field, method, and code transforms.
-- `pytecode.edit.labels` for label-aware bytecode editing helpers.
-- `pytecode.edit.operands` for symbolic operand wrappers.
-- `pytecode.analysis` for CFG construction, frame simulation, and recomputation helpers.
+- `pytecode.transforms` and `pytecode.transforms.rust` for Rust-backed class, field, and method transforms.
+- `pytecode.analysis` for Rust-backed verification entry points.
 - `pytecode.analysis.verify` for structural validation and diagnostics.
 - `pytecode.analysis.hierarchy` for type and override resolution helpers.
 - `pytecode.classfile.descriptors` for JVM descriptors and generic signatures.
-- `pytecode.edit.constant_pool_builder` for deterministic constant-pool construction.
+- `pytecode.classfile.constants` for access flags, opcodes, and verifier constants.
 - `pytecode.classfile.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
-- `pytecode.edit.debug_info` for explicit debug-info preservation and stripping policies.
 
 ## Documentation
 
@@ -157,12 +166,11 @@ uv run python tools\benchmark_jar_pipeline.py crates\pytecode-engine\fixtures\ja
 uv run python tools\compare_rust_python_benchmarks.py --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5 --output output\benchmarks\rust-vs-python-byte-buddy.json
 cargo run -p pytecode-cli -- class-summary --path target\pytecode-rust-javac\release-8\HelloWorld\classes\HelloWorld.class
 cargo run -p pytecode-cli -- rewrite-smoke --jar input.jar --output output.jar --class-name HelloWorld
-uv run python tools\compare_rust_python.py
 ```
 
-Rust-owned fixtures now live under `crates\pytecode-engine\fixtures\`. Rust crate tests only read those copied fixture sources and do not invoke Python. The Rust harness lazily compiles `crates\pytecode-engine\fixtures\java\*.java` into `target\pytecode-rust-javac\...` and only reruns `javac` when the source bytes, required `--release`, or `javac` identity changes. Cross-language Rust-vs-Python checks live in `tools\compare_rust_python.py`, which exports JSON from each side and compares outside the Rust test suites.
+Rust-owned fixtures now live under `crates\pytecode-engine\fixtures\`. Rust crate tests only read those copied fixture sources and do not invoke Python. The Rust harness lazily compiles `crates\pytecode-engine\fixtures\java\*.java` into `target\pytecode-rust-javac\...` and only reruns `javac` when the source bytes, required `--release`, or `javac` identity changes.
 
-`bench-smoke` now reports isolated-stage timing samples with median+spread summaries instead of only one accumulated elapsed total. `tools\benchmark_jar_pipeline.py` mirrors that isolated-stage reporting for the Python implementation, and `tools\compare_rust_python_benchmarks.py` runs release-mode Rust against Python on the same jar so benchmark artifacts stay comparable.
+`bench-smoke` now reports isolated-stage timing samples with median+spread summaries instead of only one accumulated elapsed total. `tools\benchmark_jar_pipeline.py` mirrors that isolated-stage reporting for the wrapper-inclusive Python path, and `tools\compare_rust_python_benchmarks.py` frames the result as native Rust timings versus Python wrapper overhead on the same jar.
 
 Small Rust examples now live under `crates\pytecode-engine\examples\finalize_main.rs` and `crates\pytecode-archive\examples\rewrite_jar.rs` to show direct transform and archive rewrite workflows without going through the CLI.
 
@@ -187,7 +195,9 @@ Current Rust implementation status:
 - benchmark `model-lift` and `model-lower` stages now exercise the real symbolic pipeline, and focused Rust tests cover exact roundtrip fidelity, debug-info strip/stale behavior, interface-backed method references, conditional branch widening, switch-layout edits, hierarchy queries, CFG construction, structured verifier diagnostics, bootstrap/signature validation, legacy subroutine handling, transform pipeline behavior, archive rewrite behavior, and end-to-end `StackMapTable` recomputation for edited methods,
 - phase 6 added benchmark-report tooling, examples, public-surface polish, and packaging polish on top of the completed lowering and analysis stack,
 - phase 7 added `pytecode-python`, `maturin`-built source/platform distributions, a Rust-backed `pytecode._rust` extension module, and compatibility bridges so `ClassModel.from_classfile`, `ResolvedClass.from_classfile`, `verify_classfile`, and `ClassWriter.write` all accept Rust-backed classfiles,
-- the default `ClassReader` parse path now goes through the Rust extension when available, while keeping the old Python reader methods as compatibility helpers for low-level tests and niche callers.
+- the default `ClassReader` parse path now always goes through the Rust extension,
+- `ClassModel.from_bytes()` now single-parses through Rust, preserves original bytes for byte-exact clean roundtrips, and routes the normal code-mutation serialization path back through Rust,
+- the canonical top-level Python surface is now Rust-owned objects (`RustClassModel`, Rust-backed verification, and Rust-backed resolver types); the older Python-owned model/edit APIs have been removed.
 
 Generate local API reference HTML with:
 

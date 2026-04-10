@@ -1,4 +1,4 @@
-"""Representations of JVM constant pool entry types (§4.4)."""
+"""Representations of JVM constant pool entry types (┬º4.4)."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ __all__ = [
 
 @dataclass
 class ConstantPoolInfo:
-    """Base class for all constant pool entry types (§4.4)."""
+    """Base class for all constant pool entry types (┬º4.4)."""
 
     index: int
     offset: int
@@ -39,7 +39,7 @@ class ConstantPoolInfo:
 
 @dataclass
 class Utf8Info(ConstantPoolInfo):
-    """CONSTANT_Utf8_info entry (§4.4.7)."""
+    """CONSTANT_Utf8_info entry (┬º4.4.7)."""
 
     length: int
     str_bytes: bytes
@@ -47,21 +47,21 @@ class Utf8Info(ConstantPoolInfo):
 
 @dataclass
 class IntegerInfo(ConstantPoolInfo):
-    """CONSTANT_Integer_info entry (§4.4.4)."""
+    """CONSTANT_Integer_info entry (┬º4.4.4)."""
 
     value_bytes: int
 
 
 @dataclass
 class FloatInfo(ConstantPoolInfo):
-    """CONSTANT_Float_info entry (§4.4.4)."""
+    """CONSTANT_Float_info entry (┬º4.4.4)."""
 
     value_bytes: int
 
 
 @dataclass
 class LongInfo(ConstantPoolInfo):
-    """CONSTANT_Long_info entry (§4.4.5)."""
+    """CONSTANT_Long_info entry (┬º4.4.5)."""
 
     high_bytes: int
     low_bytes: int
@@ -69,7 +69,7 @@ class LongInfo(ConstantPoolInfo):
 
 @dataclass
 class DoubleInfo(ConstantPoolInfo):
-    """CONSTANT_Double_info entry (§4.4.5)."""
+    """CONSTANT_Double_info entry (┬º4.4.5)."""
 
     high_bytes: int
     low_bytes: int
@@ -77,21 +77,21 @@ class DoubleInfo(ConstantPoolInfo):
 
 @dataclass
 class ClassInfo(ConstantPoolInfo):
-    """CONSTANT_Class_info entry (§4.4.1)."""
+    """CONSTANT_Class_info entry (┬º4.4.1)."""
 
     name_index: int
 
 
 @dataclass
 class StringInfo(ConstantPoolInfo):
-    """CONSTANT_String_info entry (§4.4.3)."""
+    """CONSTANT_String_info entry (┬º4.4.3)."""
 
     string_index: int
 
 
 @dataclass
 class FieldrefInfo(ConstantPoolInfo):
-    """CONSTANT_Fieldref_info entry (§4.4.2)."""
+    """CONSTANT_Fieldref_info entry (┬º4.4.2)."""
 
     class_index: int
     name_and_type_index: int
@@ -99,7 +99,7 @@ class FieldrefInfo(ConstantPoolInfo):
 
 @dataclass
 class MethodrefInfo(ConstantPoolInfo):
-    """CONSTANT_Methodref_info entry (§4.4.2)."""
+    """CONSTANT_Methodref_info entry (┬º4.4.2)."""
 
     class_index: int
     name_and_type_index: int
@@ -107,7 +107,7 @@ class MethodrefInfo(ConstantPoolInfo):
 
 @dataclass
 class InterfaceMethodrefInfo(ConstantPoolInfo):
-    """CONSTANT_InterfaceMethodref_info entry (§4.4.2)."""
+    """CONSTANT_InterfaceMethodref_info entry (┬º4.4.2)."""
 
     class_index: int
     name_and_type_index: int
@@ -115,7 +115,7 @@ class InterfaceMethodrefInfo(ConstantPoolInfo):
 
 @dataclass
 class NameAndTypeInfo(ConstantPoolInfo):
-    """CONSTANT_NameAndType_info entry (§4.4.6)."""
+    """CONSTANT_NameAndType_info entry (┬º4.4.6)."""
 
     name_index: int
     descriptor_index: int
@@ -123,7 +123,7 @@ class NameAndTypeInfo(ConstantPoolInfo):
 
 @dataclass
 class MethodHandleInfo(ConstantPoolInfo):
-    """CONSTANT_MethodHandle_info entry (§4.4.8)."""
+    """CONSTANT_MethodHandle_info entry (┬º4.4.8)."""
 
     reference_kind: int
     reference_index: int
@@ -131,14 +131,14 @@ class MethodHandleInfo(ConstantPoolInfo):
 
 @dataclass
 class MethodTypeInfo(ConstantPoolInfo):
-    """CONSTANT_MethodType_info entry (§4.4.9)."""
+    """CONSTANT_MethodType_info entry (┬º4.4.9)."""
 
     descriptor_index: int
 
 
 @dataclass
 class DynamicInfo(ConstantPoolInfo):
-    """CONSTANT_Dynamic_info entry (§4.4.10)."""
+    """CONSTANT_Dynamic_info entry (┬º4.4.10)."""
 
     bootstrap_method_attr_index: int
     name_and_type_index: int
@@ -146,7 +146,7 @@ class DynamicInfo(ConstantPoolInfo):
 
 @dataclass
 class InvokeDynamicInfo(ConstantPoolInfo):
-    """CONSTANT_InvokeDynamic_info entry (§4.4.10)."""
+    """CONSTANT_InvokeDynamic_info entry (┬º4.4.10)."""
 
     bootstrap_method_attr_index: int
     name_and_type_index: int
@@ -154,14 +154,14 @@ class InvokeDynamicInfo(ConstantPoolInfo):
 
 @dataclass
 class ModuleInfo(ConstantPoolInfo):
-    """CONSTANT_Module_info entry (§4.4.11)."""
+    """CONSTANT_Module_info entry (┬º4.4.11)."""
 
     name_index: int
 
 
 @dataclass
 class PackageInfo(ConstantPoolInfo):
-    """CONSTANT_Package_info entry (§4.4.12)."""
+    """CONSTANT_Package_info entry (┬º4.4.12)."""
 
     name_index: int
 

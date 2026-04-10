@@ -22,7 +22,7 @@ use crate::raw::{
     AttributeInfo, Branch, ClassFile, CodeAttribute, ConstantPoolEntry, FieldInfo, Instruction,
     InvokeDynamicInsn as RawInvokeDynamicInsn, InvokeInterfaceInsn as RawInvokeInterfaceInsn,
     LookupSwitchInsn as RawLookupSwitchInsn, MatchOffsetPair, MethodInfo, RawClassStub,
-    TableSwitchInsn as RawTableSwitchInsn, WideInstruction,
+    TableSwitchInsn as RawTableSwitchInsn, UnknownAttribute, WideInstruction,
 };
 use crate::{EngineError, EngineErrorKind, Result, parse_class, write_class};
 use std::collections::{BTreeMap, HashMap};
@@ -56,6 +56,7 @@ pub struct MethodModel {
     pub name: String,
     pub descriptor: String,
     pub code: Option<CodeModel>,
+    pub pre_built_code_bytes: Option<Vec<u8>>,
     pub attributes: Vec<AttributeInfo>,
     attribute_layout: Vec<MethodAttributeLayout>,
 }
@@ -175,8 +176,17 @@ impl MethodModel {
             name,
             descriptor,
             code,
+            pre_built_code_bytes: None,
             attributes,
             attribute_layout,
+        }
+    }
+
+    pub fn set_prebuilt_code_bytes(&mut self, bytes: Vec<u8>) {
+        self.code = None;
+        self.pre_built_code_bytes = Some(bytes);
+        if !self.attribute_layout.contains(&MethodAttributeLayout::Code) {
+            self.attribute_layout.push(MethodAttributeLayout::Code);
         }
     }
 }
@@ -390,6 +400,7 @@ fn lift_method_model(method: &MethodInfo, cp: &ConstantPoolBuilder) -> Result<Me
         name: cp.resolve_utf8(method.name_index)?,
         descriptor: cp.resolve_utf8(method.descriptor_index)?,
         code,
+        pre_built_code_bytes: None,
         attributes,
         attribute_layout,
     })
@@ -759,22 +770,34 @@ fn lower_method_model(
             method.descriptor
         )));
     }
-    let lowered_code = method
-        .code
-        .as_ref()
-        .map(|code| {
-            lower_code_model(
-                code,
-                method,
-                class_name,
-                class_major_version,
-                cp,
-                debug_info,
-                frame_mode,
-                resolver,
-            )
-        })
-        .transpose()?;
+    let lowered_code: Option<AttributeInfo> = if let Some(code_bytes) = &method.pre_built_code_bytes
+    {
+        let name_index = cp.add_utf8("Code")?;
+        Some(AttributeInfo::Unknown(UnknownAttribute {
+            attribute_name_index: name_index,
+            attribute_length: code_bytes.len() as u32,
+            name: "Code".to_owned(),
+            info: code_bytes.clone(),
+        }))
+    } else {
+        method
+            .code
+            .as_ref()
+            .map(|code| {
+                lower_code_model(
+                    code,
+                    method,
+                    class_name,
+                    class_major_version,
+                    cp,
+                    debug_info,
+                    frame_mode,
+                    resolver,
+                )
+                .map(AttributeInfo::Code)
+            })
+            .transpose()?
+    };
     let mut other_iter = method.attributes.iter().cloned();
     let mut attributes = Vec::new();
     for item in &method.attribute_layout {
@@ -786,7 +809,7 @@ fn lower_method_model(
             }
             MethodAttributeLayout::Code => {
                 if let Some(code) = lowered_code.clone() {
-                    attributes.push(AttributeInfo::Code(code));
+                    attributes.push(code);
                 }
             }
         }
@@ -797,7 +820,7 @@ fn lower_method_model(
         .contains(&MethodAttributeLayout::Code)
         && let Some(code) = lowered_code
     {
-        attributes.push(AttributeInfo::Code(code));
+        attributes.push(code);
     }
 
     Ok(MethodInfo {

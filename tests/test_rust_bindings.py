@@ -1,28 +1,46 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
 
-from pytecode.analysis.hierarchy import ResolvedClass
-from pytecode.analysis.verify import verify_classfile
-from pytecode.classfile.attributes import (
-    BootstrapMethodsAttr,
-    CodeAttr,
-    DeprecatedAttr,
-    LineNumberTableAttr,
-    PermittedSubclassesAttr,
-    RecordAttr,
-    RuntimeVisibleParameterAnnotationsAttr,
-    RuntimeVisibleTypeAnnotationsAttr,
+import pytecode
+import pytecode.analysis as analysis
+from pytecode.analysis.hierarchy import (
+    MappingClassResolver as HierarchyMappingClassResolver,
 )
-from pytecode.classfile.constants import ClassAccessFlag
-from pytecode.classfile.reader import ClassReader
-from pytecode.classfile.writer import ClassWriter
-from pytecode.edit.model import ClassModel
+from pytecode.analysis.hierarchy import (
+    ResolvedClass,
+    common_superclass,
+    is_subtype,
+    iter_superclasses,
+    iter_supertypes,
+)
 from tests.helpers import compile_java_resource, compile_java_resource_classes
 
 rust = pytest.importorskip("pytecode._rust")
+
+
+def test_top_level_rust_first_exports() -> None:
+    assert pytecode.ClassReader is rust.ClassReader
+    assert pytecode.ClassWriter is rust.ClassWriter
+    assert pytecode.ClassModel is rust.RustClassModel
+    assert pytecode.RustClassReader is rust.ClassReader
+    assert pytecode.RustClassWriter is rust.ClassWriter
+    assert pytecode.RustClassModel is rust.RustClassModel
+    assert pytecode.MappingClassResolver is rust.RustMappingClassResolver
+    assert pytecode.Diagnostic is rust.RustDiagnostic
+    assert not hasattr(pytecode, "LegacyClassReader")
+    assert not hasattr(pytecode, "LegacyClassWriter")
+    assert not hasattr(pytecode, "LegacyClassModel")
+
+
+def test_analysis_package_rust_first_exports() -> None:
+    assert analysis.MappingClassResolver is rust.RustMappingClassResolver
+    assert analysis.Diagnostic is rust.RustDiagnostic
+    assert callable(analysis.verify_classfile)
+    assert callable(analysis.verify_classmodel)
 
 
 def test_backend_info_surface() -> None:
@@ -47,48 +65,26 @@ def test_class_reader_roundtrip_smoke(tmp_path: Path) -> None:
     assert rust.ClassWriter.write(class_info) == class_bytes
 
 
-def test_class_reader_exposes_constant_pool_and_attributes(tmp_path: Path) -> None:
-    hello_world_class = compile_java_resource(tmp_path, "HelloWorld.java")
-    class_info = rust.ClassReader.from_file(hello_world_class).class_info
-
-    assert class_info.constant_pool_count == len(class_info.constant_pool)
-    assert class_info.constant_pool[0] is None
-    assert class_info.access_flags & ClassAccessFlag.SUPER
-    assert class_info.this_class > 0
-    assert class_info.super_class > 0
-
-    hello_name = next(
-        entry
-        for entry in class_info.constant_pool
-        if isinstance(entry, rust.Utf8Info) and entry.str_bytes == b"HelloWorld"
-    )
-    assert hello_name.index > 0
-    assert hello_name.tag == 1
-
-    source_attr = next(attr for attr in class_info.attributes if isinstance(attr, rust.SourceFileAttr))
-    assert source_attr.sourcefile_index > 0
-
-    code_attr = next(
-        attr for method in class_info.methods for attr in method.attributes if isinstance(attr, rust.CodeAttr)
-    )
-    assert code_attr.code_length > 0
-    assert code_attr.max_stacks > 0
-    assert code_attr.exception_table_length == len(code_attr.exception_table)
-    assert code_attr.attributes_count == len(code_attr.attributes)
-    assert code_attr.code[0].bytecode_offset == 0
-    assert any(insn.opcode == 0xB1 for insn in code_attr.code)
-
-
-def test_class_model_accepts_rust_classfile(tmp_path: Path) -> None:
+def test_top_level_reader_writer_are_rust_backed(tmp_path: Path) -> None:
     hello_world_class = compile_java_resource(tmp_path, "HelloWorld.java")
     class_bytes = hello_world_class.read_bytes()
 
-    rust_classfile = rust.ClassReader.from_bytes(class_bytes).class_info
-    model = ClassModel.from_classfile(rust_classfile)
+    reader = pytecode.ClassReader.from_bytes(class_bytes)
 
-    assert model.name == "HelloWorld"
-    assert any(method.name == "main" for method in model.methods)
-    assert model.to_bytes() == class_bytes
+    assert type(reader) is rust.ClassReader
+    assert pytecode.ClassWriter.write(reader.class_info) == class_bytes
+
+
+def test_top_level_classmodel_roundtrip_smoke(tmp_path: Path) -> None:
+    hello_world_class = compile_java_resource(tmp_path, "HelloWorld.java")
+    class_bytes = hello_world_class.read_bytes()
+
+    model = pytecode.ClassModel.from_bytes(class_bytes)
+    model.access_flags |= 0x0010
+    rewritten = model.to_bytes()
+
+    class_info = pytecode.ClassReader.from_bytes(rewritten).class_info
+    assert class_info.access_flags & 0x0010
 
 
 def test_analysis_entrypoints_accept_rust_classfile(tmp_path: Path) -> None:
@@ -96,62 +92,130 @@ def test_analysis_entrypoints_accept_rust_classfile(tmp_path: Path) -> None:
     rust_classfile = rust.ClassReader.from_file(hello_world_class).class_info
 
     resolved = ResolvedClass.from_classfile(rust_classfile)
-    diagnostics = verify_classfile(rust_classfile)
+    diagnostics = analysis.verify_classfile(rust_classfile)
 
     assert resolved.name == "HelloWorld"
     assert any(method.name == "main" for method in resolved.methods)
-    assert not [diag for diag in diagnostics if diag.severity.value == "error"]
+    assert not [diag for diag in diagnostics if diag.severity == "error"]
 
 
-def test_public_class_writer_accepts_rust_classfile(tmp_path: Path) -> None:
+def test_top_level_verify_wrappers_accept_rust_inputs(tmp_path: Path) -> None:
     hello_world_class = compile_java_resource(tmp_path, "HelloWorld.java")
     class_bytes = hello_world_class.read_bytes()
     rust_classfile = rust.ClassReader.from_bytes(class_bytes).class_info
+    rust_model = rust.RustClassModel.from_bytes(class_bytes)
 
-    assert ClassWriter.write(rust_classfile) == class_bytes
+    class_diags = pytecode.verify_classfile(rust_classfile)
+    bytes_diags = pytecode.verify_classfile(class_bytes)
+    model_diags = pytecode.verify_classmodel(rust_model)
+
+    assert not [diag for diag in class_diags if diag.severity == "error"]
+    assert not [diag for diag in bytes_diags if diag.severity == "error"]
+    assert not [diag for diag in model_diags if diag.severity == "error"]
+
+
+def test_hierarchy_helpers_accept_rust_resolver(tmp_path: Path) -> None:
+    class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
+    resolver = pytecode.MappingClassResolver.from_bytes([path.read_bytes() for path in class_paths])
+
+    fixture_name = "fixture/hierarchy/HierarchyFixture"
+    mammal_name = "fixture/hierarchy/Mammal"
+    animal_name = "fixture/hierarchy/Animal"
+    pet_name = "fixture/hierarchy/Pet"
+    trainable_name = "fixture/hierarchy/Trainable"
+
+    resolved = resolver.resolve_class(fixture_name)
+    assert resolved is not None
+    assert resolved["super_name"] == mammal_name
+    assert any(method["name"] == "train" for method in resolved["methods"])
+
+    assert is_subtype(resolver, fixture_name, animal_name)
+    assert is_subtype(resolver, fixture_name, pet_name)
+    assert common_superclass(resolver, fixture_name, mammal_name) == mammal_name
+    assert [entry.name for entry in iter_superclasses(resolver, fixture_name)][:2] == [
+        mammal_name,
+        animal_name,
+    ]
+
+    names = [entry.name for entry in iter_supertypes(resolver, fixture_name)]
+    assert pet_name in names
+    assert trainable_name in names
+
+
+def test_hierarchy_factory_from_rust_models_uses_rust_resolver(tmp_path: Path) -> None:
+    class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
+    models = [rust.RustClassModel.from_bytes(path.read_bytes()) for path in class_paths]
+
+    resolver = HierarchyMappingClassResolver.from_models(models)
+
+    assert isinstance(resolver, rust.RustMappingClassResolver)
+    resolved = resolver.resolve_class("fixture/hierarchy/HierarchyFixture")
+    assert resolved is not None
+    assert resolved["super_name"] == "fixture/hierarchy/Mammal"
 
 
 def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
-    annotated = ClassReader.from_file(compile_java_resource(tmp_path, "AnnotatedClass.java")).class_info
-    assert any(isinstance(attr, DeprecatedAttr) for attr in annotated.attributes)
-    assert any(isinstance(attr, DeprecatedAttr) for field in annotated.fields for attr in field.attributes)
-    assert any(isinstance(attr, DeprecatedAttr) for method in annotated.methods for attr in method.attributes)
+    annotated = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "AnnotatedClass.java")).class_info
+    assert any(type(attr).__name__ == "DeprecatedAttr" for attr in annotated.attributes)
+    assert any(type(attr).__name__ == "DeprecatedAttr" for field in annotated.fields for attr in field.attributes)
+    assert any(type(attr).__name__ == "DeprecatedAttr" for method in annotated.methods for attr in method.attributes)
 
-    parameter_annotations = ClassReader.from_file(
+    parameter_annotations = pytecode.ClassReader.from_file(
         compile_java_resource(tmp_path, "ParameterAnnotations.java")
     ).class_info
     assert any(
-        isinstance(attr, RuntimeVisibleParameterAnnotationsAttr)
+        type(attr).__name__ == "RuntimeVisibleParameterAnnotationsAttr"
         for method in parameter_annotations.methods
         for attr in method.attributes
     )
 
-    type_annotations = ClassReader.from_file(compile_java_resource(tmp_path, "TypeAnnotationShowcase.java")).class_info
-    assert any(isinstance(attr, RuntimeVisibleTypeAnnotationsAttr) for attr in type_annotations.attributes)
+    type_annotations = pytecode.ClassReader.from_file(
+        compile_java_resource(tmp_path, "TypeAnnotationShowcase.java")
+    ).class_info
+    assert any(type(attr).__name__ == "RuntimeVisibleTypeAnnotationsAttr" for attr in type_annotations.attributes)
     assert any(
-        isinstance(attr, RuntimeVisibleTypeAnnotationsAttr)
+        type(attr).__name__ == "RuntimeVisibleTypeAnnotationsAttr"
         for field in type_annotations.fields
         for attr in field.attributes
     )
     assert any(
-        isinstance(attr, RuntimeVisibleTypeAnnotationsAttr)
+        type(attr).__name__ == "RuntimeVisibleTypeAnnotationsAttr"
         for method in type_annotations.methods
         for attr in method.attributes
     )
 
-    hello = ClassReader.from_file(compile_java_resource(tmp_path, "HelloWorld.java")).class_info
-    code_attr = next(attr for method in hello.methods for attr in method.attributes if isinstance(attr, CodeAttr))
-    assert any(isinstance(attr, LineNumberTableAttr) for attr in code_attr.attributes)
+    hello = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "HelloWorld.java")).class_info
+    code_attr = next(
+        attr for method in hello.methods for attr in method.attributes if type(attr).__name__ == "CodeAttr"
+    )
+    assert any(type(attr).__name__ == "LineNumberTableAttr" for attr in code_attr.attributes)
 
-    lambda_showcase = ClassReader.from_file(compile_java_resource(tmp_path, "LambdaShowcase.java")).class_info
-    assert any(isinstance(attr, BootstrapMethodsAttr) for attr in lambda_showcase.attributes)
+    lambda_showcase = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "LambdaShowcase.java")).class_info
+    assert any(type(attr).__name__ == "BootstrapMethodsAttr" for attr in lambda_showcase.attributes)
 
     record_classes = compile_java_resource_classes(tmp_path, "RecordClass.java", release=16)
     point_class = next(path for path in record_classes if path.name == "RecordClass$Point.class")
-    point = ClassReader.from_file(point_class).class_info
-    assert any(isinstance(attr, RecordAttr) for attr in point.attributes)
+    point = pytecode.ClassReader.from_file(point_class).class_info
+    assert any(type(attr).__name__ == "RecordAttr" for attr in point.attributes)
 
     sealed_classes = compile_java_resource_classes(tmp_path, "SealedHierarchy.java", release=17)
     shape_class = next(path for path in sealed_classes if path.name == "SealedHierarchy$Shape.class")
-    shape = ClassReader.from_file(shape_class).class_info
-    assert any(isinstance(attr, PermittedSubclassesAttr) for attr in shape.attributes)
+    shape = pytecode.ClassReader.from_file(shape_class).class_info
+    assert any(type(attr).__name__ == "PermittedSubclassesAttr" for attr in shape.attributes)
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "pytecode.classfile.reader",
+        "pytecode.classfile.writer",
+        "pytecode.edit.model",
+        "pytecode.edit.labels",
+        "pytecode.edit.operands",
+        "pytecode.edit.constant_pool_builder",
+        "pytecode.edit.debug_info",
+    ],
+)
+def test_legacy_modules_removed(module_name: str) -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(module_name)

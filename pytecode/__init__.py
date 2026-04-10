@@ -1,22 +1,27 @@
-"""Python library for parsing, inspecting, manipulating, and emitting JVM class files.
+"""Rust-first Python bindings for the pytecode engine."""
 
-Provides four top-level entry points:
-
-- ``ClassReader`` — parse ``.class`` bytes into a ``ClassFile`` tree.
-- ``ClassWriter`` — serialize a ``ClassFile`` tree back to ``.class`` bytes.
-- ``ClassModel`` — mutable editing model with symbolic references and
-  label-aware code editing.
-- ``JarFile`` — read, mutate, and rewrite JAR archives.
-
-Additional submodules expose transforms, descriptors, analysis, hierarchy
-resolution, validation, operands, labels, debug-info helpers, and the
-underlying data types.  See ``pytecode.transforms``, ``pytecode.analysis``,
-``pytecode.analysis.verify``, and the other documented submodules for details.
-"""
-
+from . import _rust
+from ._rust_api import Diagnostic, MappingClassResolver, RustClassModel, verify_classfile, verify_classmodel
 from .archive import JarFile
-from .classfile.reader import ClassReader
-from .classfile.writer import ClassWriter
-from .edit.model import ClassModel
 
-__all__ = ["ClassModel", "ClassReader", "ClassWriter", "JarFile"]
+RustClassReader = _rust.ClassReader
+RustClassWriter = _rust.ClassWriter
+ClassReader = RustClassReader
+ClassWriter = RustClassWriter
+ClassModel = RustClassModel
+backend_info = _rust.backend_info
+
+__all__ = [
+    "ClassModel",
+    "ClassReader",
+    "ClassWriter",
+    "JarFile",
+    "RustClassReader",
+    "RustClassWriter",
+    "RustClassModel",
+    "MappingClassResolver",
+    "Diagnostic",
+    "verify_classfile",
+    "verify_classmodel",
+    "backend_info",
+]

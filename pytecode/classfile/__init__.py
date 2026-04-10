@@ -1,14 +1,3 @@
-"""Parsed JVM classfile structures, parsing, and emission."""
+"""Low-level JVM helper modules used by the Rust-backed public API."""
 
-from .info import ClassFile, FieldInfo, MethodInfo
-from .reader import ClassReader, MalformedClassException
-from .writer import ClassWriter
-
-__all__ = [
-    "ClassFile",
-    "ClassReader",
-    "ClassWriter",
-    "FieldInfo",
-    "MalformedClassException",
-    "MethodInfo",
-]
+__all__: list[str] = []

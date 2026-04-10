@@ -49,39 +49,21 @@ Low-level big-endian binary I/O primitives for both reading and writing. This is
 
 ### `pytecode/classfile/reader.py`
 
-The central parser. `ClassReader` walks the classfile format in spec order:
-
-1. header and version
-2. constant pool
-3. class metadata
-4. interfaces
-5. fields
-6. methods
-7. attributes
-
-It also contains specialized parsing routines for:
-
-- instructions
-- `Code` attributes
-- stack map frames
-- annotations and type annotations
-- module-related attributes
-
-This module is the current orchestration layer for nearly all parsing logic.
-
-When constant-pool-backed names are interpreted (for example, attribute names),
-they are decoded using the shared JVM Modified UTF-8 helpers rather than plain
-UTF-8.
+`ClassReader` is now primarily a compatibility wrapper over the Rust parser.
+Whole-class parses (`ClassReader(...)`, `from_bytes()`, `from_file()`) go through
+the `pytecode._rust` extension and are then converted into the public Python
+raw dataclasses. The old Python byte-level helper methods still exist only for
+low-level decoding tests and niche callers that exercise instruction or
+constant-pool decoding directly.
 
 ### `pytecode/classfile/writer.py`
 
-Deterministic classfile emission introduced for issue [#12](https://github.com/smithtrenton/pytecode/issues/12). This module provides:
-
-- **`ClassWriter.write()`** — serializes an `info.ClassFile` back to raw `.class` bytes
-- **Spec-order serialization** — writes header, constant pool, class metadata, fields, methods, and attributes in JVM classfile order
-- **Full dataclass-surface support** — handles all parsed constant-pool entries, raw instructions, stack map frames, annotations/type annotations, module metadata, record components, and preserved unknown attributes
-- **Derived metadata recomputation** — emits attribute lengths, code lengths, and count fields from the current in-memory structure rather than trusting stale counters
-- **Roundtrip fidelity focus** — preserves imported constant-pool ordering and, together with `ClassModel.to_bytes()`, now underpins the landed Tier 1 byte-for-byte roundtrip tests
+`ClassWriter.write()` remains the compatibility serializer for public Python
+`ClassFile` dataclasses. It still performs deterministic spec-order emission for
+that raw surface, but it is no longer the primary serialization path for
+`ClassModel`: the editable model now prefers Rust-backed serialization for clean
+roundtrips and normal code-mutation writes, falling back to the Python writer
+only when the remaining raw-attribute compatibility surface requires it.
 
 ### `pytecode/classfile/constant_pool.py`
 
@@ -166,8 +148,8 @@ For the design rationale behind this editing model, see [editing model design ra
 Composable transform helpers layered on top of the mutable editing model introduced by issue [#6](https://github.com/smithtrenton/pytecode/issues/6). This module provides the current Phase 2 transform surface without introducing a second object model:
 
 - **Transform protocols** — `ClassTransform`, `FieldTransform`, `MethodTransform`, and `CodeTransform` define typed in-place callable shapes. `FieldTransform` and `MethodTransform` receive the owning `ClassModel` as a second argument; `CodeTransform` receives the owning `MethodModel` and `ClassModel` so transforms can inspect their traversal context
-- **`Pipeline` / `pipeline()`** — deterministic class-transform composition; pipelines are themselves callable so they slot directly into `JarFile.rewrite(transform=...)`
-- **Lifting helpers** — `on_classes()`, `on_fields()`, `on_methods()`, and `on_code()` adapt lower-level transforms onto `ClassModel` traversal while preserving in-place ownership boundaries and passing owning context; the field/method/code lifting helpers also support owner-class filtering
+- **Rust-first transform surface** — `pytecode.transforms.rust` is the canonical production API, centered on `RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories that execute natively in Rust
+- **Legacy Python transform DSL** — `Pipeline`, `pipeline()`, and the `on_*` lifting helpers remain available as compatibility surfaces for Python-owned model flows and callback-oriented extensions, but they are no longer the primary hot-path architecture
 - **`Matcher` DSL** — callable `Matcher` predicates with `&` / `|` / `~` composition and readable reprs
 - **Selection helpers** — exact-match, regex, semantic, and access-flag convenience helpers for classes, fields, and methods, plus predicate combinators `all_of()`, `any_of()`, and `not_()` for callers that prefer functional composition
 

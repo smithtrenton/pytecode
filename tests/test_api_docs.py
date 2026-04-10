@@ -70,42 +70,40 @@ class TestEdgeCases:
         assert inspect.getdoc(ClassAccessFlag)
         assert inspect.getdoc(VerificationType)
 
-    def test_dataclass_docstrings(self) -> None:
+    def test_archive_surface_docstrings(self) -> None:
+        import inspect
+        from typing import cast
+
+        from pytecode.archive import JarFile, JarInfo
+
+        assert inspect.getdoc(cast(object, JarInfo))
+        assert inspect.getdoc(cast(object, JarFile))
+
+    def test_rust_transform_docstrings(self) -> None:
         import inspect
 
-        from pytecode.classfile.info import ClassFile, FieldInfo, MethodInfo
+        from pytecode.transforms.rust import RustPipelineBuilder, add_access_flags, class_named
 
-        assert inspect.getdoc(ClassFile)
-        assert inspect.getdoc(FieldInfo)
-        assert inspect.getdoc(MethodInfo)
+        assert inspect.getdoc(RustPipelineBuilder)
+        assert inspect.getdoc(class_named)
+        assert inspect.getdoc(add_access_flags)
 
-    def test_protocol_docstrings(self) -> None:
+    def test_verifier_docstrings(self) -> None:
         import inspect
 
-        from pytecode.transforms import ClassTransform, CodeTransform
+        from pytecode.analysis.verify import verify_classfile, verify_classmodel
 
-        assert inspect.getdoc(ClassTransform)
-        assert inspect.getdoc(CodeTransform)
+        assert inspect.getdoc(verify_classfile)
+        assert inspect.getdoc(verify_classmodel)
 
-    def test_overloaded_function_docstrings(self) -> None:
+    def test_descriptor_docstrings(self) -> None:
         import inspect
+        from typing import cast
 
-        from pytecode.edit.debug_info import (
-            apply_debug_info_policy,
-            mark_code_debug_info_stale,
-            strip_debug_info,
-        )
+        from pytecode.classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
 
-        assert inspect.getdoc(mark_code_debug_info_stale)
-        assert inspect.getdoc(apply_debug_info_policy)
-        assert inspect.getdoc(strip_debug_info)
-
-    def test_type_alias_docstrings(self) -> None:
-        import inspect
-
-        from pytecode.edit.operands import LdcValue
-
-        assert inspect.getdoc(LdcValue)
+        assert inspect.getdoc(cast(object, decode_modified_utf8))
+        assert inspect.getdoc(cast(object, encode_modified_utf8))
 
     def test_constant_docstring(self) -> None:
         import inspect

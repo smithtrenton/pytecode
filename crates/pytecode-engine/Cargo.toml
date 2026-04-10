@@ -15,7 +15,7 @@ categories = ["parser-implementations", "development-tools"]
 bitflags.workspace = true
 pyo3 = { workspace = true, optional = true }
 regex.workspace = true
-rustc-hash = "2.1.1"
+rustc-hash = "2.1.2"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

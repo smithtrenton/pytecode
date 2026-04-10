@@ -19,6 +19,35 @@ fn analysis_error_to_py(e: pytecode_engine::analysis::AnalysisError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 }
 
+fn resolved_method_to_py(
+    py: Python<'_>,
+    method: &pytecode_engine::analysis::ResolvedMethod,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    dict.set_item("name", &method.name)?;
+    dict.set_item("descriptor", &method.descriptor)?;
+    dict.set_item("access_flags", method.access_flags.bits())?;
+    Ok(dict.into_any().unbind())
+}
+
+fn resolved_class_to_py(
+    py: Python<'_>,
+    resolved: &pytecode_engine::analysis::ResolvedClass,
+) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+    let methods = resolved
+        .methods
+        .iter()
+        .map(|method| resolved_method_to_py(py, method))
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item("name", &resolved.name)?;
+    dict.set_item("super_name", &resolved.super_name)?;
+    dict.set_item("interfaces", &resolved.interfaces)?;
+    dict.set_item("access_flags", resolved.access_flags.bits())?;
+    dict.set_item("methods", methods)?;
+    Ok(dict.into_any().unbind())
+}
+
 type SharedClassState = Rc<RefCell<ClassModelState>>;
 
 struct ClassModelState {
@@ -1235,6 +1264,13 @@ impl PyMethodModel {
         })
     }
 
+    fn set_prebuilt_code(&mut self, code_body_bytes: &[u8]) -> PyResult<()> {
+        self.with_method_mut(|method| {
+            method.set_prebuilt_code_bytes(code_body_bytes.to_vec());
+            Ok(())
+        })
+    }
+
     #[getter]
     fn attributes(&self) -> PyAttributeListView {
         let owner = match &self.access {
@@ -1337,7 +1373,8 @@ impl PyConstantPoolBuilder {
         })
     }
 
-    fn add_long(&mut self, value: u64) -> PyResult<u16> {
+    fn add_long(&mut self, high: u32, low: u32) -> PyResult<u16> {
+        let value = ((high as u64) << 32) | (low as u64);
         self.with_builder_mut(|builder| {
             builder
                 .add_long(value)
@@ -1355,7 +1392,26 @@ impl PyConstantPoolBuilder {
         })
     }
 
+    fn add_float(&mut self, raw_bits: u32) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_float_bits(raw_bits)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
     fn add_double_bits(&mut self, raw_bits: u64) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_double_bits(raw_bits)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
+    fn add_double(&mut self, high: u32, low: u32) -> PyResult<u16> {
+        let raw_bits = ((high as u64) << 32) | (low as u64);
         self.with_builder_mut(|builder| {
             builder
                 .add_double_bits(raw_bits)
@@ -1383,6 +1439,38 @@ impl PyConstantPoolBuilder {
     }
 
     fn add_interface_method_ref(
+        &mut self,
+        owner: &str,
+        name: &str,
+        descriptor: &str,
+    ) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_interface_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
+    fn add_fieldref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_field_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
+    fn add_methodref(&mut self, owner: &str, name: &str, descriptor: &str) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
+    fn add_interface_methodref(
         &mut self,
         owner: &str,
         name: &str,
@@ -1435,6 +1523,19 @@ impl PyConstantPoolBuilder {
         })
     }
 
+    fn add_dynamic(&mut self, bootstrap_idx: u16, name: &str, descriptor: &str) -> PyResult<u16> {
+        self.with_builder_mut(|builder| {
+            builder
+                .add_dynamic(
+                    pytecode_engine::indexes::BootstrapMethodIndex::from(bootstrap_idx),
+                    name,
+                    descriptor,
+                )
+                .map(|idx| idx.into())
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
     fn resolve_utf8(&self, index: u16) -> PyResult<String> {
         self.with_builder(|builder| {
             builder
@@ -1472,6 +1573,109 @@ impl PyConstantPoolBuilder {
                 .collect()
         })
     }
+
+    fn checkpoint(&self) -> PyResult<usize> {
+        self.with_builder(|builder| Ok(builder.len()))
+    }
+
+    fn rollback(&mut self, checkpoint: usize) -> PyResult<()> {
+        self.with_builder_mut(|builder| {
+            builder.truncate(checkpoint);
+            Ok(())
+        })
+    }
+
+    fn find_integer(&self, value: u32) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_integer(value).map(|idx| idx.into())))
+    }
+
+    fn find_float(&self, raw_bits: u32) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_float_bits(raw_bits).map(|idx| idx.into())))
+    }
+
+    fn find_long(&self, high: u32, low: u32) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_long(high, low).map(|idx| idx.into())))
+    }
+
+    fn find_double(&self, high: u32, low: u32) -> PyResult<Option<u16>> {
+        let raw_bits = ((high as u64) << 32) | (low as u64);
+        self.with_builder(|builder| Ok(builder.find_double_bits(raw_bits).map(|idx| idx.into())))
+    }
+
+    fn find_string(&self, value: &str) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_string(value).map(|idx| idx.into())))
+    }
+
+    fn find_class(&self, name: &str) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_class(name).map(|idx| idx.into())))
+    }
+
+    fn find_method_type(&self, descriptor: &str) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_method_type(descriptor).map(|idx| idx.into())))
+    }
+
+    fn find_fieldref(&self, owner: &str, name: &str, descriptor: &str) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| {
+            Ok(builder
+                .find_field_ref(owner, name, descriptor)
+                .map(|idx| idx.into()))
+        })
+    }
+
+    fn find_methodref(&self, owner: &str, name: &str, descriptor: &str) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| {
+            Ok(builder
+                .find_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into()))
+        })
+    }
+
+    fn find_interface_methodref(
+        &self,
+        owner: &str,
+        name: &str,
+        descriptor: &str,
+    ) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| {
+            Ok(builder
+                .find_interface_method_ref(owner, name, descriptor)
+                .map(|idx| idx.into()))
+        })
+    }
+
+    fn find_method_handle(
+        &self,
+        reference_kind: u8,
+        reference_index: u16,
+    ) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| {
+            Ok(builder
+                .find_method_handle(
+                    reference_kind,
+                    pytecode_engine::indexes::CpIndex::from(reference_index),
+                )
+                .map(|idx| idx.into()))
+        })
+    }
+
+    fn find_dynamic(
+        &self,
+        bootstrap_method_attr_index: u16,
+        name: &str,
+        descriptor: &str,
+    ) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| {
+            Ok(builder
+                .find_dynamic(
+                    pytecode_engine::indexes::BootstrapMethodIndex::from(
+                        bootstrap_method_attr_index,
+                    ),
+                    name,
+                    descriptor,
+                )
+                .map(|idx| idx.into()))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,17 +1707,23 @@ impl PyMappingClassResolver {
         Ok(Self { inner: resolver })
     }
 
+    #[staticmethod]
+    fn from_models(py: Python<'_>, models: Vec<Py<PyClassModel>>) -> PyResult<Self> {
+        let models = models
+            .into_iter()
+            .map(|model| {
+                let model = model.bind(py).borrow();
+                model.with_class_model(|inner| Ok(inner.clone()))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let resolver = MappingClassResolver::from_models(models).map_err(analysis_error_to_py)?;
+        Ok(Self { inner: resolver })
+    }
+
     fn resolve_class(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
         use pytecode_engine::analysis::ClassResolver;
         match self.inner.resolve_class(name) {
-            Some(rc) => {
-                let dict = PyDict::new(py);
-                dict.set_item("name", &rc.name)?;
-                dict.set_item("super_name", &rc.super_name)?;
-                dict.set_item("interfaces", &rc.interfaces)?;
-                dict.set_item("access_flags", rc.access_flags.bits())?;
-                Ok(Some(dict.into_any().unbind()))
-            }
+            Some(rc) => Ok(Some(resolved_class_to_py(py, &rc)?)),
             None => Ok(None),
         }
     }
@@ -1523,7 +1733,7 @@ impl PyMappingClassResolver {
 // PyClassModel
 // ---------------------------------------------------------------------------
 
-fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
+pub(crate) fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
     match s {
         "preserve" => Ok(DebugInfoPolicy::Preserve),
         "strip" => Ok(DebugInfoPolicy::Strip),

@@ -1,4 +1,4 @@
-"""Dataclass definitions for JVM class file attributes (JVM spec §4.7)."""
+"""Dataclass definitions for JVM class file attributes (JVM spec ┬º4.7)."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ __all__ = [
 
 @dataclass
 class AttributeInfo:
-    """Base class for all JVM class file attribute structures (§4.7)."""
+    """Base class for all JVM class file attribute structures (┬º4.7)."""
 
     attribute_name_index: int
     attribute_length: int
@@ -116,14 +116,14 @@ class UnimplementedAttr(AttributeInfo):
 
 @dataclass
 class ConstantValueAttr(AttributeInfo):
-    """Represents the ConstantValue attribute (§4.7.2)."""
+    """Represents the ConstantValue attribute (┬º4.7.2)."""
 
     constantvalue_index: int
 
 
 @dataclass
 class ExceptionInfo:
-    """Entry in the Code attribute exception_table (§4.7.3)."""
+    """Entry in the Code attribute exception_table (┬º4.7.3)."""
 
     start_pc: int
     end_pc: int
@@ -133,7 +133,7 @@ class ExceptionInfo:
 
 @dataclass
 class CodeAttr(AttributeInfo):
-    """Represents the Code attribute (§4.7.3)."""
+    """Represents the Code attribute (┬º4.7.3)."""
 
     max_stacks: int
     max_locals: int
@@ -147,98 +147,98 @@ class CodeAttr(AttributeInfo):
 
 @dataclass
 class VerificationTypeInfo:
-    """Base class for verification type info entries in StackMapTable frames (§4.7.4)."""
+    """Base class for verification type info entries in StackMapTable frames (┬º4.7.4)."""
 
     tag: constants.VerificationType
 
 
 @dataclass
 class TopVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the top type (§4.7.4)."""
+    """Verification type indicating the top type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class IntegerVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the integer type (§4.7.4)."""
+    """Verification type indicating the integer type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class FloatVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the float type (§4.7.4)."""
+    """Verification type indicating the float type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class DoubleVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the double type (§4.7.4)."""
+    """Verification type indicating the double type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class LongVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the long type (§4.7.4)."""
+    """Verification type indicating the long type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class NullVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the null type (§4.7.4)."""
+    """Verification type indicating the null type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class UninitializedThisVariableInfo(VerificationTypeInfo):
-    """Verification type indicating the uninitializedThis type (§4.7.4)."""
+    """Verification type indicating the uninitializedThis type (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class ObjectVariableInfo(VerificationTypeInfo):
-    """Verification type indicating an object type (§4.7.4)."""
+    """Verification type indicating an object type (┬º4.7.4)."""
 
     cpool_index: int
 
 
 @dataclass
 class UninitializedVariableInfo(VerificationTypeInfo):
-    """Verification type indicating an uninitialized type (§4.7.4)."""
+    """Verification type indicating an uninitialized type (┬º4.7.4)."""
 
     offset: int
 
 
 @dataclass
 class StackMapFrameInfo:
-    """Base class for stack map frame entries in the StackMapTable attribute (§4.7.4)."""
+    """Base class for stack map frame entries in the StackMapTable attribute (┬º4.7.4)."""
 
     frame_type: int
 
 
 @dataclass
 class SameFrameInfo(StackMapFrameInfo):
-    """Stack map frame with the same locals and empty stack (§4.7.4)."""
+    """Stack map frame with the same locals and empty stack (┬º4.7.4)."""
 
     pass
 
 
 @dataclass
 class SameLocals1StackItemFrameInfo(StackMapFrameInfo):
-    """Stack map frame with the same locals and one stack item (§4.7.4)."""
+    """Stack map frame with the same locals and one stack item (┬º4.7.4)."""
 
     stack: VerificationTypeInfo
 
 
 @dataclass
 class SameLocals1StackItemFrameExtendedInfo(StackMapFrameInfo):
-    """Extended same-locals-1-stack-item frame with explicit offset_delta (§4.7.4)."""
+    """Extended same-locals-1-stack-item frame with explicit offset_delta (┬º4.7.4)."""
 
     offset_delta: int
     stack: VerificationTypeInfo
@@ -246,21 +246,21 @@ class SameLocals1StackItemFrameExtendedInfo(StackMapFrameInfo):
 
 @dataclass
 class ChopFrameInfo(StackMapFrameInfo):
-    """Stack map frame indicating removal of locals (§4.7.4)."""
+    """Stack map frame indicating removal of locals (┬º4.7.4)."""
 
     offset_delta: int
 
 
 @dataclass
 class SameFrameExtendedInfo(StackMapFrameInfo):
-    """Extended same frame with explicit offset_delta (§4.7.4)."""
+    """Extended same frame with explicit offset_delta (┬º4.7.4)."""
 
     offset_delta: int
 
 
 @dataclass
 class AppendFrameInfo(StackMapFrameInfo):
-    """Stack map frame indicating additional locals (§4.7.4)."""
+    """Stack map frame indicating additional locals (┬º4.7.4)."""
 
     offset_delta: int
     locals: list[VerificationTypeInfo]
@@ -268,7 +268,7 @@ class AppendFrameInfo(StackMapFrameInfo):
 
 @dataclass
 class FullFrameInfo(StackMapFrameInfo):
-    """Full stack map frame with explicit locals and stack (§4.7.4)."""
+    """Full stack map frame with explicit locals and stack (┬º4.7.4)."""
 
     offset_delta: int
     number_of_locals: int
@@ -279,7 +279,7 @@ class FullFrameInfo(StackMapFrameInfo):
 
 @dataclass
 class StackMapTableAttr(AttributeInfo):
-    """Represents the StackMapTable attribute (§4.7.4)."""
+    """Represents the StackMapTable attribute (┬º4.7.4)."""
 
     number_of_entries: int
     entries: list[StackMapFrameInfo]
@@ -287,7 +287,7 @@ class StackMapTableAttr(AttributeInfo):
 
 @dataclass
 class ExceptionsAttr(AttributeInfo):
-    """Represents the Exceptions attribute (§4.7.5)."""
+    """Represents the Exceptions attribute (┬º4.7.5)."""
 
     number_of_exceptions: int
     exception_index_table: list[int]
@@ -295,7 +295,7 @@ class ExceptionsAttr(AttributeInfo):
 
 @dataclass
 class InnerClassInfo:
-    """Entry in the InnerClasses attribute classes table (§4.7.6)."""
+    """Entry in the InnerClasses attribute classes table (┬º4.7.6)."""
 
     inner_class_info_index: int
     outer_class_info_index: int
@@ -305,7 +305,7 @@ class InnerClassInfo:
 
 @dataclass
 class InnerClassesAttr(AttributeInfo):
-    """Represents the InnerClasses attribute (§4.7.6)."""
+    """Represents the InnerClasses attribute (┬º4.7.6)."""
 
     number_of_classes: int
     classes: list[InnerClassInfo]
@@ -313,7 +313,7 @@ class InnerClassesAttr(AttributeInfo):
 
 @dataclass
 class EnclosingMethodAttr(AttributeInfo):
-    """Represents the EnclosingMethod attribute (§4.7.7)."""
+    """Represents the EnclosingMethod attribute (┬º4.7.7)."""
 
     class_index: int
     method_index: int
@@ -321,35 +321,35 @@ class EnclosingMethodAttr(AttributeInfo):
 
 @dataclass
 class SyntheticAttr(AttributeInfo):
-    """Represents the Synthetic attribute (§4.7.8)."""
+    """Represents the Synthetic attribute (┬º4.7.8)."""
 
     pass
 
 
 @dataclass
 class SignatureAttr(AttributeInfo):
-    """Represents the Signature attribute (§4.7.9)."""
+    """Represents the Signature attribute (┬º4.7.9)."""
 
     signature_index: int
 
 
 @dataclass
 class SourceFileAttr(AttributeInfo):
-    """Represents the SourceFile attribute (§4.7.10)."""
+    """Represents the SourceFile attribute (┬º4.7.10)."""
 
     sourcefile_index: int
 
 
 @dataclass
 class SourceDebugExtensionAttr(AttributeInfo):
-    """Represents the SourceDebugExtension attribute (§4.7.11)."""
+    """Represents the SourceDebugExtension attribute (┬º4.7.11)."""
 
     debug_extension: str
 
 
 @dataclass
 class LineNumberInfo:
-    """Entry in the LineNumberTable attribute (§4.7.12)."""
+    """Entry in the LineNumberTable attribute (┬º4.7.12)."""
 
     start_pc: int
     line_number: int
@@ -357,7 +357,7 @@ class LineNumberInfo:
 
 @dataclass
 class LineNumberTableAttr(AttributeInfo):
-    """Represents the LineNumberTable attribute (§4.7.12)."""
+    """Represents the LineNumberTable attribute (┬º4.7.12)."""
 
     line_number_table_length: int
     line_number_table: list[LineNumberInfo]
@@ -365,7 +365,7 @@ class LineNumberTableAttr(AttributeInfo):
 
 @dataclass
 class LocalVariableInfo:
-    """Entry in the LocalVariableTable attribute (§4.7.13)."""
+    """Entry in the LocalVariableTable attribute (┬º4.7.13)."""
 
     start_pc: int
     length: int
@@ -376,7 +376,7 @@ class LocalVariableInfo:
 
 @dataclass
 class LocalVariableTableAttr(AttributeInfo):
-    """Represents the LocalVariableTable attribute (§4.7.13)."""
+    """Represents the LocalVariableTable attribute (┬º4.7.13)."""
 
     local_variable_table_length: int
     local_variable_table: list[LocalVariableInfo]
@@ -384,7 +384,7 @@ class LocalVariableTableAttr(AttributeInfo):
 
 @dataclass
 class LocalVariableTypeInfo:
-    """Entry in the LocalVariableTypeTable attribute (§4.7.14)."""
+    """Entry in the LocalVariableTypeTable attribute (┬º4.7.14)."""
 
     start_pc: int
     length: int
@@ -395,7 +395,7 @@ class LocalVariableTypeInfo:
 
 @dataclass
 class LocalVariableTypeTableAttr(AttributeInfo):
-    """Represents the LocalVariableTypeTable attribute (§4.7.14)."""
+    """Represents the LocalVariableTypeTable attribute (┬º4.7.14)."""
 
     local_variable_type_table_length: int
     local_variable_type_table: list[LocalVariableTypeInfo]
@@ -403,21 +403,21 @@ class LocalVariableTypeTableAttr(AttributeInfo):
 
 @dataclass
 class DeprecatedAttr(AttributeInfo):
-    """Represents the Deprecated attribute (§4.7.15)."""
+    """Represents the Deprecated attribute (┬º4.7.15)."""
 
     pass
 
 
 @dataclass
 class ConstValueInfo:
-    """Constant value in an element_value structure (§4.7.16.1)."""
+    """Constant value in an element_value structure (┬º4.7.16.1)."""
 
     const_value_index: int
 
 
 @dataclass
 class EnumConstantValueInfo:
-    """Enum constant value in an element_value structure (§4.7.16.1)."""
+    """Enum constant value in an element_value structure (┬º4.7.16.1)."""
 
     type_name_index: int
     const_name_index: int
@@ -425,14 +425,14 @@ class EnumConstantValueInfo:
 
 @dataclass
 class ClassInfoValueInfo:
-    """Class literal value in an element_value structure (§4.7.16.1)."""
+    """Class literal value in an element_value structure (┬º4.7.16.1)."""
 
     class_info_index: int
 
 
 @dataclass
 class ArrayValueInfo:
-    """Array value in an element_value structure (§4.7.16.1)."""
+    """Array value in an element_value structure (┬º4.7.16.1)."""
 
     num_values: int
     values: list[ElementValueInfo]
@@ -440,7 +440,7 @@ class ArrayValueInfo:
 
 @dataclass
 class ElementValueInfo:
-    """Represents an element_value structure (§4.7.16.1)."""
+    """Represents an element_value structure (┬º4.7.16.1)."""
 
     tag: int | str
     value: ConstValueInfo | EnumConstantValueInfo | ClassInfoValueInfo | AnnotationInfo | ArrayValueInfo
@@ -448,7 +448,7 @@ class ElementValueInfo:
 
 @dataclass
 class ElementValuePairInfo:
-    """Represents an element-value pair in an annotation (§4.7.16)."""
+    """Represents an element-value pair in an annotation (┬º4.7.16)."""
 
     element_name_index: int
     element_value: ElementValueInfo
@@ -456,7 +456,7 @@ class ElementValuePairInfo:
 
 @dataclass
 class AnnotationInfo:
-    """Represents an annotation structure (§4.7.16)."""
+    """Represents an annotation structure (┬º4.7.16)."""
 
     type_index: int
     num_element_value_pairs: int
@@ -465,7 +465,7 @@ class AnnotationInfo:
 
 @dataclass
 class RuntimeVisibleAnnotationsAttr(AttributeInfo):
-    """Represents the RuntimeVisibleAnnotations attribute (§4.7.16)."""
+    """Represents the RuntimeVisibleAnnotations attribute (┬º4.7.16)."""
 
     num_annotations: int
     annotations: list[AnnotationInfo]
@@ -473,7 +473,7 @@ class RuntimeVisibleAnnotationsAttr(AttributeInfo):
 
 @dataclass
 class RuntimeInvisibleAnnotationsAttr(AttributeInfo):
-    """Represents the RuntimeInvisibleAnnotations attribute (§4.7.17)."""
+    """Represents the RuntimeInvisibleAnnotations attribute (┬º4.7.17)."""
 
     num_annotations: int
     annotations: list[AnnotationInfo]
@@ -481,7 +481,7 @@ class RuntimeInvisibleAnnotationsAttr(AttributeInfo):
 
 @dataclass
 class ParameterAnnotationInfo:
-    """Annotations for a single parameter (§4.7.18)."""
+    """Annotations for a single parameter (┬º4.7.18)."""
 
     num_annotations: int
     annotations: list[AnnotationInfo]
@@ -489,7 +489,7 @@ class ParameterAnnotationInfo:
 
 @dataclass
 class RuntimeVisibleParameterAnnotationsAttr(AttributeInfo):
-    """Represents the RuntimeVisibleParameterAnnotations attribute (§4.7.18)."""
+    """Represents the RuntimeVisibleParameterAnnotations attribute (┬º4.7.18)."""
 
     num_parameters: int
     parameter_annotations: list[ParameterAnnotationInfo]
@@ -497,7 +497,7 @@ class RuntimeVisibleParameterAnnotationsAttr(AttributeInfo):
 
 @dataclass
 class RuntimeInvisibleParameterAnnotationsAttr(AttributeInfo):
-    """Represents the RuntimeInvisibleParameterAnnotations attribute (§4.7.19)."""
+    """Represents the RuntimeInvisibleParameterAnnotations attribute (┬º4.7.19)."""
 
     num_parameters: int
     parameter_annotations: list[ParameterAnnotationInfo]
@@ -505,28 +505,28 @@ class RuntimeInvisibleParameterAnnotationsAttr(AttributeInfo):
 
 @dataclass
 class TargetInfo:
-    """Base class for type annotation target_info union variants (§4.7.20.1)."""
+    """Base class for type annotation target_info union variants (┬º4.7.20.1)."""
 
     pass
 
 
 @dataclass
 class TypeParameterTargetInfo(TargetInfo):
-    """Target info for type parameter declarations (§4.7.20.1)."""
+    """Target info for type parameter declarations (┬º4.7.20.1)."""
 
     type_parameter_index: int
 
 
 @dataclass
 class SupertypeTargetInfo(TargetInfo):
-    """Target info for extends/implements clauses (§4.7.20.1)."""
+    """Target info for extends/implements clauses (┬º4.7.20.1)."""
 
     supertype_index: int
 
 
 @dataclass
 class TypeParameterBoundTargetInfo(TargetInfo):
-    """Target info for type parameter bounds (§4.7.20.1)."""
+    """Target info for type parameter bounds (┬º4.7.20.1)."""
 
     type_parameter_index: int
     bound_index: int
@@ -534,28 +534,28 @@ class TypeParameterBoundTargetInfo(TargetInfo):
 
 @dataclass
 class EmptyTargetInfo(TargetInfo):
-    """Target info for return types, receiver types, or field types (§4.7.20.1)."""
+    """Target info for return types, receiver types, or field types (┬º4.7.20.1)."""
 
     pass
 
 
 @dataclass
 class FormalParameterTargetInfo(TargetInfo):
-    """Target info for formal parameter declarations (§4.7.20.1)."""
+    """Target info for formal parameter declarations (┬º4.7.20.1)."""
 
     formal_parameter_index: int
 
 
 @dataclass
 class ThrowsTargetInfo(TargetInfo):
-    """Target info for throws clause types (§4.7.20.1)."""
+    """Target info for throws clause types (┬º4.7.20.1)."""
 
     throws_type_index: int
 
 
 @dataclass
 class TableInfo:
-    """Entry in the localvar_target table (§4.7.20.1)."""
+    """Entry in the localvar_target table (┬º4.7.20.1)."""
 
     start_pc: int
     length: int
@@ -564,7 +564,7 @@ class TableInfo:
 
 @dataclass
 class LocalvarTargetInfo(TargetInfo):
-    """Target info for local variable type annotations (§4.7.20.1)."""
+    """Target info for local variable type annotations (┬º4.7.20.1)."""
 
     table_length: int
     table: list[TableInfo]
@@ -572,21 +572,21 @@ class LocalvarTargetInfo(TargetInfo):
 
 @dataclass
 class CatchTargetInfo(TargetInfo):
-    """Target info for exception parameter types (§4.7.20.1)."""
+    """Target info for exception parameter types (┬º4.7.20.1)."""
 
     exception_table_index: int
 
 
 @dataclass
 class OffsetTargetInfo(TargetInfo):
-    """Target info for instanceof, new, or method reference expressions (§4.7.20.1)."""
+    """Target info for instanceof, new, or method reference expressions (┬º4.7.20.1)."""
 
     offset: int
 
 
 @dataclass
 class TypeArgumentTargetInfo(TargetInfo):
-    """Target info for cast or type argument expressions (§4.7.20.1)."""
+    """Target info for cast or type argument expressions (┬º4.7.20.1)."""
 
     offset: int
     type_argument_index: int
@@ -594,7 +594,7 @@ class TypeArgumentTargetInfo(TargetInfo):
 
 @dataclass
 class PathInfo:
-    """Single entry in a type_path structure (§4.7.20.2)."""
+    """Single entry in a type_path structure (┬º4.7.20.2)."""
 
     type_path_kind: int
     type_argument_index: int
@@ -602,7 +602,7 @@ class PathInfo:
 
 @dataclass
 class TypePathInfo:
-    """Represents a type_path structure (§4.7.20.2)."""
+    """Represents a type_path structure (┬º4.7.20.2)."""
 
     path_length: int
     path: list[PathInfo]
@@ -610,7 +610,7 @@ class TypePathInfo:
 
 @dataclass
 class TypeAnnotationInfo:
-    """Represents a type_annotation structure (§4.7.20)."""
+    """Represents a type_annotation structure (┬º4.7.20)."""
 
     target_type: int
     target_info: TargetInfo
@@ -630,28 +630,28 @@ class RuntimeTypeAnnotationsAttr(AttributeInfo):
 
 @dataclass
 class RuntimeVisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):
-    """Represents the RuntimeVisibleTypeAnnotations attribute (§4.7.20)."""
+    """Represents the RuntimeVisibleTypeAnnotations attribute (┬º4.7.20)."""
 
     pass
 
 
 @dataclass
 class RuntimeInvisibleTypeAnnotationsAttr(RuntimeTypeAnnotationsAttr):
-    """Represents the RuntimeInvisibleTypeAnnotations attribute (§4.7.21)."""
+    """Represents the RuntimeInvisibleTypeAnnotations attribute (┬º4.7.21)."""
 
     pass
 
 
 @dataclass
 class AnnotationDefaultAttr(AttributeInfo):
-    """Represents the AnnotationDefault attribute (§4.7.22)."""
+    """Represents the AnnotationDefault attribute (┬º4.7.22)."""
 
     default_value: ElementValueInfo
 
 
 @dataclass
 class BootstrapMethodInfo:
-    """Entry in the BootstrapMethods attribute (§4.7.23)."""
+    """Entry in the BootstrapMethods attribute (┬º4.7.23)."""
 
     bootstrap_method_ref: int
     num_boostrap_arguments: int
@@ -660,7 +660,7 @@ class BootstrapMethodInfo:
 
 @dataclass
 class BootstrapMethodsAttr(AttributeInfo):
-    """Represents the BootstrapMethods attribute (§4.7.23)."""
+    """Represents the BootstrapMethods attribute (┬º4.7.23)."""
 
     num_bootstrap_methods: int
     bootstrap_methods: list[BootstrapMethodInfo]
@@ -668,7 +668,7 @@ class BootstrapMethodsAttr(AttributeInfo):
 
 @dataclass
 class MethodParameterInfo:
-    """Entry in the MethodParameters attribute (§4.7.24)."""
+    """Entry in the MethodParameters attribute (┬º4.7.24)."""
 
     name_index: int
     access_flags: constants.MethodParameterAccessFlag
@@ -676,7 +676,7 @@ class MethodParameterInfo:
 
 @dataclass
 class MethodParametersAttr(AttributeInfo):
-    """Represents the MethodParameters attribute (§4.7.24)."""
+    """Represents the MethodParameters attribute (┬º4.7.24)."""
 
     parameters_count: int
     parameters: list[MethodParameterInfo]
@@ -684,7 +684,7 @@ class MethodParametersAttr(AttributeInfo):
 
 @dataclass
 class RequiresInfo:
-    """Entry in the Module attribute requires table (§4.7.25)."""
+    """Entry in the Module attribute requires table (┬º4.7.25)."""
 
     requires_index: int
     requires_flag: constants.ModuleRequiresAccessFlag
@@ -693,7 +693,7 @@ class RequiresInfo:
 
 @dataclass
 class ExportInfo:
-    """Entry in the Module attribute exports table (§4.7.25)."""
+    """Entry in the Module attribute exports table (┬º4.7.25)."""
 
     exports_index: int
     exports_flags: constants.ModuleExportsAccessFlag
@@ -703,7 +703,7 @@ class ExportInfo:
 
 @dataclass
 class OpensInfo:
-    """Entry in the Module attribute opens table (§4.7.25)."""
+    """Entry in the Module attribute opens table (┬º4.7.25)."""
 
     opens_index: int
     opens_flags: constants.ModuleOpensAccessFlag
@@ -713,7 +713,7 @@ class OpensInfo:
 
 @dataclass
 class ProvidesInfo:
-    """Entry in the Module attribute provides table (§4.7.25)."""
+    """Entry in the Module attribute provides table (┬º4.7.25)."""
 
     provides_index: int
     provides_with_count: int
@@ -722,7 +722,7 @@ class ProvidesInfo:
 
 @dataclass
 class ModuleAttr(AttributeInfo):
-    """Represents the Module attribute (§4.7.25)."""
+    """Represents the Module attribute (┬º4.7.25)."""
 
     module_name_index: int
     module_flags: constants.ModuleAccessFlag
@@ -741,7 +741,7 @@ class ModuleAttr(AttributeInfo):
 
 @dataclass
 class ModulePackagesAttr(AttributeInfo):
-    """Represents the ModulePackages attribute (§4.7.26)."""
+    """Represents the ModulePackages attribute (┬º4.7.26)."""
 
     package_count: int
     package_index: list[int]
@@ -749,21 +749,21 @@ class ModulePackagesAttr(AttributeInfo):
 
 @dataclass
 class ModuleMainClassAttr(AttributeInfo):
-    """Represents the ModuleMainClass attribute (§4.7.27)."""
+    """Represents the ModuleMainClass attribute (┬º4.7.27)."""
 
     main_class_index: int
 
 
 @dataclass
 class NestHostAttr(AttributeInfo):
-    """Represents the NestHost attribute (§4.7.28)."""
+    """Represents the NestHost attribute (┬º4.7.28)."""
 
     host_class_index: int
 
 
 @dataclass
 class NestMembersAttr(AttributeInfo):
-    """Represents the NestMembers attribute (§4.7.29)."""
+    """Represents the NestMembers attribute (┬º4.7.29)."""
 
     number_of_classes: int
     classes: list[int]
@@ -771,7 +771,7 @@ class NestMembersAttr(AttributeInfo):
 
 @dataclass
 class RecordComponentInfo:
-    """Describes a single record component in the Record attribute (§4.7.30)."""
+    """Describes a single record component in the Record attribute (┬º4.7.30)."""
 
     name_index: int
     descriptor_index: int
@@ -781,7 +781,7 @@ class RecordComponentInfo:
 
 @dataclass
 class RecordAttr(AttributeInfo):
-    """Represents the Record attribute (§4.7.30)."""
+    """Represents the Record attribute (┬º4.7.30)."""
 
     components_count: int
     components: list[RecordComponentInfo]
@@ -789,7 +789,7 @@ class RecordAttr(AttributeInfo):
 
 @dataclass
 class PermittedSubclassesAttr(AttributeInfo):
-    """Represents the PermittedSubclasses attribute (§4.7.31)."""
+    """Represents the PermittedSubclasses attribute (┬º4.7.31)."""
 
     number_of_classes: int
     classes: list[int]

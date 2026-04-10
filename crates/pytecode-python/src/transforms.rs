@@ -672,6 +672,16 @@ pub struct PyPipeline {
     callback_error: std::sync::Arc<std::sync::Mutex<Option<pyo3::PyErr>>>,
 }
 
+impl PyPipeline {
+    pub(crate) fn has_python_callbacks(&self) -> bool {
+        self.spec.steps.iter().any(|step| match step {
+            PipelineStep::Class { action, .. }
+            | PipelineStep::Field { action, .. }
+            | PipelineStep::Method { action, .. } => matches!(action, TransformAction::Custom(_)),
+        })
+    }
+}
+
 #[pymethods]
 impl PyPipeline {
     #[new]
@@ -849,6 +859,7 @@ impl PyPipeline {
     fn compile(&self) -> PyCompiledPipeline {
         PyCompiledPipeline {
             inner: self.spec.compile(),
+            contains_python_callbacks: self.has_python_callbacks(),
             callback_error: self.callback_error.clone(),
         }
     }
@@ -870,7 +881,8 @@ impl PyPipeline {
 /// A compiled pipeline with pre-compiled regexes for hot-path evaluation.
 #[pyclass(name = "RustCompiledPipeline", module = "pytecode._rust")]
 pub struct PyCompiledPipeline {
-    inner: CompiledPipeline,
+    pub(crate) inner: CompiledPipeline,
+    pub(crate) contains_python_callbacks: bool,
     /// Shared error slot from the originating `PyPipeline`.
     callback_error: std::sync::Arc<std::sync::Mutex<Option<pyo3::PyErr>>>,
 }

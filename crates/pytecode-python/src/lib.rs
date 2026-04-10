@@ -9,6 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 mod analysis;
+mod archive;
 mod attributes;
 mod model;
 mod transforms;
@@ -2416,6 +2417,7 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(backend_info, module)?)?;
     model::register(py, module)?;
     analysis::register(py, module)?;
+    archive::register(py, module)?;
     attributes::register(py, module)?;
     module.add(
         "__all__",

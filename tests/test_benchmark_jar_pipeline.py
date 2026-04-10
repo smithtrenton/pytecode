@@ -1,4 +1,4 @@
-"""Tests for Rust/Python benchmark reporting helpers."""
+"""Tests for native-Rust vs wrapper-overhead benchmark reporting helpers."""
 
 from __future__ import annotations
 
@@ -56,4 +56,5 @@ def test_compare_reports_lines_up_stage_payloads() -> None:
     assert report["jar"] == "fixtures/example.jar"
     assert report["iterations"] == 3
     assert report["stages"][0]["stage"] == "model-lift"
+    assert report["stages"][0]["python_wrapper_overhead_vs_rust"] == 2.4
     assert report["stages"][0]["rust_speedup_vs_python"] == 2.4

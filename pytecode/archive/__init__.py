@@ -6,16 +6,26 @@ import copy
 import os
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from ..analysis.hierarchy import ClassResolver
-from ..classfile.reader import ClassReader
-from ..edit.debug_info import DebugInfoPolicy, normalize_debug_info_policy
-from ..edit.model import ClassModel
-from ..transforms import ClassTransform
+from .. import _rust
 
 __all__ = ["JarFile", "JarInfo"]
+
+
+class DebugInfoPolicy(Enum):
+    """Policy controlling whether archive rewrites preserve or strip debug info."""
+
+    PRESERVE = "preserve"
+    STRIP = "strip"
+
+
+_RustRewriteTransform = _rust.RustPipeline | _rust.RustCompiledPipeline
+_RustTransformInput = _RustRewriteTransform | _rust.RustClassTransform
+_RustBoundTransform = Callable[[_rust.RustClassModel], object | None]
 
 
 @dataclass
@@ -79,6 +89,42 @@ def _is_class_filename(filename: str) -> bool:
     return not filename.endswith(os.sep) and filename.endswith(".class")
 
 
+def _normalize_rust_transform(
+    transform: _RustTransformInput | _RustBoundTransform | None,
+) -> _RustRewriteTransform | None:
+    if transform is None:
+        return None
+    if isinstance(transform, (_rust.RustPipeline, _rust.RustCompiledPipeline)):
+        return transform
+    if isinstance(transform, _rust.RustClassTransform):
+        pipeline = _rust.RustPipeline()
+        pipeline.on_classes(_rust.RustClassMatcher.any(), transform)
+        return pipeline
+    owner = getattr(transform, "__self__", None)
+    if isinstance(owner, (_rust.RustPipeline, _rust.RustCompiledPipeline)):
+        return owner
+    return None
+
+
+def _apply_rust_transform(transform: _RustRewriteTransform, model: _rust.RustClassModel) -> None:
+    transform.apply(model)
+
+
+def _effective_rust_debug_policy(debug_policy: DebugInfoPolicy, *, skip_debug: bool) -> str:
+    return DebugInfoPolicy.STRIP.value if skip_debug else debug_policy.value
+
+
+def normalize_debug_info_policy(policy: DebugInfoPolicy | str) -> DebugInfoPolicy:
+    """Normalize archive debug-info policy values."""
+
+    if isinstance(policy, DebugInfoPolicy):
+        return policy
+    try:
+        return DebugInfoPolicy(policy)
+    except ValueError as exc:
+        raise ValueError("debug_info must be one of: preserve, strip") from exc
+
+
 def _read_archive_state(filename: str | os.PathLike[str]) -> tuple[list[zipfile.ZipInfo], dict[str, JarInfo]]:
     files: dict[str, JarInfo] = {}
     with zipfile.ZipFile(filename, "r") as jar:
@@ -88,6 +134,42 @@ def _read_archive_state(filename: str | os.PathLike[str]) -> tuple[list[zipfile.
             data = b"" if info.is_dir() else jar.read(info.filename)
             files[normalized] = JarInfo(normalized, info, data)
     return infolist, files
+
+
+def _zipinfo_metadata_signature(info: zipfile.ZipInfo) -> tuple[object, ...]:
+    return (
+        info.filename,
+        info.comment,
+        info.extra,
+        info.compress_type,
+        info.date_time,
+        info.external_attr,
+        info.flag_bits,
+        info.create_system,
+        info.create_version,
+        info.extract_version,
+        info.volume,
+        info.internal_attr,
+        info.is_dir(),
+    )
+
+
+def _archive_state_matches_disk(
+    filename: str | os.PathLike[str],
+    files: dict[str, JarInfo],
+) -> bool:
+    _, disk_files = _read_archive_state(filename)
+    if list(files) != list(disk_files):
+        return False
+    for entry_name, jar_info in files.items():
+        disk_info = disk_files.get(entry_name)
+        if disk_info is None:
+            return False
+        if jar_info.bytes != disk_info.bytes:
+            return False
+        if _zipinfo_metadata_signature(jar_info.zipinfo) != _zipinfo_metadata_signature(disk_info.zipinfo):
+            return False
+    return True
 
 
 class JarFile:
@@ -170,18 +252,18 @@ class JarFile:
         self.infolist = [item.zipinfo for item in self.files.values()]
         return jar_info
 
-    def parse_classes(self) -> tuple[list[tuple[JarInfo, ClassReader]], list[JarInfo]]:
-        """Parse all ``.class`` entries and separate them from other resources.
+    def parse_classes(self) -> tuple[list[tuple[JarInfo, _rust.ClassReader]], list[JarInfo]]:
+        """Parse all ``.class`` entries into Rust-backed readers and separate them from other resources.
 
         Returns:
             A two-element tuple of (class entries, non-class entries).
-            Each class entry is a ``(JarInfo, ClassReader)`` pair.
+            Each class entry is a ``(JarInfo, pytecode.ClassReader)`` pair.
         """
-        classes: list[tuple[JarInfo, ClassReader]] = []
+        classes: list[tuple[JarInfo, _rust.ClassReader]] = []
         other_files: list[JarInfo] = []
         for jar_info in self.files.values():
             if _is_class_filename(jar_info.filename):
-                classes.append((jar_info, ClassReader.from_bytes(jar_info.bytes)))
+                classes.append((jar_info, _rust.ClassReader.from_bytes(jar_info.bytes)))
             else:
                 other_files.append(jar_info)
         return classes, other_files
@@ -190,17 +272,17 @@ class JarFile:
         self,
         output_path: str | os.PathLike[str] | None = None,
         *,
-        transform: ClassTransform | None = None,
+        transform: _RustTransformInput | _RustBoundTransform | None = None,
         recompute_frames: bool = False,
-        resolver: ClassResolver | None = None,
+        resolver: _rust.RustMappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
         skip_debug: bool = False,
     ) -> Path:
         """Write the current archive state back to disk.
 
-        By default the archive is rewritten in place.  ``.class`` entries are
-        copied verbatim unless *transform* or non-default lowering options
-        require re-lowering through ``ClassModel``.
+        By default the archive is rewritten in place. ``.class`` entries are
+        copied verbatim unless *transform* or non-default rewrite options
+        require Rust-backed reserialization.
 
         Signed-JAR artifacts under ``META-INF`` are preserved as ordinary
         resources and are **not** re-signed; if class bytes change the
@@ -209,23 +291,29 @@ class JarFile:
         Args:
             output_path: Destination path.  When ``None`` the original file
                 is overwritten.
-            transform: Optional callable applied to each ``ClassModel``
-                in place.  Must return ``None``.
+            transform: Optional Rust-backed transform or pipeline (or a bound
+                ``.apply`` method from a Rust pipeline object).
             recompute_frames: Whether to recompute ``StackMapTable`` frames
                 when lowering classes.
             resolver: Class hierarchy resolver used during frame computation.
             debug_info: Policy controlling how debug attributes are emitted.
-            skip_debug: If ``True``, discard debug attributes when lifting
-                class bytes into ``ClassModel``.
+            skip_debug: If ``True``, strip debug attributes during rewrite.
 
         Returns:
             The resolved destination ``Path``.
 
         Raises:
-            TypeError: If *transform* returns a non-``None`` value.
+            TypeError: If *transform* is not a supported Rust-backed transform
+                or if *resolver* is not a Rust mapping resolver.
         """
 
         debug_policy = normalize_debug_info_policy(debug_info)
+        rust_transform = _normalize_rust_transform(transform)
+        if transform is not None and rust_transform is None:
+            raise TypeError(
+                "JarFile.rewrite() requires a RustClassTransform, RustPipeline, "
+                "RustCompiledPipeline, or bound Rust .apply method"
+            )
         should_rewrite_classes = (
             transform is not None
             or recompute_frames
@@ -242,24 +330,55 @@ class JarFile:
         temp_path = Path(temp_name)
 
         try:
+            if rust_transform is not None and not skip_debug and _archive_state_matches_disk(self.filename, self.files):
+                try:
+                    _rust.rewrite_archive_with_rust_transform(
+                        self.filename,
+                        rust_transform,
+                        output_path=destination,
+                        recompute_frames=recompute_frames,
+                        resolver=resolver,
+                        debug_info=debug_policy.value,
+                    )
+                except NotImplementedError:
+                    pass
+                else:
+                    new_infolist, new_files = _read_archive_state(destination)
+                    self.filename = os.fspath(destination)
+                    self.infolist = new_infolist
+                    self.files = new_files
+                    return destination
+
             with zipfile.ZipFile(temp_path, "w") as jar:
                 for jar_info in self.files.values():
                     data = jar_info.bytes
                     if should_rewrite_classes and _is_class_filename(jar_info.filename):
-                        model = ClassModel.from_bytes(data, skip_debug=skip_debug)
-                        if transform is not None:
-                            model._rust_clean = False  # transform may mutate the model
-                            model._rust_bytes = None
-                            result = transform(model)
-                            if result is not None:
-                                raise TypeError(
-                                    "JarFile.rewrite() transforms must mutate ClassModel in place and return None"
+                        if rust_transform is not None:
+                            if skip_debug:
+                                raise ValueError(
+                                    "JarFile.rewrite() skip_debug is not supported with Rust-backed transforms"
                                 )
-                        data = model.to_bytes(
-                            recompute_frames=recompute_frames,
-                            resolver=resolver,
-                            debug_info=debug_policy,
-                        )
+                            rust_model = _rust.RustClassModel.from_bytes(data)
+                            _apply_rust_transform(rust_transform, rust_model)
+                            data = bytes(
+                                rust_model.to_bytes_with_options(
+                                    recompute_frames=recompute_frames,
+                                    resolver=resolver,
+                                    debug_info=debug_policy.value,
+                                )
+                            )
+                        else:
+                            rust_model = _rust.RustClassModel.from_bytes(data)
+                            data = bytes(
+                                rust_model.to_bytes_with_options(
+                                    recompute_frames=recompute_frames,
+                                    resolver=resolver,
+                                    debug_info=_effective_rust_debug_policy(
+                                        debug_policy,
+                                        skip_debug=skip_debug,
+                                    ),
+                                )
+                            )
                     jar.writestr(_clone_zipinfo(jar_info.zipinfo, filename=jar_info.filename), data)
 
             temp_path.replace(destination)

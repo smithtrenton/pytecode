@@ -10,7 +10,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use zip::write::SimpleFileOptions;
+use zip::read::ZipFile;
+use zip::write::FullFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,10 +224,23 @@ impl JarFile {
                     writer.raw_copy_file_rename(source_entry, archive_name(&entry.filename))?;
                     continue;
                 }
-                if let Some(transform_ref) = transform.as_deref_mut() {
-                    write_entry(&mut writer, entry, Some(transform_ref), options)?;
+                if let Some(index) = entry.original_index {
+                    let mut source_entry = source.by_index(index)?;
+                    if let Some(transform_ref) = transform.as_deref_mut() {
+                        write_entry(
+                            &mut writer,
+                            entry,
+                            Some(&mut source_entry),
+                            Some(transform_ref),
+                            options,
+                        )?;
+                    } else {
+                        write_entry(&mut writer, entry, Some(&mut source_entry), None, options)?;
+                    }
+                } else if let Some(transform_ref) = transform.as_deref_mut() {
+                    write_entry(&mut writer, entry, None, Some(transform_ref), options)?;
                 } else {
-                    write_entry(&mut writer, entry, None, options)?;
+                    write_entry(&mut writer, entry, None, None, options)?;
                 }
             }
             writer.finish()?;
@@ -323,16 +337,18 @@ fn read_archive_entries(path: &Path) -> Result<Vec<JarInfo>> {
 }
 
 fn should_raw_copy_entry(entry: &JarInfo, no_transform: bool, options: RewriteOptions<'_>) -> bool {
-    no_transform
+    (no_transform
         && options.frame_mode == FrameComputationMode::Preserve
         && options.debug_info == DebugInfoPolicy::Preserve
         && options.resolver.is_none()
-        && entry.original_index.is_some()
+        && entry.original_index.is_some())
+        || (entry.original_index.is_some() && !is_class_filename(entry))
 }
 
 fn write_entry(
     writer: &mut ZipWriter<File>,
     entry: &JarInfo,
+    source_entry: Option<&mut ZipFile<'_>>,
     transform: Option<&mut dyn ApplyClassTransform>,
     options: RewriteOptions<'_>,
 ) -> Result<()> {
@@ -364,19 +380,69 @@ fn write_entry(
         Cow::Borrowed(&entry.bytes)
     };
 
-    writer.start_file(archive_name(&entry.filename), file_options(entry))?;
+    let file_options = if let Some(source_entry) = source_entry {
+        file_options_from_source(source_entry)?
+    } else {
+        file_options(entry)
+    };
+    writer.start_file(archive_name(&entry.filename), file_options)?;
     writer.write_all(&bytes)?;
     Ok(())
 }
 
-fn file_options(entry: &JarInfo) -> SimpleFileOptions {
-    let mut options = SimpleFileOptions::default()
+fn file_options(entry: &JarInfo) -> FullFileOptions<'static> {
+    let mut options = FullFileOptions::default()
         .compression_method(entry.metadata.compression_method)
         .last_modified_time(entry.metadata.last_modified);
     if let Some(unix_mode) = entry.metadata.unix_mode {
         options = options.unix_permissions(unix_mode);
     }
     options
+}
+
+fn file_options_from_source(source_entry: &mut ZipFile<'_>) -> Result<FullFileOptions<'static>> {
+    let mut options = FullFileOptions::default()
+        .compression_method(source_entry.compression())
+        .last_modified_time(source_entry.last_modified().unwrap_or_default());
+    if let Some(unix_mode) = source_entry.unix_mode() {
+        options = options.unix_permissions(unix_mode);
+    }
+    if let Some(extra_data) = source_entry.extra_data() {
+        copy_extra_data(&mut options, extra_data)?;
+    }
+    Ok(options)
+}
+
+fn copy_extra_data(options: &mut FullFileOptions<'static>, extra_data: &[u8]) -> Result<()> {
+    let mut offset = 0_usize;
+    while offset < extra_data.len() {
+        if extra_data.len().saturating_sub(offset) < 4 {
+            return Err(ArchiveError::Io(io::Error::other(
+                "archive entry extra data is truncated",
+            )));
+        }
+        let header_id = u16::from_le_bytes([extra_data[offset], extra_data[offset + 1]]);
+        let data_len = usize::from(u16::from_le_bytes([
+            extra_data[offset + 2],
+            extra_data[offset + 3],
+        ]));
+        let value_start = offset + 4;
+        let value_end = value_start + data_len;
+        if value_end > extra_data.len() {
+            return Err(ArchiveError::Io(io::Error::other(
+                "archive entry extra data is truncated",
+            )));
+        }
+        options
+            .add_extra_data(
+                header_id,
+                (&extra_data[value_start..value_end]).into(),
+                false,
+            )
+            .map_err(ArchiveError::Zip)?;
+        offset = value_end;
+    }
+    Ok(())
 }
 
 fn normalize_filename(filename: &str, force_dir: bool) -> Result<String> {

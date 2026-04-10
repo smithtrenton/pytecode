@@ -1,7 +1,8 @@
-# Benchmarks: Rust vs Python Performance
+# Benchmarks: Native Rust and Python Wrapper Overhead
 
-Benchmark comparing the Rust (`pytecode-engine`) and Python (`pytecode`) implementations
-across all pipeline stages. Each stage is benchmarked in isolation with fresh setup.
+Benchmark reporting that compares native Rust stage timings with the wrapper-inclusive
+Python path across the same pipeline stages. Each stage is benchmarked in isolation
+with fresh setup.
 
 **Corpus:** byte-buddy-1.17.5.jar (5,928 classes, 20.4 MB)
 **Iterations:** 5 per stage (median reported)
@@ -20,35 +21,43 @@ across all pipeline stages. Each stage is benchmarked in isolation with fresh se
 
 ## Key Observations
 
-### Rust-native pipeline: 19× faster end-to-end
+### Native Rust path: 19× lower end-to-end overhead
 
-All five stages show speedups ranging from 1.2× (I/O-bound jar-read) to 49×
-(class-parse). The compute-heavy stages — parse, lift, lower, write — show the
-largest gains because they involve intensive data structure construction that
-benefits from Rust's zero-allocation patterns and compiled codegen.
+All five stages show Python/Rust median ratios ranging from 1.2× (I/O-bound
+jar-read) to 49× (class-parse). The compute-heavy stages — parse, lift, lower,
+write — show the largest wrapper overhead because they involve intensive data
+structure construction that benefits from Rust's compiled execution and reduced
+cross-language materialization.
 
-### Bridge overhead dominates when crossing back to Python
+### Bridge overhead used to dominate Python model lifting
 
-Rust parse + lift stays in Rust for ~500ms. However, crossing back to Python via
-the PyO3 bridge to create Python dataclass objects costs ~19s for 5,928 classes —
-comparable to the pure Python path (~18s). This means `ClassModel.from_bytes()`
-(Rust + bridge) is **not faster** than `ClassModel.from_classfile()` (pure Python)
-for workflows that need Python model objects.
+These numbers were captured before the later bridge cleanup phases. At that
+time, Rust parse + lift stayed in Rust for ~500ms, but materializing full Python
+dataclass models through the PyO3 bridge still cost ~19s for 5,928 classes.
+The current codebase now single-parses `ClassModel.from_bytes()` through Rust and
+uses Rust-backed serialization for clean roundtrips and normal code-mutation
+emission, so this document should be read as historical benchmark context rather
+than the exact current `ClassModel` cost model.
 
-### When Rust wins
+### When wrapper overhead stays low
+
+Operations that stay mostly inside Rust keep Python-layer cost close to the
+native baseline.
+
+### When native Rust wins outright
 
 Operations that stay **entirely in Rust** see the full speedup:
-- `verify_classmodel()`: 11.9× faster than Python verification
-- `bench-smoke` CLI: 19× end-to-end
+- `verify_classmodel()`: 11.9× lower median cost than the wrapper-inclusive path
+- `bench-smoke` CLI: 19× lower end-to-end median cost
 - Any future Rust-only pipeline (transforms, analysis) benefits fully
 
-### When Python is fine
+### Where Python still matters
 
-The bridge cost means Rust doesn't help when the goal is to produce Python
-`ClassModel` objects. The pure Python path is the right choice for:
-- Interactive editing (model objects needed in Python)
-- Python-side transforms (closures mutate Python models)
-- Small workloads where parse time is negligible
+Python still owns the legacy high-level editing DSL: symbolic labels, operand
+wrappers, debug-info helpers, and user-defined transform callbacks all operate
+on Python objects. The remaining compatibility cost is therefore concentrated in
+legacy Python model materialization and callback-oriented interop, not in the
+core Rust parse/write engine anymore.
 
 ## Reproducing
 

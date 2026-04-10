@@ -480,6 +480,152 @@ impl ConstantPoolBuilder {
         self.add_entry(ConstantPoolEntry::Package(PackageInfo { name_index }))
             .map(PackageIndex::from)
     }
+
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.entries.len() {
+            self.entries.truncate(len);
+            self.key_to_index.retain(|_, v| (*v as usize) < len);
+        }
+    }
+
+    pub fn find_utf8(&self, value: &str) -> Option<Utf8Index> {
+        let bytes = encode_modified_utf8(value);
+        self.key_to_index
+            .get(&PoolKey::Utf8(bytes.into_boxed_slice()))
+            .copied()
+            .map(Utf8Index::from)
+    }
+
+    pub fn find_integer(&self, value: u32) -> Option<CpIndex> {
+        self.key_to_index
+            .get(&PoolKey::Integer(value))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_float_bits(&self, raw_bits: u32) -> Option<CpIndex> {
+        self.key_to_index
+            .get(&PoolKey::Float(raw_bits))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_long(&self, high: u32, low: u32) -> Option<CpIndex> {
+        self.key_to_index
+            .get(&PoolKey::Long(high, low))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_double_bits(&self, raw_bits: u64) -> Option<CpIndex> {
+        let high = (raw_bits >> 32) as u32;
+        let low = raw_bits as u32;
+        self.key_to_index
+            .get(&PoolKey::Double(high, low))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_class(&self, name: &str) -> Option<ClassIndex> {
+        let name_index = self.find_utf8(name)?;
+        self.key_to_index
+            .get(&PoolKey::Class(name_index.value()))
+            .copied()
+            .map(ClassIndex::from)
+    }
+
+    pub fn find_string(&self, value: &str) -> Option<CpIndex> {
+        let string_index = self.find_utf8(value)?;
+        self.key_to_index
+            .get(&PoolKey::String(string_index.value()))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_method_type(&self, descriptor: &str) -> Option<CpIndex> {
+        let descriptor_index = self.find_utf8(descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::MethodType(descriptor_index.value()))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_name_and_type(&self, name: &str, descriptor: &str) -> Option<NameAndTypeIndex> {
+        let name_index = self.find_utf8(name)?;
+        let descriptor_index = self.find_utf8(descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::NameAndType(
+                name_index.value(),
+                descriptor_index.value(),
+            ))
+            .copied()
+            .map(NameAndTypeIndex::from)
+    }
+
+    pub fn find_field_ref(&self, owner: &str, name: &str, descriptor: &str) -> Option<CpIndex> {
+        let class_index = self.find_class(owner)?;
+        let nat_index = self.find_name_and_type(name, descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::FieldRef(class_index.value(), nat_index.value()))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_method_ref(&self, owner: &str, name: &str, descriptor: &str) -> Option<CpIndex> {
+        let class_index = self.find_class(owner)?;
+        let nat_index = self.find_name_and_type(name, descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::MethodRef(class_index.value(), nat_index.value()))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_interface_method_ref(
+        &self,
+        owner: &str,
+        name: &str,
+        descriptor: &str,
+    ) -> Option<CpIndex> {
+        let class_index = self.find_class(owner)?;
+        let nat_index = self.find_name_and_type(name, descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::InterfaceMethodRef(
+                class_index.value(),
+                nat_index.value(),
+            ))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_method_handle(
+        &self,
+        reference_kind: u8,
+        reference_index: CpIndex,
+    ) -> Option<CpIndex> {
+        self.key_to_index
+            .get(&PoolKey::MethodHandle(
+                reference_kind,
+                reference_index.value(),
+            ))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_dynamic(
+        &self,
+        bootstrap_method_attr_index: BootstrapMethodIndex,
+        name: &str,
+        descriptor: &str,
+    ) -> Option<CpIndex> {
+        let nat_index = self.find_name_and_type(name, descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::Dynamic(
+                bootstrap_method_attr_index.value(),
+                nat_index.value(),
+            ))
+            .copied()
+            .map(CpIndex::from)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

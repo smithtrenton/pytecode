@@ -2,22 +2,18 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import pytecode
 import pytecode.archive as jar_module
 from pytecode.archive import JarFile, JarInfo
-from pytecode.classfile.attributes import (
-    LineNumberTableAttr,
-    LocalVariableTableAttr,
-    LocalVariableTypeTableAttr,
-    SourceDebugExtensionAttr,
-    SourceFileAttr,
-)
 from pytecode.classfile.constants import ClassAccessFlag
-from pytecode.classfile.reader import ClassReader
-from pytecode.edit.model import ClassModel
-from tests.helpers import TEST_RESOURCES, find_raw_code_attr, make_compiled_jar, minimal_classfile
+from pytecode.transforms.rust import RustPipelineBuilder, add_access_flags, class_named
+from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
+
+rust = pytest.importorskip("pytecode._rust")
 
 
 def make_jar(files: dict[str, bytes], path: Path) -> JarFile:
@@ -119,12 +115,12 @@ def test_parse_classes_all_classes(tmp_path: Path):
     assert others == []
 
 
-def test_parse_classes_returns_classreader(tmp_path: Path):
+def test_parse_classes_returns_rust_classreader(tmp_path: Path):
     jar = make_jar({"Foo.class": minimal_classfile()}, tmp_path / "t.jar")
     classes, _ = jar.parse_classes()
     jar_info, cr = classes[0]
     assert isinstance(jar_info, JarInfo)
-    assert isinstance(cr, ClassReader)
+    assert isinstance(cr, pytecode.ClassReader)
 
 
 def test_parse_classes_classreader_has_class_info(tmp_path: Path):
@@ -327,25 +323,169 @@ def test_rewrite_preserves_order_and_selected_metadata(tmp_path: Path):
         assert zf.read("pkg/Foo.class") == class_bytes
 
 
-def test_rewrite_applies_class_transform(tmp_path: Path):
+def test_rewrite_applies_rust_pipeline_transform(tmp_path: Path):
     jar_path = make_compiled_jar(
         tmp_path,
         [TEST_RESOURCES / "HelloWorld.java"],
         extra_files={"README.txt": b"fixture"},
     )
     jar = JarFile(jar_path)
-    out_path = tmp_path / "rewritten.jar"
+    out_path = tmp_path / "rewritten-rust.jar"
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
 
-    def make_final(model: ClassModel) -> None:
-        model.access_flags |= ClassAccessFlag.FINAL
-
-    jar.rewrite(out_path, transform=make_final)
+    jar.rewrite(out_path, transform=pipeline.apply)
 
     rewritten = JarFile(out_path)
     classes, others = rewritten.parse_classes()
     assert [jar_info.filename for jar_info, _ in classes] == ["HelloWorld.class"]
     assert ClassAccessFlag.FINAL in classes[0][1].class_info.access_flags
     assert [other.filename for other in others] == ["README.txt"]
+
+
+def test_rewrite_accepts_rust_pipeline_object(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-rust-object.jar"
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_accepts_rust_class_transform_object(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-rust-transform.jar"
+
+    jar.rewrite(out_path, transform=add_access_flags(int(ClassAccessFlag.FINAL)))
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def _assert_rust_rewrite_skips_python_classmodel_materialization(tmp_path: Path, transform: Any, suffix: str) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / f"rewritten-rust-no-python-{suffix}.jar"
+
+    jar.rewrite(out_path, transform=transform)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_with_rust_pipeline_object_skips_python_classmodel_materialization(
+    tmp_path: Path,
+) -> None:
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    _assert_rust_rewrite_skips_python_classmodel_materialization(
+        tmp_path,
+        pipeline,
+        "object",
+    )
+
+
+def test_rewrite_with_rust_pipeline_apply_skips_python_classmodel_materialization(
+    tmp_path: Path,
+) -> None:
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    _assert_rust_rewrite_skips_python_classmodel_materialization(
+        tmp_path,
+        pipeline.apply,
+        "bound-method",
+    )
+
+
+def test_rewrite_delegates_unchanged_rust_pipeline_archives_to_rust_archive_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "delegated-rust.jar"
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+    original = jar_module._rust.rewrite_archive_with_rust_transform
+    calls: list[tuple[object, ...]] = []
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        calls.append((*args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(jar_module._rust, "rewrite_archive_with_rust_transform", wrapped)
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    assert len(calls) == 1
+
+
+def test_rewrite_keeps_python_archive_path_after_in_memory_archive_edits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    jar.add_file("README.txt", b"updated")
+    out_path = tmp_path / "python-fallback.jar"
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Rust archive delegate should not run after in-memory archive edits")
+
+    monkeypatch.setattr(jar_module._rust, "rewrite_archive_with_rust_transform", fail)
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    rewritten = JarFile(out_path)
+    assert rewritten.files["README.txt"].bytes == b"updated"
 
 
 def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path: Path):
@@ -356,16 +496,25 @@ def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path
     jar.rewrite(out_path, skip_debug=True)
 
     rewritten = JarFile(out_path)
-    class_info = ClassReader(rewritten.files["HelloWorld.class"].bytes).class_info
-    assert not any(isinstance(attr, (SourceFileAttr, SourceDebugExtensionAttr)) for attr in class_info.attributes)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert not any(
+        isinstance(attr, (rust.SourceFileAttr, rust.SourceDebugExtensionAttr)) for attr in class_info.attributes
+    )
     for method in class_info.methods:
-        code_attr = find_raw_code_attr(method)
+        code_attr = next((attr for attr in method.attributes if isinstance(attr, rust.CodeAttr)), None)
         if code_attr is None:
             continue
         assert not any(
-            isinstance(attr, (LineNumberTableAttr, LocalVariableTableAttr, LocalVariableTypeTableAttr))
+            isinstance(attr, (rust.LineNumberTableAttr, rust.LocalVariableTableAttr, rust.LocalVariableTypeTableAttr))
             for attr in code_attr.attributes
         )
+
+
+def test_rewrite_rejects_plain_python_transform(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    with pytest.raises(TypeError, match="requires a RustClassTransform"):
+        jar.rewrite(transform=lambda model: None)
 
 
 def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_path: Path):
@@ -380,14 +529,35 @@ def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_pat
     jar = JarFile(jar_path)
     out_path = tmp_path / "signed-out.jar"
 
-    def make_final(model: ClassModel) -> None:
-        model.access_flags |= ClassAccessFlag.FINAL
-
-    jar.rewrite(out_path, transform=make_final)
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+    jar.rewrite(out_path, transform=pipeline)
 
     rewritten = JarFile(out_path)
     assert rewritten.files[str(Path("META-INF/TEST.SF"))].bytes == b"signature-file"
     assert rewritten.files[str(Path("META-INF/TEST.RSA"))].bytes == b"signature-block"
+
+
+def test_rewrite_rejects_skip_debug_with_rust_pipeline_transform(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    pipeline = (
+        RustPipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    with pytest.raises(ValueError, match="skip_debug is not supported with Rust-backed transforms"):
+        jar.rewrite(transform=pipeline, skip_debug=True)
 
 
 def test_rewrite_serializes_added_and_removed_entries(tmp_path: Path):
@@ -425,11 +595,13 @@ def test_rewrite_is_atomic_when_transform_fails(tmp_path: Path):
     jar = JarFile(jar_path)
     original_bytes = jar_path.read_bytes()
 
-    def explode(model: ClassModel) -> None:
+    def explode(model: object) -> None:
         raise RuntimeError("boom")
 
+    pipeline = RustPipelineBuilder().on_classes_custom(rust.RustClassMatcher.any(), explode).build()
+
     with pytest.raises(RuntimeError, match="boom"):
-        jar.rewrite(transform=explode)
+        jar.rewrite(transform=pipeline)
 
     assert jar_path.read_bytes() == original_bytes
 

@@ -1,7 +1,7 @@
 """Data types representing JVM bytecode instruction operands.
 
 Provides dataclasses and enums that model the operand formats for each JVM
-instruction as defined in the JVM specification (JVMS §6.5). Each opcode is
+instruction as defined in the JVM specification (JVMS ┬º6.5). Each opcode is
 mapped to an ``InsnInfoType`` member whose associated ``InsnInfo`` subclass
 describes the shape of its operands.
 """
@@ -50,10 +50,10 @@ class InsnInfo:
 
 @dataclass
 class LocalIndex(InsnInfo):
-    """Operand carrying a single-byte local variable index (§6.5).
+    """Operand carrying a single-byte local variable index (┬º6.5).
 
     Attributes:
-        index: Local variable slot index (0–255).
+        index: Local variable slot index (0ΓÇô255).
     """
 
     index: int
@@ -61,10 +61,10 @@ class LocalIndex(InsnInfo):
 
 @dataclass
 class LocalIndexW(InsnInfo):
-    """Operand carrying a wide (two-byte) local variable index (§6.5.wide).
+    """Operand carrying a wide (two-byte) local variable index (┬º6.5.wide).
 
     Attributes:
-        index: Local variable slot index (0–65535).
+        index: Local variable slot index (0ΓÇô65535).
     """
 
     index: int
@@ -86,7 +86,7 @@ class ByteValue(InsnInfo):
     """Operand carrying a signed byte immediate value (e.g. ``bipush``).
 
     Attributes:
-        value: Signed byte value (−128–127).
+        value: Signed byte value (ΓêÆ128ΓÇô127).
     """
 
     value: int
@@ -97,7 +97,7 @@ class ShortValue(InsnInfo):
     """Operand carrying a signed short immediate value (e.g. ``sipush``).
 
     Attributes:
-        value: Signed short value (−32768–32767).
+        value: Signed short value (ΓêÆ32768ΓÇô32767).
     """
 
     value: int
@@ -127,10 +127,10 @@ class BranchW(InsnInfo):
 
 @dataclass
 class IInc(InsnInfo):
-    """Operand for the ``iinc`` instruction (§6.5.iinc).
+    """Operand for the ``iinc`` instruction (┬º6.5.iinc).
 
     Attributes:
-        index: Local variable slot index (0–255).
+        index: Local variable slot index (0ΓÇô255).
         value: Signed byte increment constant.
     """
 
@@ -140,10 +140,10 @@ class IInc(InsnInfo):
 
 @dataclass
 class IIncW(InsnInfo):
-    """Operand for the wide form of ``iinc`` (§6.5.wide).
+    """Operand for the wide form of ``iinc`` (┬º6.5.wide).
 
     Attributes:
-        index: Local variable slot index (0–65535).
+        index: Local variable slot index (0ΓÇô65535).
         value: Signed short increment constant.
     """
 
@@ -153,7 +153,7 @@ class IIncW(InsnInfo):
 
 @dataclass
 class InvokeDynamic(InsnInfo):
-    """Operand for the ``invokedynamic`` instruction (§6.5.invokedynamic).
+    """Operand for the ``invokedynamic`` instruction (┬º6.5.invokedynamic).
 
     Attributes:
         index: Constant pool index to a ``CONSTANT_InvokeDynamic_info``.
@@ -166,7 +166,7 @@ class InvokeDynamic(InsnInfo):
 
 @dataclass
 class InvokeInterface(InsnInfo):
-    """Operand for the ``invokeinterface`` instruction (§6.5.invokeinterface).
+    """Operand for the ``invokeinterface`` instruction (┬º6.5.invokeinterface).
 
     Attributes:
         index: Constant pool index to a ``CONSTANT_InterfaceMethodref_info``.
@@ -181,7 +181,7 @@ class InvokeInterface(InsnInfo):
 
 @dataclass
 class NewArray(InsnInfo):
-    """Operand for the ``newarray`` instruction (§6.5.newarray).
+    """Operand for the ``newarray`` instruction (┬º6.5.newarray).
 
     Attributes:
         atype: ``ArrayType`` enum member identifying the primitive element type.
@@ -192,11 +192,11 @@ class NewArray(InsnInfo):
 
 @dataclass
 class MultiANewArray(InsnInfo):
-    """Operand for the ``multianewarray`` instruction (§6.5.multianewarray).
+    """Operand for the ``multianewarray`` instruction (┬º6.5.multianewarray).
 
     Attributes:
         index: Constant pool index to the array class.
-        dimensions: Number of dimensions to allocate (≥ 1).
+        dimensions: Number of dimensions to allocate (ΓëÑ 1).
     """
 
     index: int
@@ -218,7 +218,7 @@ class MatchOffsetPair:
 
 @dataclass
 class LookupSwitch(InsnInfo):
-    """Operand for the ``lookupswitch`` instruction (§6.5.lookupswitch).
+    """Operand for the ``lookupswitch`` instruction (┬º6.5.lookupswitch).
 
     Attributes:
         default: Default branch offset when no key matches.
@@ -233,7 +233,7 @@ class LookupSwitch(InsnInfo):
 
 @dataclass
 class TableSwitch(InsnInfo):
-    """Operand for the ``tableswitch`` instruction (§6.5.tableswitch).
+    """Operand for the ``tableswitch`` instruction (┬º6.5.tableswitch).
 
     Attributes:
         default: Default branch offset when the index is out of range.
@@ -480,7 +480,7 @@ class InsnInfoType(IntEnum):
 
 
 class ArrayType(IntEnum):
-    """Primitive array element types for the ``newarray`` instruction (§6.5.newarray).
+    """Primitive array element types for the ``newarray`` instruction (┬º6.5.newarray).
 
     Each member's value corresponds to the ``atype`` operand byte.
     """

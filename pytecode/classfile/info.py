@@ -1,8 +1,8 @@
 """Data structures for parsed JVM class file components.
 
 Provides dataclass representations of the top-level structures defined in the
-JVM specification: the ``ClassFile`` structure (§4.1), ``field_info`` (§4.5),
-and ``method_info`` (§4.6).
+JVM specification: the ``ClassFile`` structure (┬º4.1), ``field_info`` (┬º4.5),
+and ``method_info`` (┬º4.6).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ __all__ = ["ClassFile", "FieldInfo", "MethodInfo"]
 
 @dataclass
 class FieldInfo:
-    """Parsed ``field_info`` structure (JVM spec §4.5).
+    """Parsed ``field_info`` structure (JVM spec ┬º4.5).
 
     Represents a single field declared in a class or interface.
 
@@ -42,7 +42,7 @@ class FieldInfo:
 
 @dataclass
 class MethodInfo:
-    """Parsed ``method_info`` structure (JVM spec §4.6).
+    """Parsed ``method_info`` structure (JVM spec ┬º4.6).
 
     Represents a single method declared in a class or interface, including
     instance methods, class methods, instance initialisation methods, and
@@ -68,7 +68,7 @@ class MethodInfo:
 
 @dataclass
 class ClassFile:
-    """Parsed ``ClassFile`` structure (JVM spec §4.1).
+    """Parsed ``ClassFile`` structure (JVM spec ┬º4.1).
 
     Top-level representation of a ``.class`` file produced by the parser.
     Every field corresponds directly to an item in the ``ClassFile`` table

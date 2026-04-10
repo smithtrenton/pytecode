@@ -14,12 +14,12 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments for Rust-vs-Python benchmark comparison."""
+    """Parse command-line arguments for wrapper-overhead benchmark comparison."""
 
     from tools.profile_jar_pipeline import positive_int
 
     parser = argparse.ArgumentParser(
-        description="Compare isolated Rust and Python pytecode stage benchmarks for one jar.",
+        description="Compare native Rust stage timings against wrapper-inclusive Python timings for one jar.",
     )
     parser.add_argument("--jar", type=Path, required=True, help="Path to the benchmark jar.")
     parser.add_argument(
@@ -66,7 +66,7 @@ def run_rust_benchmark(jar_path: Path, iterations: int) -> dict[str, Any]:
 
 
 def stage_speedup(rust_median: int, python_median: int) -> float | None:
-    """Return Python/Rust median ratio so values above 1 mean Rust is faster."""
+    """Return Python/Rust median ratio so values above 1 mean extra Python-layer overhead."""
 
     if rust_median == 0:
         return None if python_median > 0 else 1.0
@@ -74,7 +74,7 @@ def stage_speedup(rust_median: int, python_median: int) -> float | None:
 
 
 def compare_reports(rust_payload: dict[str, Any], python_jar_report: dict[str, Any]) -> dict[str, Any]:
-    """Build a stage-by-stage comparison payload from Rust and Python benchmark reports."""
+    """Build a stage comparison payload from native Rust and wrapper-inclusive Python reports."""
 
     python_by_stage = {stage_report["name"]: stage_report for stage_report in python_jar_report["stage_reports"]}
     stages: list[dict[str, Any]] = []
@@ -88,6 +88,8 @@ def compare_reports(rust_payload: dict[str, Any], python_jar_report: dict[str, A
                 "stage": stage_name,
                 "rust": rust_stage,
                 "python": python_stage,
+                "python_wrapper_overhead_vs_rust": stage_speedup(rust_median, python_median),
+                # Retain the historical key while the repo transitions benchmark consumers.
                 "rust_speedup_vs_python": stage_speedup(rust_median, python_median),
             }
         )
@@ -107,7 +109,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run isolated Rust and Python benchmarks for one jar and emit comparison JSON."""
+    """Run native Rust and wrapper-inclusive Python benchmarks for one jar and emit comparison JSON."""
 
     from tools.benchmark_jar_pipeline import benchmark_jar
     from tools.profile_jar_pipeline import STAGE_BUILDERS

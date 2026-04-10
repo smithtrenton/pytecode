@@ -1,4 +1,4 @@
-"""Benchmark comparing Python pipeline vs Rust pipeline performance.
+"""Benchmark transform execution across native Rust and compatibility callback paths.
 
 Measures transform pipeline throughput on the guava fixture JAR.
 """
@@ -10,15 +10,6 @@ import zipfile
 
 from pytecode._rust import RustClassModel
 from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag
-from pytecode.edit.model import ClassModel, MethodModel
-from pytecode.transforms import (
-    class_is_public,
-    has_code,
-    method_is_public,
-    on_classes,
-    on_methods,
-    pipeline,
-)
 from pytecode.transforms.rust_matchers import class_is_public as rust_class_is_public
 from pytecode.transforms.rust_matchers import has_code as rust_has_code
 from pytecode.transforms.rust_matchers import method_is_public as rust_method_is_public
@@ -45,7 +36,7 @@ def _read_class_bytes(jar_path: str) -> list[bytes]:
 
 
 def bench_rust_pipeline() -> float:
-    """Benchmark Rust pipeline: read in Rust, match+transform in Rust."""
+    """Benchmark the native Rust pipeline path."""
     p = (
         RustPipelineBuilder()
         .on_classes(rust_class_is_public(), add_access_flags(0x0010))
@@ -81,18 +72,21 @@ def bench_rust_pipeline() -> float:
 
 
 def bench_python_pipeline() -> float:
-    """Benchmark Python pipeline: read via Python, match+transform in Python."""
+    """Benchmark Python callback overhead on top of the Rust pipeline."""
 
-    def add_final(model: ClassModel) -> None:
-        model.access_flags = ClassAccessFlag(int(model.access_flags) | 0x0010)
+    def add_final(model: RustClassModel) -> None:
+        model.access_flags = int(model.access_flags) | int(ClassAccessFlag.FINAL)
 
-    def add_strict(method: MethodModel, owner: ClassModel) -> None:
-        del owner
-        method.access_flags = MethodAccessFlag(int(method.access_flags) | 0x0800)
+    def add_strict(model: RustClassModel) -> None:
+        for method in list(model.methods):
+            if method.access_flags & int(MethodAccessFlag.PUBLIC) and method.code is not None:
+                method.access_flags = int(method.access_flags) | int(MethodAccessFlag.STRICT)
 
-    p = pipeline(
-        on_classes(add_final, where=class_is_public()),
-        on_methods(add_strict, where=method_is_public() & has_code()),
+    p = (
+        RustPipelineBuilder()
+        .on_classes_custom(rust_class_is_public(), add_final)
+        .on_methods_custom(rust_method_is_public() & rust_has_code(), add_strict)
+        .build()
     )
 
     class_bytes = _read_class_bytes(JAR_PATH)
@@ -102,15 +96,15 @@ def bench_python_pipeline() -> float:
     apply_times: list[float] = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
-        models = [ClassModel.from_bytes(b) for b in class_bytes]
+        models = [RustClassModel.from_bytes(b) for b in class_bytes]
         read_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
         for model in models:
-            p(model)
+            p.apply(model)
         apply_times.append(time.perf_counter() - t0)
 
-    print(f"\n=== Python Pipeline ({class_count} classes, {RUNS} runs) ===")
+    print(f"\n=== Python Callback Pipeline ({class_count} classes, {RUNS} runs) ===")
     print(f"  Read:  median {_median(read_times) * 1000:.1f}ms")
     print(f"  Apply: median {_median(apply_times) * 1000:.1f}ms")
     total = _median([r + a for r, a in zip(read_times, apply_times)])
@@ -120,7 +114,7 @@ def bench_python_pipeline() -> float:
 
 
 def bench_mixed_pipeline() -> float:
-    """Benchmark mixed pipeline: Rust matching + one Python callback + one Rust transform."""
+    """Benchmark a mixed Rust pipeline with one Python callback hop."""
 
     def add_final_cb(model: RustClassModel) -> None:
         model.access_flags = model.access_flags | 0x0010

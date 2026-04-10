@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from pytecode._rust import RustClassTransform, RustPipeline
+from pytecode.transforms import rust as rust_api
 from pytecode.transforms.rust_matchers import (
     class_name_matches,
     class_named,
@@ -39,6 +40,14 @@ from pytecode.transforms.rust_transforms import (
 # ---------------------------------------------------------------------------
 # Transform factory tests
 # ---------------------------------------------------------------------------
+
+
+def test_rust_transform_api_module_exports_builder_and_helpers() -> None:
+    assert rust_api.RustPipelineBuilder is RustPipelineBuilder
+    assert rust_api.class_named is class_named
+    assert rust_api.method_named is method_named
+    assert rust_api.add_access_flags is add_access_flags
+    assert rust_api.rename_class is rename_class
 
 
 class TestTransformFactories:
