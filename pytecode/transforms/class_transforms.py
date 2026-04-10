@@ -1,11 +1,9 @@
-"""Rust-backed declarative class transforms.
+"""Declarative class transform factories.
 
-These factory functions return ``RustClassTransform`` instances that
-Rust applies natively — no FFI per-transform.
+Factory functions that return ``ClassTransform`` instances applied
+natively by the Rust engine::
 
-The API mirrors common transform operations::
-
-    from pytecode.transforms.rust_transforms import rename_class, remove_method
+    from pytecode.transforms.class_transforms import rename_class, remove_method
 
     t = rename_class("com/example/NewName")
     t2 = remove_method("oldMethod")

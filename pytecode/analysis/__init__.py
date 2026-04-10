@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .._rust_api import Diagnostic, verify_classfile, verify_classmodel
+from .._api import Diagnostic, verify_classfile, verify_classmodel
 from .hierarchy import (
     JAVA_LANG_OBJECT,
     ClassResolver,

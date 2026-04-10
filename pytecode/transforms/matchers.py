@@ -1,20 +1,9 @@
-"""Rust-backed declarative matchers.
+"""Declarative class/field/method matchers.
 
-These factory functions mirror the pure-Python matchers in
-``pytecode.transforms`` but return spec-backed ``RustClassMatcher``,
-``RustFieldMatcher``, and ``RustMethodMatcher`` instances that Rust
-evaluates natively — no FFI per-match.
+Factory functions that return ``ClassMatcher``, ``FieldMatcher``, and
+``MethodMatcher`` instances evaluated natively by the Rust engine::
 
-The API is intentionally identical to the Python factories so that
-switching from::
-
-    from pytecode.transforms import class_named, has_code
-
-to::
-
-    from pytecode.transforms.rust_matchers import class_named, has_code
-
-requires *only* a change in the import path.
+    from pytecode.transforms.matchers import class_named, has_code
 """
 
 from __future__ import annotations

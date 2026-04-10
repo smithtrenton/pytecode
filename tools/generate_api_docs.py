@@ -25,7 +25,6 @@ PUBLIC_MODULES: list[str] = [
     "pytecode.archive",
     "pytecode.classfile.modified_utf8",
     "pytecode.transforms",
-    "pytecode.transforms.rust",
     "pytecode.analysis.verify",
 ]
 

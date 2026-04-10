@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .._rust_api import Diagnostic, MappingClassResolver, verify_classfile, verify_classmodel
+from .._api import Diagnostic, MappingClassResolver, verify_classfile, verify_classmodel
 
 __all__ = ["Diagnostic", "MappingClassResolver", "verify_classfile", "verify_classmodel"]

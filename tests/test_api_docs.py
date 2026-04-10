@@ -30,9 +30,6 @@ class TestPublicSurface:
             for name in get_public_symbols(module_name):
                 assert hasattr(mod, name), f"{module_name}.__all__ lists '{name}' but it doesn't exist"
 
-    def test_bytes_utils_excluded(self) -> None:
-        assert "pytecode._internal.bytes_utils" not in PUBLIC_MODULES
-
     def test_no_private_modules(self) -> None:
         for module_name in PUBLIC_MODULES:
             parts = module_name.split(".")
@@ -82,9 +79,9 @@ class TestEdgeCases:
     def test_rust_transform_docstrings(self) -> None:
         import inspect
 
-        from pytecode.transforms.rust import RustPipelineBuilder, add_access_flags, class_named
+        from pytecode.transforms import PipelineBuilder, add_access_flags, class_named
 
-        assert inspect.getdoc(RustPipelineBuilder)
+        assert inspect.getdoc(PipelineBuilder)
         assert inspect.getdoc(class_named)
         assert inspect.getdoc(add_access_flags)
 

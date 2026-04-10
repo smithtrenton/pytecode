@@ -10,7 +10,7 @@ import pytecode
 import pytecode.archive as jar_module
 from pytecode.archive import JarFile, JarInfo
 from pytecode.classfile.constants import ClassAccessFlag
-from pytecode.transforms.rust import RustPipelineBuilder, add_access_flags, class_named
+from pytecode.transforms import PipelineBuilder, add_access_flags, class_named
 from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
 
 rust = pytest.importorskip("pytecode._rust")
@@ -332,7 +332,7 @@ def test_rewrite_applies_rust_pipeline_transform(tmp_path: Path):
     jar = JarFile(jar_path)
     out_path = tmp_path / "rewritten-rust.jar"
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -354,7 +354,7 @@ def test_rewrite_accepts_rust_pipeline_object(tmp_path: Path):
     jar = JarFile(jar_path)
     out_path = tmp_path / "rewritten-rust-object.jar"
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -397,7 +397,7 @@ def test_rewrite_with_rust_pipeline_object_skips_python_classmodel_materializati
     tmp_path: Path,
 ) -> None:
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -416,7 +416,7 @@ def test_rewrite_with_rust_pipeline_apply_skips_python_classmodel_materializatio
     tmp_path: Path,
 ) -> None:
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -439,7 +439,7 @@ def test_rewrite_delegates_unchanged_rust_pipeline_archives_to_rust_archive_path
     jar = JarFile(jar_path)
     out_path = tmp_path / "delegated-rust.jar"
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -469,7 +469,7 @@ def test_rewrite_keeps_python_archive_path_after_in_memory_archive_edits(
     jar.add_file("README.txt", b"updated")
     out_path = tmp_path / "python-fallback.jar"
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -530,7 +530,7 @@ def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_pat
     out_path = tmp_path / "signed-out.jar"
 
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -548,7 +548,7 @@ def test_rewrite_rejects_skip_debug_with_rust_pipeline_transform(tmp_path: Path)
     jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
     jar = JarFile(jar_path)
     pipeline = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(
             class_named("HelloWorld"),
             add_access_flags(int(ClassAccessFlag.FINAL)),
@@ -598,7 +598,7 @@ def test_rewrite_is_atomic_when_transform_fails(tmp_path: Path):
     def explode(model: object) -> None:
         raise RuntimeError("boom")
 
-    pipeline = RustPipelineBuilder().on_classes_custom(rust.RustClassMatcher.any(), explode).build()
+    pipeline = PipelineBuilder().on_classes_custom(rust.RustClassMatcher.any(), explode).build()
 
     with pytest.raises(RuntimeError, match="boom"):
         jar.rewrite(transform=pipeline)

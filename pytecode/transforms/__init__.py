@@ -1,4 +1,15 @@
-"""Rust-first transform helpers for pytecode."""
+"""Declarative transform helpers for pytecode.
+
+Matchers, transforms, and pipeline builder for class manipulation::
+
+    from pytecode.transforms import PipelineBuilder, class_named, rename_class
+
+    p = (
+        PipelineBuilder()
+        .on_classes(class_named("com/example/Foo"), rename_class("com/example/Bar"))
+        .build()
+    )
+"""
 
 from __future__ import annotations
 
@@ -10,11 +21,23 @@ from .._rust import (
     RustMethodMatcher,
     RustPipeline,
 )
-from . import rust
-from .rust import (
-    RustPipelineBuilder,
+from .class_transforms import (
     add_access_flags,
     add_interface,
+    remove_access_flags,
+    remove_field,
+    remove_interface,
+    remove_method,
+    rename_class,
+    rename_field,
+    rename_method,
+    sequence,
+    set_access_flags,
+    set_field_access_flags,
+    set_method_access_flags,
+    set_super_class,
+)
+from .matchers import (
     class_access,
     class_access_any,
     class_is_abstract,
@@ -72,21 +95,27 @@ from .rust import (
     method_name_matches,
     method_named,
     method_returns,
-    remove_access_flags,
-    remove_field,
-    remove_interface,
-    remove_method,
-    rename_class,
-    rename_field,
-    rename_method,
-    sequence,
-    set_access_flags,
-    set_field_access_flags,
-    set_method_access_flags,
-    set_super_class,
 )
+from .pipeline import PipelineBuilder, RustPipelineBuilder
+
+# Unprefixed aliases for Rust-native types
+ClassMatcher = RustClassMatcher
+FieldMatcher = RustFieldMatcher
+MethodMatcher = RustMethodMatcher
+ClassTransform = RustClassTransform
+Pipeline = RustPipeline
+CompiledPipeline = RustCompiledPipeline
 
 __all__ = [
+    # Canonical (unprefixed) names
+    "ClassMatcher",
+    "ClassTransform",
+    "CompiledPipeline",
+    "FieldMatcher",
+    "MethodMatcher",
+    "Pipeline",
+    "PipelineBuilder",
+    # Backward-compat prefixed names
     "RustClassMatcher",
     "RustClassTransform",
     "RustCompiledPipeline",
@@ -94,6 +123,7 @@ __all__ = [
     "RustMethodMatcher",
     "RustPipeline",
     "RustPipelineBuilder",
+    # Matcher factories
     "add_access_flags",
     "add_interface",
     "class_access",
@@ -160,7 +190,6 @@ __all__ = [
     "rename_class",
     "rename_field",
     "rename_method",
-    "rust",
     "sequence",
     "set_access_flags",
     "set_field_access_flags",

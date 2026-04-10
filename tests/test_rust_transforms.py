@@ -1,7 +1,7 @@
-"""Tests for Rust-backed declarative transforms and pipeline.
+"""Tests for declarative transforms and pipeline.
 
 Tests that:
-1. All transform factories produce valid RustClassTransform objects
+1. All transform factories produce valid ClassTransform objects
 2. Pipeline builder constructs multi-step pipelines
 3. Matchers + transforms compose correctly in pipelines
 """
@@ -12,15 +12,7 @@ import pytest
 
 from pytecode._rust import RustClassTransform, RustPipeline
 from pytecode.transforms import rust as rust_api
-from pytecode.transforms.rust_matchers import (
-    class_name_matches,
-    class_named,
-    field_named,
-    has_code,
-    method_named,
-)
-from pytecode.transforms.rust_pipeline import RustPipelineBuilder
-from pytecode.transforms.rust_transforms import (
+from pytecode.transforms.class_transforms import (
     add_access_flags,
     add_interface,
     remove_access_flags,
@@ -36,6 +28,14 @@ from pytecode.transforms.rust_transforms import (
     set_method_access_flags,
     set_super_class,
 )
+from pytecode.transforms.matchers import (
+    class_name_matches,
+    class_named,
+    field_named,
+    has_code,
+    method_named,
+)
+from pytecode.transforms.pipeline import PipelineBuilder
 
 # ---------------------------------------------------------------------------
 # Transform factory tests
@@ -43,7 +43,8 @@ from pytecode.transforms.rust_transforms import (
 
 
 def test_rust_transform_api_module_exports_builder_and_helpers() -> None:
-    assert rust_api.RustPipelineBuilder is RustPipelineBuilder
+    assert rust_api.PipelineBuilder is PipelineBuilder
+    assert rust_api.RustPipelineBuilder is PipelineBuilder
     assert rust_api.class_named is class_named
     assert rust_api.method_named is method_named
     assert rust_api.add_access_flags is add_access_flags
@@ -148,17 +149,17 @@ class TestPipelineBuilder:
     """Pipeline builder assembles steps correctly."""
 
     def test_empty_pipeline(self) -> None:
-        p = RustPipelineBuilder().build()
+        p = PipelineBuilder().build()
         assert isinstance(p, RustPipeline)
         assert len(p) == 0
 
     def test_single_class_step(self) -> None:
-        p = RustPipelineBuilder().on_classes(class_named("Foo"), rename_class("Bar")).build()
+        p = PipelineBuilder().on_classes(class_named("Foo"), rename_class("Bar")).build()
         assert len(p) == 1
 
     def test_multiple_steps(self) -> None:
         p = (
-            RustPipelineBuilder()
+            PipelineBuilder()
             .on_classes(class_named("Foo"), rename_class("Bar"))
             .on_classes(
                 class_name_matches(".*Test"),
@@ -169,12 +170,12 @@ class TestPipelineBuilder:
         assert len(p) == 2
 
     def test_method_step(self) -> None:
-        p = RustPipelineBuilder().on_methods(method_named("foo"), remove_method("foo")).build()
+        p = PipelineBuilder().on_methods(method_named("foo"), remove_method("foo")).build()
         assert len(p) == 1
 
     def test_method_step_with_owner(self) -> None:
         p = (
-            RustPipelineBuilder()
+            PipelineBuilder()
             .on_methods(
                 method_named("foo"),
                 remove_method("foo"),
@@ -185,12 +186,12 @@ class TestPipelineBuilder:
         assert len(p) == 1
 
     def test_field_step(self) -> None:
-        p = RustPipelineBuilder().on_fields(field_named("x"), remove_field("x")).build()
+        p = PipelineBuilder().on_fields(field_named("x"), remove_field("x")).build()
         assert len(p) == 1
 
     def test_field_step_with_owner(self) -> None:
         p = (
-            RustPipelineBuilder()
+            PipelineBuilder()
             .on_fields(
                 field_named("x"),
                 remove_field("x"),
@@ -201,18 +202,18 @@ class TestPipelineBuilder:
         assert len(p) == 1
 
     def test_fluent_chaining(self) -> None:
-        builder = RustPipelineBuilder()
+        builder = PipelineBuilder()
         result = builder.on_classes(class_named("A"), rename_class("B"))
         assert result is builder
 
     def test_repr(self) -> None:
-        b = RustPipelineBuilder()
+        b = PipelineBuilder()
         b.on_classes(class_named("A"), rename_class("B"))
         assert "steps=1" in repr(b)
 
     def test_mixed_steps(self) -> None:
         p = (
-            RustPipelineBuilder()
+            PipelineBuilder()
             .on_classes(class_named("Foo"), rename_class("Bar"))
             .on_methods(has_code(), remove_method("init"))
             .on_fields(field_named("x"), set_field_access_flags("x", 0x0002))
@@ -231,12 +232,12 @@ class TestComposition:
 
     def test_combinator_matcher_in_pipeline(self) -> None:
         matcher = class_named("Foo") | class_named("Bar")
-        p = RustPipelineBuilder().on_classes(matcher, rename_class("Baz")).build()
+        p = PipelineBuilder().on_classes(matcher, rename_class("Baz")).build()
         assert len(p) == 1
 
     def test_negated_matcher_in_pipeline(self) -> None:
         matcher = ~class_named("Foo")
-        p = RustPipelineBuilder().on_classes(matcher, remove_access_flags(0x0010)).build()
+        p = PipelineBuilder().on_classes(matcher, remove_access_flags(0x0010)).build()
         assert len(p) == 1
 
     def test_sequence_transform_in_pipeline(self) -> None:
@@ -245,7 +246,7 @@ class TestComposition:
             set_super_class("java/lang/Object"),
             add_interface("java/io/Serializable"),
         )
-        p = RustPipelineBuilder().on_classes(class_name_matches(".*"), t).build()
+        p = PipelineBuilder().on_classes(class_name_matches(".*"), t).build()
         assert len(p) == 1
 
 
@@ -299,7 +300,7 @@ class TestPipelineApply:
         m = RustClassModel.from_bytes(class_bytes)
         original = m.name
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(original), rename_class("com/example/Renamed"))
         p.build().apply(m)
 
@@ -311,7 +312,7 @@ class TestPipelineApply:
         m = RustClassModel.from_bytes(class_bytes)
         original_name = m.name
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named("nonexistent/Class"), rename_class("should/not/apply"))
         p.build().apply(m)
 
@@ -323,7 +324,7 @@ class TestPipelineApply:
         m = RustClassModel.from_bytes(class_bytes)
         orig_flags = m.access_flags
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), add_access_flags(0x0010))
         p.build().apply(m)
 
@@ -334,7 +335,7 @@ class TestPipelineApply:
 
         m = RustClassModel.from_bytes(class_bytes)
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), set_super_class("com/example/NewBase"))
         p.build().apply(m)
 
@@ -346,7 +347,7 @@ class TestPipelineApply:
         m = RustClassModel.from_bytes(class_bytes)
         orig_ifaces = list(m.interfaces)
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), add_interface("java/io/Serializable"))
         p.build().apply(m)
 
@@ -358,12 +359,12 @@ class TestPipelineApply:
 
         m = RustClassModel.from_bytes(class_bytes)
         # First add, then remove
-        p1 = RustPipelineBuilder()
+        p1 = PipelineBuilder()
         p1.on_classes(class_named(m.name), add_interface("java/io/Serializable"))
         p1.build().apply(m)
         assert "java/io/Serializable" in m.interfaces
 
-        p2 = RustPipelineBuilder()
+        p2 = PipelineBuilder()
         p2.on_classes(class_named(m.name), remove_interface("java/io/Serializable"))
         p2.build().apply(m)
         assert "java/io/Serializable" not in m.interfaces
@@ -378,7 +379,7 @@ class TestPipelineApply:
             set_super_class("com/example/Base"),
             add_interface("java/lang/Runnable"),
         )
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), t)
         p.build().apply(m)
 
@@ -391,7 +392,7 @@ class TestPipelineApply:
 
         models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(
             class_name_matches(".*Writer"),
             set_super_class("com/example/WriterBase"),
@@ -409,7 +410,7 @@ class TestPipelineApply:
         from pytecode._rust import RustClassModel
 
         models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_name_matches(".*"), add_access_flags(0x0010))
         p.build().apply_all(models)
 
@@ -421,7 +422,7 @@ class TestPipelineApply:
 
         models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(
             class_name_matches(".*Attribute.*"),
             add_interface("java/io/Serializable"),
@@ -440,7 +441,7 @@ class TestPipelineApply:
         from pytecode._rust import RustClassModel
 
         m = RustClassModel.from_bytes(class_bytes)
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), add_access_flags(0x0010))
         p.build().apply(m)
 
@@ -461,7 +462,7 @@ class TestPipelineApply:
         original_name = methods[0].name
         count_before = sum(1 for mth in methods if mth.name == original_name)
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes(class_named(m.name), rename_method(original_name, "__renamed__"))
         p.build().apply(m)
 
@@ -487,7 +488,7 @@ class TestCustomCallbacks:
         def rename(model: object) -> None:
             model.name = "com/callback/Renamed"  # type: ignore[attr-defined]
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes_custom(class_named(m.name), rename)
         p.build().apply(m)
 
@@ -503,7 +504,7 @@ class TestCustomCallbacks:
         def should_not_run(model: object) -> None:
             called.append(True)
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes_custom(class_named("nonexistent/Class"), should_not_run)
         p.build().apply(m)
 
@@ -521,7 +522,7 @@ class TestCustomCallbacks:
             ifaces.append("com/callback/Added")
             model.interfaces = ifaces
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         # Built-in step first
         p.on_classes(class_named(original_name), add_access_flags(0x0010))
         # Custom callback second
@@ -540,7 +541,7 @@ class TestCustomCallbacks:
         def track(model: object) -> None:
             transformed.append(model.name)  # type: ignore[attr-defined]
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_methods_custom(method_named("<init>"), track)
         pipeline = p.build()
         for m in models:
@@ -559,7 +560,7 @@ class TestCustomCallbacks:
         def bad_callback(model: object) -> None:
             raise ValueError("intentional error")
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes_custom(class_named(original), bad_callback)
         with pytest.raises(ValueError, match="intentional error"):
             p.build().apply(m)
@@ -575,7 +576,7 @@ class TestCustomCallbacks:
             model.name = "com/partial/Renamed"  # type: ignore[attr-defined]
             raise RuntimeError("mutation then error")
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes_custom(class_named(original_name), mutate_then_raise)
         with pytest.raises(RuntimeError, match="mutation then error"):
             p.build().apply(m)
@@ -592,7 +593,7 @@ class TestCustomCallbacks:
         def track(model: object) -> None:
             invocations.append(1)
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_methods_custom(has_code(), track)
         p.build().apply(m)
 
@@ -622,7 +623,7 @@ class TestCustomCallbacks:
         def rename(model: object) -> None:
             model.name = "com/compiled/Callback"  # type: ignore[attr-defined]
 
-        p = RustPipelineBuilder()
+        p = PipelineBuilder()
         p.on_classes_custom(class_named(m.name), rename)
         compiled = p.compile()
         compiled.apply(m)

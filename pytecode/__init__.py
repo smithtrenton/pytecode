@@ -1,7 +1,7 @@
-"""Rust-first Python bindings for the pytecode engine."""
+"""Python bindings for the pytecode engine."""
 
 from . import _rust
-from ._rust_api import Diagnostic, MappingClassResolver, RustClassModel, verify_classfile, verify_classmodel
+from ._api import Diagnostic, MappingClassResolver, RustClassModel, verify_classfile, verify_classmodel
 from .archive import JarFile
 
 RustClassReader = _rust.ClassReader

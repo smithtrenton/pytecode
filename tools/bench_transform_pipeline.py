@@ -10,11 +10,11 @@ import zipfile
 
 from pytecode._rust import RustClassModel
 from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag
-from pytecode.transforms.rust_matchers import class_is_public as rust_class_is_public
-from pytecode.transforms.rust_matchers import has_code as rust_has_code
-from pytecode.transforms.rust_matchers import method_is_public as rust_method_is_public
-from pytecode.transforms.rust_pipeline import RustPipelineBuilder
-from pytecode.transforms.rust_transforms import add_access_flags
+from pytecode.transforms.class_transforms import add_access_flags
+from pytecode.transforms.matchers import class_is_public as rust_class_is_public
+from pytecode.transforms.matchers import has_code as rust_has_code
+from pytecode.transforms.matchers import method_is_public as rust_method_is_public
+from pytecode.transforms.pipeline import PipelineBuilder
 
 JAR_PATH = "crates/pytecode-engine/fixtures/jars/byte-buddy-1.17.5.jar"
 RUNS = 5
@@ -38,7 +38,7 @@ def _read_class_bytes(jar_path: str) -> list[bytes]:
 def bench_rust_pipeline() -> float:
     """Benchmark the native Rust pipeline path."""
     p = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(rust_class_is_public(), add_access_flags(0x0010))
         .on_methods(
             rust_method_is_public() & rust_has_code(),
@@ -83,7 +83,7 @@ def bench_python_pipeline() -> float:
                 method.access_flags = int(method.access_flags) | int(MethodAccessFlag.STRICT)
 
     p = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes_custom(rust_class_is_public(), add_final)
         .on_methods_custom(rust_method_is_public() & rust_has_code(), add_strict)
         .build()
@@ -120,7 +120,7 @@ def bench_mixed_pipeline() -> float:
         model.access_flags = model.access_flags | 0x0010
 
     p = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes_custom(rust_class_is_public(), add_final_cb)
         .on_methods(
             rust_method_is_public() & rust_has_code(),
@@ -185,7 +185,7 @@ def bench_live_view_callback() -> float:
 
         _ = list(interfaces)
 
-    p = RustPipelineBuilder().on_classes_custom(rust_class_is_public(), inspect_views).build()
+    p = PipelineBuilder().on_classes_custom(rust_class_is_public(), inspect_views).build()
     compiled = p.compile()
 
     class_bytes = _read_class_bytes(JAR_PATH)

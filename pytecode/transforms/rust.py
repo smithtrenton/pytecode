@@ -1,23 +1,24 @@
-"""Canonical Rust-first transform API.
-
-This module collects the Rust-backed matcher factories, transform factories,
-and pipeline builder into a single import surface:
-
-    from pytecode.transforms.rust import (
-        RustPipelineBuilder,
-        add_access_flags,
-        class_named,
-        method_is_public,
-    )
-
-Use this module for production transform workflows. The older
-``pytecode.transforms`` Python matcher/pipeline DSL remains available only as
-the compatibility path during migration.
-"""
+"""Backward-compatibility shim — canonical imports are now at ``pytecode.transforms``."""
 
 from __future__ import annotations
 
-from .rust_matchers import (
+from .class_transforms import (
+    add_access_flags,
+    add_interface,
+    remove_access_flags,
+    remove_field,
+    remove_interface,
+    remove_method,
+    rename_class,
+    rename_field,
+    rename_method,
+    sequence,
+    set_access_flags,
+    set_field_access_flags,
+    set_method_access_flags,
+    set_super_class,
+)
+from .matchers import (
     class_access,
     class_access_any,
     class_is_abstract,
@@ -76,25 +77,10 @@ from .rust_matchers import (
     method_named,
     method_returns,
 )
-from .rust_pipeline import RustPipelineBuilder
-from .rust_transforms import (
-    add_access_flags,
-    add_interface,
-    remove_access_flags,
-    remove_field,
-    remove_interface,
-    remove_method,
-    rename_class,
-    rename_field,
-    rename_method,
-    sequence,
-    set_access_flags,
-    set_field_access_flags,
-    set_method_access_flags,
-    set_super_class,
-)
+from .pipeline import PipelineBuilder, RustPipelineBuilder
 
 __all__ = [
+    "PipelineBuilder",
     "RustPipelineBuilder",
     "add_access_flags",
     "add_interface",

@@ -1,13 +1,13 @@
-"""Rust-backed declarative transform pipeline.
+"""Declarative transform pipeline.
 
-Build pipelines from Rust matchers and transforms::
+Build pipelines from matchers and transforms::
 
-    from pytecode.transforms.rust_matchers import class_named
-    from pytecode.transforms.rust_transforms import rename_class
-    from pytecode.transforms.rust_pipeline import RustPipelineBuilder
+    from pytecode.transforms.matchers import class_named
+    from pytecode.transforms.class_transforms import rename_class
+    from pytecode.transforms.pipeline import PipelineBuilder
 
     p = (
-        RustPipelineBuilder()
+        PipelineBuilder()
         .on_classes(class_named("com/example/Foo"), rename_class("com/example/Bar"))
         .build()
     )
@@ -28,8 +28,8 @@ from pytecode._rust import (
 )
 
 
-class RustPipelineBuilder:
-    """Fluent builder for a ``RustPipeline``."""
+class PipelineBuilder:
+    """Fluent builder for a transform pipeline."""
 
     def __init__(self) -> None:
         self._pipeline = RustPipeline()
@@ -38,7 +38,7 @@ class RustPipelineBuilder:
         self,
         matcher: RustClassMatcher,
         transform: RustClassTransform,
-    ) -> RustPipelineBuilder:
+    ) -> PipelineBuilder:
         """Add a class-level step."""
         self._pipeline.on_classes(matcher, transform)
         return self
@@ -49,7 +49,7 @@ class RustPipelineBuilder:
         transform: RustClassTransform,
         *,
         owner_matcher: RustClassMatcher | None = None,
-    ) -> RustPipelineBuilder:
+    ) -> PipelineBuilder:
         """Add a field-level step (optional class-level guard)."""
         self._pipeline.on_fields(field_matcher, transform, owner_matcher)
         return self
@@ -60,7 +60,7 @@ class RustPipelineBuilder:
         transform: RustClassTransform,
         *,
         owner_matcher: RustClassMatcher | None = None,
-    ) -> RustPipelineBuilder:
+    ) -> PipelineBuilder:
         """Add a method-level step (optional class-level guard)."""
         self._pipeline.on_methods(method_matcher, transform, owner_matcher)
         return self
@@ -71,14 +71,14 @@ class RustPipelineBuilder:
         self,
         matcher: RustClassMatcher,
         callback: Callable[[RustClassModel], None],
-    ) -> RustPipelineBuilder:
-        """Class step with custom Python callback (receives ``RustClassModel``).
+    ) -> PipelineBuilder:
+        """Class step with custom Python callback (receives ``ClassModel``).
 
         The callback fires at most once per class that matches *matcher*.
         If the callback raises an exception, the exception is propagated by
         ``apply``/``apply_all`` after the current model finishes processing.
 
-        Collection properties on ``RustClassModel`` are live views, not eager
+        Collection properties on ``ClassModel`` are live views, not eager
         snapshot lists. Use ``list(model.methods)`` / ``list(model.interfaces)``
         when a detached snapshot is actually wanted.
         """
@@ -91,8 +91,8 @@ class RustPipelineBuilder:
         callback: Callable[[RustClassModel], None],
         *,
         owner_matcher: RustClassMatcher | None = None,
-    ) -> RustPipelineBuilder:
-        """Field step with custom Python callback (receives ``RustClassModel``).
+    ) -> PipelineBuilder:
+        """Field step with custom Python callback (receives ``ClassModel``).
 
         The callback receives the *class* model (not the individual matched
         field) and fires at most once per class where any field matches
@@ -102,7 +102,7 @@ class RustPipelineBuilder:
         If the callback raises an exception, the exception is propagated by
         ``apply``/``apply_all`` after the current model finishes processing.
 
-        Nested Rust bridge collections also use live views; ``list(...)`` is the
+        Nested bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.
         """
         self._pipeline.on_fields_custom(field_matcher, callback, owner_matcher)
@@ -114,8 +114,8 @@ class RustPipelineBuilder:
         callback: Callable[[RustClassModel], None],
         *,
         owner_matcher: RustClassMatcher | None = None,
-    ) -> RustPipelineBuilder:
-        """Method step with custom Python callback (receives ``RustClassModel``).
+    ) -> PipelineBuilder:
+        """Method step with custom Python callback (receives ``ClassModel``).
 
         The callback receives the *class* model (not the individual matched
         method) and fires at most once per class where any method matches
@@ -125,7 +125,7 @@ class RustPipelineBuilder:
         If the callback raises an exception, the exception is propagated by
         ``apply``/``apply_all`` after the current model finishes processing.
 
-        Nested Rust bridge collections also use live views; ``list(...)`` is the
+        Nested bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.
         """
         self._pipeline.on_methods_custom(method_matcher, callback, owner_matcher)
@@ -136,11 +136,11 @@ class RustPipelineBuilder:
         return self._pipeline
 
     def apply(self, model: RustClassModel) -> None:
-        """Apply pipeline to a single RustClassModel (mutates in-place)."""
+        """Apply pipeline to a single ClassModel (mutates in-place)."""
         self._pipeline.apply(model)
 
     def apply_all(self, models: list[RustClassModel]) -> None:
-        """Apply pipeline to many RustClassModel objects (mutates in-place)."""
+        """Apply pipeline to many ClassModel objects (mutates in-place)."""
         self._pipeline.apply_all(models)
 
     def compile(self) -> RustCompiledPipeline:
@@ -151,4 +151,7 @@ class RustPipelineBuilder:
         return len(self._pipeline)
 
     def __repr__(self) -> str:
-        return f"RustPipelineBuilder(steps={len(self._pipeline)})"
+        return f"PipelineBuilder(steps={len(self._pipeline)})"
+
+
+RustPipelineBuilder = PipelineBuilder
