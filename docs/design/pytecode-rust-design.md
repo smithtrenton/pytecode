@@ -267,7 +267,7 @@ Areas where compatibility can be adapted:
 - The public Python package now defaults to the Rust parser path when the extension is available, and compatibility bridges let existing `ClassModel`, hierarchy, verifier, and writer entry points consume Rust-backed classfiles without a second maintained backend.
 - Phase 7 Python backend integration is complete.
 - The Rust transform/pipeline system is now bridged to Python via PyO3 as declarative matcher specs, transform specs, and a compiled pipeline. Python constructs spec trees; Rust evaluates matchers and applies built-in transforms natively without per-match FFI. Custom Python callbacks are supported via zero-copy `std::mem::take` handoff. Benchmarks show 20× speedup for pure-Rust pipelines and 3× speedup for mixed pipelines with Python callbacks versus pure-Python closure pipelines.
-- Python `Matcher[T]` now carries an optional `_rust_spec` field populated by all factory functions, enabling dual-mode matchers that work with both the Python predicate path and the Rust spec path. Rust pipeline types (`RustClassMatcher`, `RustFieldMatcher`, `RustMethodMatcher`, `RustClassTransform`, `RustPipeline`, `RustPipelineBuilder`) are re-exported from `pytecode.transforms`.
+- Python `Matcher[T]` now carries an optional `_rust_spec` field populated by all factory functions, enabling dual-mode matchers that work with both the Python predicate path and the Rust spec path. The canonical transform surface is `pytecode.transforms`, which exposes unprefixed aliases such as `ClassMatcher`, `FieldMatcher`, `MethodMatcher`, `ClassTransform`, `Pipeline`, and `PipelineBuilder`.
 
 ### Phase 0: project setup and compatibility harness
 
@@ -407,7 +407,7 @@ The Rust transform/pipeline system is exposed to Python via PyO3 using a
   construct `MatcherSpec` enum trees that Rust evaluates natively.
 - Python transform factories (e.g. `add_access_flags(0x0010)`) construct
   `ClassTransformSpec` enums that Rust applies natively.
-- `RustPipelineBuilder` assembles steps in Python, then `build()` + `compile()`
+- `PipelineBuilder` assembles steps in Python, then `build()` + `compile()`
   produces a `CompiledPipeline` that iterates models and evaluates matchers
   entirely in Rust — no per-class or per-match Python callback.
 - For custom logic that cannot be expressed as a declarative spec, custom Python
@@ -415,7 +415,7 @@ The Rust transform/pipeline system is exposed to Python via PyO3 using a
   `on_methods_custom()`.  These use `std::mem::take()` to move the `ClassModel`
   into the Python wrapper and back without cloning.
 - Bridge-facing model collections now use **live views** instead of eager cloned
-  Python lists: `RustClassModel.interfaces/fields/methods/attributes` and nested
+  Python lists: `ClassModel.interfaces/fields/methods/attributes` and nested
   method/code collections are owner-backed sequence views. `list(...)` is now the
   explicit snapshot/materialization boundary, and stale refs fail fast after
   structural mutation.

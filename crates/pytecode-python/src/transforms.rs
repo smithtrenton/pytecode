@@ -20,7 +20,7 @@ use crate::model::PyClassModel;
 // ---------------------------------------------------------------------------
 
 /// A declarative class matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "RustClassMatcher", module = "pytecode._rust")]
+#[pyclass(name = "ClassMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyClassMatcher {
     pub(crate) spec: ClassMatcherSpec,
@@ -188,7 +188,7 @@ impl PyClassMatcher {
     }
 
     fn __repr__(&self) -> String {
-        format!("RustClassMatcher({})", self.spec)
+        format!("ClassMatcher({})", self.spec)
     }
 
     fn __str__(&self) -> String {
@@ -201,7 +201,7 @@ impl PyClassMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative field matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "RustFieldMatcher", module = "pytecode._rust")]
+#[pyclass(name = "FieldMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyFieldMatcher {
     pub(crate) spec: FieldMatcherSpec,
@@ -344,7 +344,7 @@ impl PyFieldMatcher {
     }
 
     fn __repr__(&self) -> String {
-        format!("RustFieldMatcher({})", self.spec)
+        format!("FieldMatcher({})", self.spec)
     }
 
     fn __str__(&self) -> String {
@@ -357,7 +357,7 @@ impl PyFieldMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative method matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "RustMethodMatcher", module = "pytecode._rust")]
+#[pyclass(name = "MethodMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodMatcher {
     pub(crate) spec: MethodMatcherSpec,
@@ -528,7 +528,7 @@ impl PyMethodMatcher {
     }
 
     fn __repr__(&self) -> String {
-        format!("RustMethodMatcher({})", self.spec)
+        format!("MethodMatcher({})", self.spec)
     }
 
     fn __str__(&self) -> String {
@@ -541,7 +541,7 @@ impl PyMethodMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative class transform that Rust applies natively.
-#[pyclass(name = "RustClassTransform", module = "pytecode._rust")]
+#[pyclass(name = "ClassTransform", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyClassTransform {
     pub(crate) spec: ClassTransformSpec,
@@ -650,7 +650,7 @@ impl PyClassTransform {
     }
 
     fn __repr__(&self) -> String {
-        format!("RustClassTransform({})", self.spec)
+        format!("ClassTransform({})", self.spec)
     }
 
     fn __str__(&self) -> String {
@@ -663,7 +663,7 @@ impl PyClassTransform {
 // ---------------------------------------------------------------------------
 
 /// A declarative transform pipeline that Rust evaluates natively.
-#[pyclass(name = "RustPipeline", module = "pytecode._rust")]
+#[pyclass(name = "Pipeline", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyPipeline {
     pub(crate) spec: PipelineSpec,
@@ -702,7 +702,7 @@ impl PyPipeline {
 
     /// Add a class-level step with a custom Python callback.
     ///
-    /// The callback receives a mutable `RustClassModel` and should modify it
+    /// The callback receives a mutable `ClassModel` and should modify it
     /// in-place. Matching is still done natively in Rust.
     fn on_classes_custom(&mut self, matcher: &PyClassMatcher, callback: PyObject) {
         let cb = std::sync::Arc::new(callback);
@@ -721,7 +721,7 @@ impl PyPipeline {
                     *model = cell
                         .borrow_mut(py)
                         .take_inner()
-                        .expect("failed to take RustClassModel back from Python");
+                        .expect("failed to take ClassModel back from Python");
                 });
             })),
         });
@@ -769,7 +769,7 @@ impl PyPipeline {
                     *model = cell
                         .borrow_mut(py)
                         .take_inner()
-                        .expect("failed to take RustClassModel back from Python");
+                        .expect("failed to take ClassModel back from Python");
                 });
             })),
         });
@@ -817,7 +817,7 @@ impl PyPipeline {
                     *model = cell
                         .borrow_mut(py)
                         .take_inner()
-                        .expect("failed to take RustClassModel back from Python");
+                        .expect("failed to take ClassModel back from Python");
                 });
             })),
         });
@@ -870,7 +870,7 @@ impl PyPipeline {
     }
 
     fn __repr__(&self) -> String {
-        format!("RustPipeline(steps={})", self.spec.steps.len())
+        format!("Pipeline(steps={})", self.spec.steps.len())
     }
 }
 
@@ -879,7 +879,7 @@ impl PyPipeline {
 // ---------------------------------------------------------------------------
 
 /// A compiled pipeline with pre-compiled regexes for hot-path evaluation.
-#[pyclass(name = "RustCompiledPipeline", module = "pytecode._rust")]
+#[pyclass(name = "CompiledPipeline", module = "pytecode._rust")]
 pub struct PyCompiledPipeline {
     pub(crate) inner: CompiledPipeline,
     pub(crate) contains_python_callbacks: bool,
@@ -917,6 +917,6 @@ impl PyCompiledPipeline {
     }
 
     fn __repr__(&self) -> String {
-        "RustCompiledPipeline()".to_string()
+        "CompiledPipeline()".to_string()
     }
 }

@@ -13,14 +13,7 @@ Matchers, transforms, and pipeline builder for class manipulation::
 
 from __future__ import annotations
 
-from .._rust import (
-    RustClassMatcher,
-    RustClassTransform,
-    RustCompiledPipeline,
-    RustFieldMatcher,
-    RustMethodMatcher,
-    RustPipeline,
-)
+from .. import _rust
 from .class_transforms import (
     add_access_flags,
     add_interface,
@@ -96,18 +89,17 @@ from .matchers import (
     method_named,
     method_returns,
 )
-from .pipeline import PipelineBuilder, RustPipelineBuilder
+from .pipeline import PipelineBuilder
 
 # Unprefixed aliases for Rust-native types
-ClassMatcher = RustClassMatcher
-FieldMatcher = RustFieldMatcher
-MethodMatcher = RustMethodMatcher
-ClassTransform = RustClassTransform
-Pipeline = RustPipeline
-CompiledPipeline = RustCompiledPipeline
+ClassMatcher = _rust.ClassMatcher
+FieldMatcher = _rust.FieldMatcher
+MethodMatcher = _rust.MethodMatcher
+ClassTransform = _rust.ClassTransform
+Pipeline = _rust.Pipeline
+CompiledPipeline = _rust.CompiledPipeline
 
 __all__ = [
-    # Canonical (unprefixed) names
     "ClassMatcher",
     "ClassTransform",
     "CompiledPipeline",
@@ -115,15 +107,6 @@ __all__ = [
     "MethodMatcher",
     "Pipeline",
     "PipelineBuilder",
-    # Backward-compat prefixed names
-    "RustClassMatcher",
-    "RustClassTransform",
-    "RustCompiledPipeline",
-    "RustFieldMatcher",
-    "RustMethodMatcher",
-    "RustPipeline",
-    "RustPipelineBuilder",
-    # Matcher factories
     "add_access_flags",
     "add_interface",
     "class_access",

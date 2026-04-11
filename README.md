@@ -52,9 +52,9 @@ Path("HelloWorld-copy.class").write_bytes(ClassWriter.write(classfile))
 ```python
 from pathlib import Path
 
-from pytecode import RustClassModel
+from pytecode import ClassModel
 
-model = RustClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
+model = ClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
 print(model.name)
 
 updated_bytes = model.to_bytes()
@@ -69,8 +69,8 @@ Use `to_bytes_with_options(recompute_frames=True)` when an edit changes control 
 
 ```python
 from pytecode import JarFile
-from pytecode.transforms.rust import (
-    RustPipelineBuilder,
+from pytecode.transforms import (
+    PipelineBuilder,
     add_access_flags,
     class_named,
     method_is_public,
@@ -80,7 +80,7 @@ from pytecode.transforms.rust import (
 
 
 pipeline = (
-    RustPipelineBuilder()
+    PipelineBuilder()
     .on_methods(
         method_name_matches(r"main") & method_is_public() & method_is_static(),
         add_access_flags(0x0010),
@@ -96,15 +96,16 @@ JarFile("input.jar").rewrite(
 )
 ```
 
-For code-shape changes, pass `recompute_frames=True`. For an ASM-like lift path that omits debug metadata, pass `skip_debug=True`.
+For code-shape changes, pass `recompute_frames=True`. To strip debug metadata during rewrite, pass `skip_debug=True`.
+
+`JarFile.rewrite()` now routes archive rewriting through the Rust archive layer for supported cases, including in-memory archive edits and Rust-backed transforms. Pipelines that contain Python callback steps are rejected instead of falling back to a Python archive rewrite path.
 
 ## Public surface
 
 Top-level exports:
 
-- `pytecode.ClassReader` / `pytecode.ClassWriter` for Rust-backed raw classfile parsing and emission (also available as `RustClassReader` / `RustClassWriter`).
-- `pytecode.ClassModel` for Rust-owned mutable editing (also available as `RustClassModel`).
-- `pytecode.MappingClassResolver`, `pytecode.verify_classfile`, and `pytecode.verify_classmodel` for Rust-backed analysis and verification.
+- `pytecode.ClassReader` / `pytecode.ClassWriter` for Rust-backed raw classfile parsing and emission.
+- `pytecode.ClassModel` for Rust-owned mutable editing.
 - `pytecode.JarFile` for Rust-backed archive reads and rewrite workflows.
 
 ### Rust-first API map
@@ -114,20 +115,19 @@ Top-level exports:
 | `pytecode.classfile.reader.ClassReader(...)` | `pytecode.ClassReader.from_bytes(...)` |
 | `pytecode.classfile.writer.ClassWriter.write(...)` | `pytecode.ClassWriter.write(...)` |
 | `pytecode.edit.model.ClassModel.from_bytes(...)` | `pytecode.ClassModel.from_bytes(...)` |
-| `pytecode.analysis.verify.verify_classfile(...)` | `pytecode.verify_classfile(...)` |
-| `pytecode.analysis.verify.verify_classmodel(...)` | `pytecode.verify_classmodel(...)` |
-| `pytecode.analysis.hierarchy.MappingClassResolver` | `pytecode.MappingClassResolver` |
-| Legacy Python matcher / transform DSL | `pytecode.transforms.rust.RustPipelineBuilder` plus `pytecode.transforms.rust` helpers |
+| `pytecode.analysis.verify.verify_classfile(...)` | `pytecode.analysis.verify.verify_classfile(...)` |
+| `pytecode.analysis.verify.verify_classmodel(...)` | `pytecode.analysis.verify.verify_classmodel(...)` |
+| `pytecode.analysis.hierarchy.MappingClassResolver` | `pytecode.analysis.MappingClassResolver` |
+| Legacy Python matcher / transform DSL | `pytecode.transforms.PipelineBuilder` plus `pytecode.transforms` helpers |
 
 Supported submodules:
 
-- `pytecode.transforms` and `pytecode.transforms.rust` for Rust-backed class, field, and method transforms.
+- `pytecode.transforms` for Rust-backed class, field, and method transforms.
 - `pytecode.analysis` for Rust-backed verification entry points.
 - `pytecode.analysis.verify` for structural validation and diagnostics.
 - `pytecode.analysis.hierarchy` for type and override resolution helpers.
 - `pytecode.classfile.descriptors` for JVM descriptors and generic signatures.
 - `pytecode.classfile.constants` for access flags, opcodes, and verifier constants.
-- `pytecode.classfile.modified_utf8` for JVM Modified UTF-8 encoding and decoding.
 
 ## Documentation
 
@@ -197,7 +197,7 @@ Current Rust implementation status:
 - phase 7 added `pytecode-python`, `maturin`-built source/platform distributions, a Rust-backed `pytecode._rust` extension module, and compatibility bridges so `ClassModel.from_classfile`, `ResolvedClass.from_classfile`, `verify_classfile`, and `ClassWriter.write` all accept Rust-backed classfiles,
 - the default `ClassReader` parse path now always goes through the Rust extension,
 - `ClassModel.from_bytes()` now single-parses through Rust, preserves original bytes for byte-exact clean roundtrips, and routes the normal code-mutation serialization path back through Rust,
-- the canonical top-level Python surface is now Rust-owned objects (`RustClassModel`, Rust-backed verification, and Rust-backed resolver types); the older Python-owned model/edit APIs have been removed.
+- the canonical top-level Python surface is now Rust-owned objects (`ClassModel`, Rust-backed verification, and Rust-backed resolver types); the older Python-owned model/edit APIs have been removed.
 
 Generate local API reference HTML with:
 
@@ -219,6 +219,13 @@ Profile isolated JAR-processing stages without `run.py`'s output overhead:
 uv run python tools/profile_jar_pipeline.py path/to/jar.jar
 uv run python tools/profile_jar_pipeline.py path/to/jar.jar --stages class-parse model-lift model-lower
 uv run python tools/profile_jar_pipeline.py path/to/dir/with/jars --stages model-lift model-lower --summary-json output/profiles/common-libs/summary.json
+```
+
+Compare native Rust vs Python-via-Rust stage timings with the Python extension rebuilt in release mode by default:
+
+```powershell
+uv run python tools/bench_full_comparison.py
+uv run python tools/bench_full_comparison.py --extension-build installed
 ```
 
 When making runtime-performance changes, prefer checking both a focused jar such as `crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. Byte Buddy is the default focused Rust benchmark fixture because it is a common JVM library, carries a much larger class corpus than the old `225.jar` fixture, and also includes newer multi-release classes than Guava. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.

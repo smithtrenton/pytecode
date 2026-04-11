@@ -25,20 +25,22 @@ rust = pytest.importorskip("pytecode._rust")
 def test_top_level_rust_first_exports() -> None:
     assert pytecode.ClassReader is rust.ClassReader
     assert pytecode.ClassWriter is rust.ClassWriter
-    assert pytecode.ClassModel is rust.RustClassModel
-    assert pytecode.RustClassReader is rust.ClassReader
-    assert pytecode.RustClassWriter is rust.ClassWriter
-    assert pytecode.RustClassModel is rust.RustClassModel
-    assert pytecode.MappingClassResolver is rust.RustMappingClassResolver
-    assert pytecode.Diagnostic is rust.RustDiagnostic
+    assert pytecode.ClassModel is rust.ClassModel
+    assert not hasattr(pytecode, "MappingClassResolver")
+    assert not hasattr(pytecode, "Diagnostic")
+    assert not hasattr(pytecode, "verify_classfile")
+    assert not hasattr(pytecode, "verify_classmodel")
+    assert not hasattr(pytecode, "RustClassReader")
+    assert not hasattr(pytecode, "RustClassWriter")
+    assert not hasattr(pytecode, "RustClassModel")
     assert not hasattr(pytecode, "LegacyClassReader")
     assert not hasattr(pytecode, "LegacyClassWriter")
     assert not hasattr(pytecode, "LegacyClassModel")
 
 
 def test_analysis_package_rust_first_exports() -> None:
-    assert analysis.MappingClassResolver is rust.RustMappingClassResolver
-    assert analysis.Diagnostic is rust.RustDiagnostic
+    assert analysis.MappingClassResolver is rust.MappingClassResolver
+    assert analysis.Diagnostic is rust.Diagnostic
     assert callable(analysis.verify_classfile)
     assert callable(analysis.verify_classmodel)
 
@@ -82,9 +84,28 @@ def test_top_level_classmodel_roundtrip_smoke(tmp_path: Path) -> None:
     model = pytecode.ClassModel.from_bytes(class_bytes)
     model.access_flags |= 0x0010
     rewritten = model.to_bytes()
+    lowered = model.to_classfile()
 
     class_info = pytecode.ClassReader.from_bytes(rewritten).class_info
     assert class_info.access_flags & 0x0010
+    assert lowered.to_bytes() == rewritten
+
+
+def test_model_lowering_matches_individual_lowering(tmp_path: Path) -> None:
+    class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
+    original_bytes = [path.read_bytes() for path in class_paths]
+    models = [pytecode.ClassModel.from_bytes(class_bytes) for class_bytes in original_bytes]
+
+    for model in models:
+        model.access_flags |= 0x0010
+
+    individual = [model.to_bytes() for model in models]
+    lowered_classfiles = [model.to_classfile() for model in models]
+
+    assert [classfile.to_bytes() for classfile in lowered_classfiles] == individual
+    assert all(
+        pytecode.ClassReader.from_bytes(class_bytes).class_info.access_flags & 0x0010 for class_bytes in individual
+    )
 
 
 def test_analysis_entrypoints_accept_rust_classfile(tmp_path: Path) -> None:
@@ -103,11 +124,11 @@ def test_top_level_verify_wrappers_accept_rust_inputs(tmp_path: Path) -> None:
     hello_world_class = compile_java_resource(tmp_path, "HelloWorld.java")
     class_bytes = hello_world_class.read_bytes()
     rust_classfile = rust.ClassReader.from_bytes(class_bytes).class_info
-    rust_model = rust.RustClassModel.from_bytes(class_bytes)
+    rust_model = rust.ClassModel.from_bytes(class_bytes)
 
-    class_diags = pytecode.verify_classfile(rust_classfile)
-    bytes_diags = pytecode.verify_classfile(class_bytes)
-    model_diags = pytecode.verify_classmodel(rust_model)
+    class_diags = analysis.verify_classfile(rust_classfile)
+    bytes_diags = analysis.verify_classfile(class_bytes)
+    model_diags = analysis.verify_classmodel(rust_model)
 
     assert not [diag for diag in class_diags if diag.severity == "error"]
     assert not [diag for diag in bytes_diags if diag.severity == "error"]
@@ -116,7 +137,7 @@ def test_top_level_verify_wrappers_accept_rust_inputs(tmp_path: Path) -> None:
 
 def test_hierarchy_helpers_accept_rust_resolver(tmp_path: Path) -> None:
     class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
-    resolver = pytecode.MappingClassResolver.from_bytes([path.read_bytes() for path in class_paths])
+    resolver = analysis.MappingClassResolver.from_bytes([path.read_bytes() for path in class_paths])
 
     fixture_name = "fixture/hierarchy/HierarchyFixture"
     mammal_name = "fixture/hierarchy/Mammal"
@@ -144,11 +165,11 @@ def test_hierarchy_helpers_accept_rust_resolver(tmp_path: Path) -> None:
 
 def test_hierarchy_factory_from_rust_models_uses_rust_resolver(tmp_path: Path) -> None:
     class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
-    models = [rust.RustClassModel.from_bytes(path.read_bytes()) for path in class_paths]
+    models = [rust.ClassModel.from_bytes(path.read_bytes()) for path in class_paths]
 
     resolver = HierarchyMappingClassResolver.from_models(models)
 
-    assert isinstance(resolver, rust.RustMappingClassResolver)
+    assert isinstance(resolver, rust.MappingClassResolver)
     resolved = resolver.resolve_class("fixture/hierarchy/HierarchyFixture")
     assert resolved is not None
     assert resolved["super_name"] == "fixture/hierarchy/Mammal"
@@ -249,4 +270,4 @@ def test_classmodel_rejects_invalid_bytes() -> None:
 
 def test_verify_classfile_rejects_wrong_type() -> None:
     with pytest.raises(TypeError):
-        pytecode.verify_classfile(12345)  # type: ignore[arg-type]
+        analysis.verify_classfile(12345)  # type: ignore[arg-type]

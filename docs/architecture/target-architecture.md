@@ -31,9 +31,9 @@ This is the layer you already have today.
 
 ## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — now Rust-owned)
 
-The mutable editing model is now fully Rust-owned via `RustClassModel` (aliased as `pytecode.ClassModel`). The Rust engine handles symbolic references, label resolution, bytecode lowering, constant-pool management, and branch widening natively. Python exposes this through thin PyO3 bindings.
+The mutable editing model is now fully Rust-owned via `pytecode.ClassModel`. The Rust engine handles symbolic references, label resolution, bytecode lowering, constant-pool management, and branch widening natively. Python exposes this through thin PyO3 bindings.
 
-The Rust-first package surface uses `pytecode.ClassModel`, `pytecode.ClassReader`, and `pytecode.ClassWriter` for parse/edit/write flows, plus `pytecode.transforms.rust` (`RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories) for production transform execution.
+The Rust-first package surface uses `pytecode.ClassModel`, `pytecode.ClassReader`, and `pytecode.ClassWriter` for parse/edit/write flows, plus `pytecode.transforms` (`PipelineBuilder`, matcher factories, and Rust-backed transform factories) for production transform execution.
 
 ### 3a. Descriptor and signature parsing ([#3](https://github.com/smithtrenton/pytecode/issues/3))
 

@@ -127,8 +127,6 @@ Main public raw-model modules:
 | `pytecode.classfile.instructions` | raw decoded bytecode instruction dataclasses |
 | `pytecode.classfile.constants` | access flags, target enums, verification enums, magic constant |
 | `pytecode.classfile.descriptors` | descriptor and generic-signature parsing/building |
-| `pytecode.classfile.modified_utf8` | JVM Modified UTF-8 codec |
-
 This layer should stay spec-faithful. It is allowed to be verbose because its purpose is exact representation of on-disk structures.
 
 ### 2. Symbolic editing model
@@ -340,9 +338,9 @@ This module matters because multiple other surfaces depend on it:
 
 ## Modified UTF-8
 
-`pytecode.classfile.modified_utf8` is public and important because JVM classfiles use Modified UTF-8 for `CONSTANT_Utf8`, not normal UTF-8.
+JVM classfiles use Modified UTF-8 for `CONSTANT_Utf8`, not normal UTF-8. In the current Rust-first design, that codec lives in the Rust engine rather than a separate public Python helper module.
 
-A compatible reimplementation must preserve:
+The engine implementation must preserve:
 
 - embedded NUL encoding rules,
 - surrogate-pair handling for supplementary characters,
@@ -459,7 +457,6 @@ The repository treats the module list in `tools/generate_api_docs.py` as the aut
 - `pytecode.classfile.descriptors`
 - `pytecode.classfile.info`
 - `pytecode.classfile.instructions`
-- `pytecode.classfile.modified_utf8`
 - `pytecode.classfile.reader`
 - `pytecode.classfile.writer`
 - `pytecode.edit.constant_pool_builder`

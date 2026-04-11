@@ -7,6 +7,7 @@ use pytecode_engine::raw::ClassFile;
 use pytecode_engine::{parse_class, write_class};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 mod analysis;
 mod archive;
@@ -2157,7 +2158,7 @@ impl PyMethodInfo {
 #[pyclass(module = "pytecode._rust", name = "ClassFile")]
 #[derive(Clone)]
 pub struct PyClassFile {
-    inner: ClassFile,
+    inner: Arc<ClassFile>,
 }
 
 #[pymethods]
@@ -2304,7 +2305,7 @@ impl PyClassFile {
 
 #[pyclass(module = "pytecode._rust", name = "ClassReader")]
 pub struct PyClassReader {
-    class_info: ClassFile,
+    class_info: Arc<ClassFile>,
 }
 
 #[pymethods]
@@ -2312,7 +2313,9 @@ impl PyClassReader {
     #[new]
     fn new(bytes_or_bytearray: &[u8]) -> PyResult<Self> {
         let class_info = parse_class(bytes_or_bytearray).map_err(engine_error_to_py)?;
-        Ok(Self { class_info })
+        Ok(Self {
+            class_info: Arc::new(class_info),
+        })
     }
 
     #[classmethod]

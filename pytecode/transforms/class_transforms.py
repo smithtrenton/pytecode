@@ -11,74 +11,74 @@ natively by the Rust engine::
 
 from __future__ import annotations
 
-from pytecode._rust import RustClassTransform
+from pytecode._rust import ClassTransform
 
 
-def rename_class(name: str) -> RustClassTransform:
+def rename_class(name: str) -> ClassTransform:
     """Rename the class to *name* (internal JVM format)."""
-    return RustClassTransform.rename_class(name)
+    return ClassTransform.rename_class(name)
 
 
-def set_access_flags(flags: int) -> RustClassTransform:
+def set_access_flags(flags: int) -> ClassTransform:
     """Set class access flags to *flags*."""
-    return RustClassTransform.set_access_flags(flags)
+    return ClassTransform.set_access_flags(flags)
 
 
-def add_access_flags(flags: int) -> RustClassTransform:
+def add_access_flags(flags: int) -> ClassTransform:
     """Add *flags* to class access flags (bitwise OR)."""
-    return RustClassTransform.add_access_flags(flags)
+    return ClassTransform.add_access_flags(flags)
 
 
-def remove_access_flags(flags: int) -> RustClassTransform:
+def remove_access_flags(flags: int) -> ClassTransform:
     """Remove *flags* from class access flags (bitwise AND NOT)."""
-    return RustClassTransform.remove_access_flags(flags)
+    return ClassTransform.remove_access_flags(flags)
 
 
-def set_super_class(name: str) -> RustClassTransform:
+def set_super_class(name: str) -> ClassTransform:
     """Set super class to *name* (internal JVM format)."""
-    return RustClassTransform.set_super_class(name)
+    return ClassTransform.set_super_class(name)
 
 
-def add_interface(name: str) -> RustClassTransform:
+def add_interface(name: str) -> ClassTransform:
     """Add *name* to the class's interface list."""
-    return RustClassTransform.add_interface(name)
+    return ClassTransform.add_interface(name)
 
 
-def remove_interface(name: str) -> RustClassTransform:
+def remove_interface(name: str) -> ClassTransform:
     """Remove *name* from the class's interface list."""
-    return RustClassTransform.remove_interface(name)
+    return ClassTransform.remove_interface(name)
 
 
-def remove_method(name: str, descriptor: str | None = None) -> RustClassTransform:
+def remove_method(name: str, descriptor: str | None = None) -> ClassTransform:
     """Remove method by *name*, optionally filtered by *descriptor*."""
-    return RustClassTransform.remove_method(name, descriptor)
+    return ClassTransform.remove_method(name, descriptor)
 
 
-def remove_field(name: str, descriptor: str | None = None) -> RustClassTransform:
+def remove_field(name: str, descriptor: str | None = None) -> ClassTransform:
     """Remove field by *name*, optionally filtered by *descriptor*."""
-    return RustClassTransform.remove_field(name, descriptor)
+    return ClassTransform.remove_field(name, descriptor)
 
 
-def rename_method(from_name: str, to_name: str) -> RustClassTransform:
+def rename_method(from_name: str, to_name: str) -> ClassTransform:
     """Rename all methods named *from_name* to *to_name*."""
-    return RustClassTransform.rename_method(from_name, to_name)
+    return ClassTransform.rename_method(from_name, to_name)
 
 
-def rename_field(from_name: str, to_name: str) -> RustClassTransform:
+def rename_field(from_name: str, to_name: str) -> ClassTransform:
     """Rename all fields named *from_name* to *to_name*."""
-    return RustClassTransform.rename_field(from_name, to_name)
+    return ClassTransform.rename_field(from_name, to_name)
 
 
-def set_method_access_flags(name: str, flags: int) -> RustClassTransform:
+def set_method_access_flags(name: str, flags: int) -> ClassTransform:
     """Set access flags of method *name* to *flags*."""
-    return RustClassTransform.set_method_access_flags(name, flags)
+    return ClassTransform.set_method_access_flags(name, flags)
 
 
-def set_field_access_flags(name: str, flags: int) -> RustClassTransform:
+def set_field_access_flags(name: str, flags: int) -> ClassTransform:
     """Set access flags of field *name* to *flags*."""
-    return RustClassTransform.set_field_access_flags(name, flags)
+    return ClassTransform.set_field_access_flags(name, flags)
 
 
-def sequence(*transforms: RustClassTransform) -> RustClassTransform:
+def sequence(*transforms: ClassTransform) -> ClassTransform:
     """Apply multiple transforms in order."""
-    return RustClassTransform.sequence(list(transforms))
+    return ClassTransform.sequence(list(transforms))

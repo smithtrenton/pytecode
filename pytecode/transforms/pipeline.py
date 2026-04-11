@@ -18,13 +18,13 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pytecode._rust import (
-    RustClassMatcher,
-    RustClassModel,
-    RustClassTransform,
-    RustCompiledPipeline,
-    RustFieldMatcher,
-    RustMethodMatcher,
-    RustPipeline,
+    ClassMatcher,
+    ClassModel,
+    ClassTransform,
+    CompiledPipeline,
+    FieldMatcher,
+    MethodMatcher,
+    Pipeline,
 )
 
 
@@ -32,12 +32,12 @@ class PipelineBuilder:
     """Fluent builder for a transform pipeline."""
 
     def __init__(self) -> None:
-        self._pipeline = RustPipeline()
+        self._pipeline = Pipeline()
 
     def on_classes(
         self,
-        matcher: RustClassMatcher,
-        transform: RustClassTransform,
+        matcher: ClassMatcher,
+        transform: ClassTransform,
     ) -> PipelineBuilder:
         """Add a class-level step."""
         self._pipeline.on_classes(matcher, transform)
@@ -45,10 +45,10 @@ class PipelineBuilder:
 
     def on_fields(
         self,
-        field_matcher: RustFieldMatcher,
-        transform: RustClassTransform,
+        field_matcher: FieldMatcher,
+        transform: ClassTransform,
         *,
-        owner_matcher: RustClassMatcher | None = None,
+        owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
         """Add a field-level step (optional class-level guard)."""
         self._pipeline.on_fields(field_matcher, transform, owner_matcher)
@@ -56,10 +56,10 @@ class PipelineBuilder:
 
     def on_methods(
         self,
-        method_matcher: RustMethodMatcher,
-        transform: RustClassTransform,
+        method_matcher: MethodMatcher,
+        transform: ClassTransform,
         *,
-        owner_matcher: RustClassMatcher | None = None,
+        owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
         """Add a method-level step (optional class-level guard)."""
         self._pipeline.on_methods(method_matcher, transform, owner_matcher)
@@ -69,8 +69,8 @@ class PipelineBuilder:
 
     def on_classes_custom(
         self,
-        matcher: RustClassMatcher,
-        callback: Callable[[RustClassModel], None],
+        matcher: ClassMatcher,
+        callback: Callable[[ClassModel], None],
     ) -> PipelineBuilder:
         """Class step with custom Python callback (receives ``ClassModel``).
 
@@ -87,10 +87,10 @@ class PipelineBuilder:
 
     def on_fields_custom(
         self,
-        field_matcher: RustFieldMatcher,
-        callback: Callable[[RustClassModel], None],
+        field_matcher: FieldMatcher,
+        callback: Callable[[ClassModel], None],
         *,
-        owner_matcher: RustClassMatcher | None = None,
+        owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
         """Field step with custom Python callback (receives ``ClassModel``).
 
@@ -110,10 +110,10 @@ class PipelineBuilder:
 
     def on_methods_custom(
         self,
-        method_matcher: RustMethodMatcher,
-        callback: Callable[[RustClassModel], None],
+        method_matcher: MethodMatcher,
+        callback: Callable[[ClassModel], None],
         *,
-        owner_matcher: RustClassMatcher | None = None,
+        owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
         """Method step with custom Python callback (receives ``ClassModel``).
 
@@ -131,19 +131,19 @@ class PipelineBuilder:
         self._pipeline.on_methods_custom(method_matcher, callback, owner_matcher)
         return self
 
-    def build(self) -> RustPipeline:
+    def build(self) -> Pipeline:
         """Return the constructed pipeline."""
         return self._pipeline
 
-    def apply(self, model: RustClassModel) -> None:
+    def apply(self, model: ClassModel) -> None:
         """Apply pipeline to a single ClassModel (mutates in-place)."""
         self._pipeline.apply(model)
 
-    def apply_all(self, models: list[RustClassModel]) -> None:
+    def apply_all(self, models: list[ClassModel]) -> None:
         """Apply pipeline to many ClassModel objects (mutates in-place)."""
         self._pipeline.apply_all(models)
 
-    def compile(self) -> RustCompiledPipeline:
+    def compile(self) -> CompiledPipeline:
         """Compile for hot-path repeated use (pre-compiles regexes)."""
         return self._pipeline.compile()
 
@@ -152,6 +152,3 @@ class PipelineBuilder:
 
     def __repr__(self) -> str:
         return f"PipelineBuilder(steps={len(self._pipeline)})"
-
-
-RustPipelineBuilder = PipelineBuilder

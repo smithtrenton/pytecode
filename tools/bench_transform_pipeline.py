@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 import zipfile
 
-from pytecode._rust import RustClassModel
+from pytecode._rust import ClassModel
 from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag
 from pytecode.transforms.class_transforms import add_access_flags
 from pytecode.transforms.matchers import class_is_public as rust_class_is_public
@@ -55,7 +55,7 @@ def bench_rust_pipeline() -> float:
     apply_times: list[float] = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
-        models = [RustClassModel.from_bytes(b) for b in class_bytes]
+        models = [ClassModel.from_bytes(b) for b in class_bytes]
         read_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
@@ -74,10 +74,10 @@ def bench_rust_pipeline() -> float:
 def bench_python_pipeline() -> float:
     """Benchmark Python callback overhead on top of the Rust pipeline."""
 
-    def add_final(model: RustClassModel) -> None:
+    def add_final(model: ClassModel) -> None:
         model.access_flags = int(model.access_flags) | int(ClassAccessFlag.FINAL)
 
-    def add_strict(model: RustClassModel) -> None:
+    def add_strict(model: ClassModel) -> None:
         for method in list(model.methods):
             if method.access_flags & int(MethodAccessFlag.PUBLIC) and method.code is not None:
                 method.access_flags = int(method.access_flags) | int(MethodAccessFlag.STRICT)
@@ -96,7 +96,7 @@ def bench_python_pipeline() -> float:
     apply_times: list[float] = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
-        models = [RustClassModel.from_bytes(b) for b in class_bytes]
+        models = [ClassModel.from_bytes(b) for b in class_bytes]
         read_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
@@ -116,7 +116,7 @@ def bench_python_pipeline() -> float:
 def bench_mixed_pipeline() -> float:
     """Benchmark a mixed Rust pipeline with one Python callback hop."""
 
-    def add_final_cb(model: RustClassModel) -> None:
+    def add_final_cb(model: ClassModel) -> None:
         model.access_flags = model.access_flags | 0x0010
 
     p = (
@@ -137,7 +137,7 @@ def bench_mixed_pipeline() -> float:
     apply_times: list[float] = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
-        models = [RustClassModel.from_bytes(b) for b in class_bytes]
+        models = [ClassModel.from_bytes(b) for b in class_bytes]
         read_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()
@@ -156,7 +156,7 @@ def bench_mixed_pipeline() -> float:
 def bench_live_view_callback() -> float:
     """Benchmark callback path that actively reads Rust bridge live views."""
 
-    def inspect_views(model: RustClassModel) -> None:
+    def inspect_views(model: ClassModel) -> None:
         methods = model.methods
         fields = model.fields
         interfaces = model.interfaces
@@ -195,7 +195,7 @@ def bench_live_view_callback() -> float:
     apply_times: list[float] = []
     for _ in range(RUNS):
         t0 = time.perf_counter()
-        models = [RustClassModel.from_bytes(b) for b in class_bytes]
+        models = [ClassModel.from_bytes(b) for b in class_bytes]
         read_times.append(time.perf_counter() - t0)
 
         t0 = time.perf_counter()

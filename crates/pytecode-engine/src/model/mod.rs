@@ -25,7 +25,8 @@ use crate::raw::{
     TableSwitchInsn as RawTableSwitchInsn, UnknownAttribute, WideInstruction,
 };
 use crate::{EngineError, EngineErrorKind, Result, parse_class, write_class};
-use std::collections::{BTreeMap, HashMap};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeModel {
@@ -286,37 +287,32 @@ impl ClassModel {
             Some(super_name) => cp.add_class(super_name)?,
             None => ClassIndex::default(),
         };
-        let interfaces = self
-            .interfaces
-            .iter()
-            .map(|name| cp.add_class(name))
-            .collect::<Result<Vec<_>>>()?;
-        let fields = self
-            .fields
-            .iter()
-            .map(|field| lower_field_model(field, &mut cp))
-            .collect::<Result<Vec<_>>>()?;
-        let methods = self
-            .methods
-            .iter()
-            .map(|method| {
-                lower_method_model(
-                    method,
-                    &self.name,
-                    self.version.0,
-                    &mut cp,
-                    debug_info,
-                    frame_mode,
-                    resolver,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut interfaces = Vec::with_capacity(self.interfaces.len());
+        for name in &self.interfaces {
+            interfaces.push(cp.add_class(name)?);
+        }
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for field in &self.fields {
+            fields.push(lower_field_model(field, &mut cp)?);
+        }
+        let mut methods = Vec::with_capacity(self.methods.len());
+        for method in &self.methods {
+            methods.push(lower_method_model(
+                method,
+                &self.name,
+                self.version.0,
+                &mut cp,
+                debug_info,
+                frame_mode,
+                resolver,
+            )?);
+        }
 
         Ok(ClassFile {
             magic: MAGIC,
             minor_version: self.version.1,
             major_version: self.version.0,
-            constant_pool: cp.build(),
+            constant_pool: cp.into_entries(),
             access_flags: self.access_flags,
             this_class,
             super_class,
@@ -799,7 +795,10 @@ fn lower_method_model(
             .transpose()?
     };
     let mut other_iter = method.attributes.iter().cloned();
-    let mut attributes = Vec::new();
+    let mut lowered_code = lowered_code;
+    let mut code_placed = false;
+    let mut attributes =
+        Vec::with_capacity(method.attributes.len() + usize::from(lowered_code.is_some()));
     for item in &method.attribute_layout {
         match item {
             MethodAttributeLayout::Other => {
@@ -808,18 +807,15 @@ fn lower_method_model(
                 }
             }
             MethodAttributeLayout::Code => {
-                if let Some(code) = lowered_code.clone() {
+                if let Some(code) = lowered_code.take() {
                     attributes.push(code);
+                    code_placed = true;
                 }
             }
         }
     }
     attributes.extend(other_iter);
-    if !method
-        .attribute_layout
-        .contains(&MethodAttributeLayout::Code)
-        && let Some(code) = lowered_code
-    {
+    if !code_placed && let Some(code) = lowered_code {
         attributes.push(code);
     }
 
@@ -862,24 +858,26 @@ fn lower_code_model(
         None
     };
 
-    let mut raw_instructions = Vec::new();
+    let mut raw_instructions = Vec::with_capacity(code.instructions.len());
     for (item_index, item) in code.instructions.iter().enumerate() {
         if matches!(item, CodeItem::Label(_)) {
             continue;
         }
-        let offset = *layout
-            .item_offsets
-            .get(&item_index)
-            .ok_or_else(|| model_error("instruction offset missing from layout"))?;
-        let lowered = lower_instruction_sequence(
+        let offset = item_offset(
+            &layout.item_offsets,
+            item_index,
+            "instruction offset missing from layout",
+        )?;
+        lower_instruction_sequence(
             item_index,
             item,
             offset,
             cp,
             &layout.label_offsets,
             &layout.branch_encodings,
+            &layout.ldc_indexes,
+            &mut raw_instructions,
         )?;
-        raw_instructions.extend(lowered);
     }
 
     let exception_table = code
@@ -952,17 +950,21 @@ fn lower_code_model(
 }
 
 struct CodeLayout {
-    branch_encodings: HashMap<usize, BranchEncoding>,
-    label_offsets: HashMap<Label, u32>,
-    item_offsets: HashMap<usize, u32>,
+    branch_encodings: Vec<BranchEncoding>,
+    label_offsets: FxHashMap<Label, u32>,
+    item_offsets: Vec<Option<u32>>,
+    ldc_indexes: Vec<Option<CpIndex>>,
     code_length: u32,
 }
 
 fn compute_code_layout(code: &CodeModel, cp: &mut ConstantPoolBuilder) -> Result<CodeLayout> {
-    let mut branch_encodings = HashMap::new();
-    let mut label_offsets = HashMap::new();
+    let instruction_count = code.instructions.len();
+    let mut branch_encodings = vec![BranchEncoding::Short; instruction_count];
+    let mut label_offsets = FxHashMap::default();
+    let mut ldc_indexes = vec![None; instruction_count];
     for _ in 0..8 {
-        label_offsets = compute_label_offsets(&code.instructions, cp, &branch_encodings)?;
+        label_offsets =
+            compute_label_offsets(&code.instructions, cp, &branch_encodings, &mut ldc_indexes)?;
         let mut changed = false;
         let mut offset = 0_u32;
         for (item_index, item) in code.instructions.iter().enumerate() {
@@ -983,18 +985,25 @@ fn compute_code_layout(code: &CodeModel, cp: &mut ConstantPoolBuilder) -> Result
                 } else {
                     BranchEncoding::InvertedWide
                 };
-                if branch_encodings.get(&item_index).copied() != Some(required) {
-                    branch_encodings.insert(item_index, required);
+                if branch_encodings[item_index] != required {
+                    branch_encodings[item_index] = required;
                     changed = true;
                 }
             }
-            offset += instruction_size(item_index, item, offset, cp, &branch_encodings)?;
+            offset += instruction_size(
+                item_index,
+                item,
+                offset,
+                cp,
+                &branch_encodings,
+                &mut ldc_indexes,
+            )?;
         }
         if !changed {
             break;
         }
     }
-    let mut item_offsets = HashMap::new();
+    let mut item_offsets = vec![None; instruction_count];
     let mut current = 0_u32;
     for (item_index, item) in code.instructions.iter().enumerate() {
         match item {
@@ -1002,8 +1011,15 @@ fn compute_code_layout(code: &CodeModel, cp: &mut ConstantPoolBuilder) -> Result
                 current = *label_offsets.get(label).unwrap_or(&current);
             }
             _ => {
-                item_offsets.insert(item_index, current);
-                current += instruction_size(item_index, item, current, cp, &branch_encodings)?;
+                item_offsets[item_index] = Some(current);
+                current += instruction_size(
+                    item_index,
+                    item,
+                    current,
+                    cp,
+                    &branch_encodings,
+                    &mut ldc_indexes,
+                )?;
             }
         }
     }
@@ -1011,6 +1027,7 @@ fn compute_code_layout(code: &CodeModel, cp: &mut ConstantPoolBuilder) -> Result
         branch_encodings,
         label_offsets,
         item_offsets,
+        ldc_indexes,
         code_length: current,
     })
 }
@@ -1018,16 +1035,20 @@ fn compute_code_layout(code: &CodeModel, cp: &mut ConstantPoolBuilder) -> Result
 fn compute_label_offsets(
     items: &[CodeItem],
     cp: &mut ConstantPoolBuilder,
-    branch_encodings: &HashMap<usize, BranchEncoding>,
-) -> Result<HashMap<Label, u32>> {
-    let mut offsets = HashMap::new();
+    branch_encodings: &[BranchEncoding],
+    ldc_indexes: &mut [Option<CpIndex>],
+) -> Result<FxHashMap<Label, u32>> {
+    let mut offsets = FxHashMap::default();
     let mut current = 0_u32;
     for (item_index, item) in items.iter().enumerate() {
         match item {
             CodeItem::Label(label) => {
                 offsets.insert(label.clone(), current);
             }
-            _ => current += instruction_size(item_index, item, current, cp, branch_encodings)?,
+            _ => {
+                current +=
+                    instruction_size(item_index, item, current, cp, branch_encodings, ldc_indexes)?
+            }
         }
     }
     Ok(offsets)
@@ -1038,7 +1059,8 @@ fn instruction_size(
     item: &CodeItem,
     offset: u32,
     cp: &mut ConstantPoolBuilder,
-    branch_encodings: &HashMap<usize, BranchEncoding>,
+    branch_encodings: &[BranchEncoding],
+    ldc_indexes: &mut [Option<CpIndex>],
 ) -> Result<u32> {
     Ok(match item {
         CodeItem::Label(_) => 0,
@@ -1047,11 +1069,7 @@ fn instruction_size(
         CodeItem::InvokeDynamic(_) => 5,
         CodeItem::InterfaceMethod(_) => 5,
         CodeItem::MultiANewArray(_) => 4,
-        CodeItem::Branch(_) => match branch_encodings
-            .get(&item_index)
-            .copied()
-            .unwrap_or(BranchEncoding::Short)
-        {
+        CodeItem::Branch(_) => match branch_encodings[item_index] {
             BranchEncoding::Short => 3,
             BranchEncoding::Wide => 5,
             BranchEncoding::InvertedWide => 8,
@@ -1082,11 +1100,24 @@ fn instruction_size(
         }
         CodeItem::Ldc(insn) => match &insn.value {
             LdcValue::Long(_) | LdcValue::DoubleBits(_) => {
-                let _ = add_ldc_value(cp, &insn.value)?;
+                let index = if let Some(index) = ldc_indexes[item_index] {
+                    index
+                } else {
+                    let index = add_ldc_value(cp, &insn.value)?;
+                    ldc_indexes[item_index] = Some(index);
+                    index
+                };
+                debug_assert!(index.value() > 0);
                 3
             }
             value => {
-                let index = add_ldc_value(cp, value)?;
+                let index = if let Some(index) = ldc_indexes[item_index] {
+                    index
+                } else {
+                    let index = add_ldc_value(cp, value)?;
+                    ldc_indexes[item_index] = Some(index);
+                    index
+                };
                 if index.value() <= u8::MAX as u16 {
                     2
                 } else {
@@ -1097,148 +1128,146 @@ fn instruction_size(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_instruction_sequence(
     item_index: usize,
     item: &CodeItem,
     offset: u32,
     cp: &mut ConstantPoolBuilder,
-    label_offsets: &HashMap<Label, u32>,
-    branch_encodings: &HashMap<usize, BranchEncoding>,
-) -> Result<Vec<Instruction>> {
-    Ok(match item {
+    label_offsets: &FxHashMap<Label, u32>,
+    branch_encodings: &[BranchEncoding],
+    ldc_indexes: &[Option<CpIndex>],
+    out: &mut Vec<Instruction>,
+) -> Result<()> {
+    match item {
         CodeItem::Label(_) => return Err(model_error("labels do not lower to raw instructions")),
-        CodeItem::Raw(instruction) => vec![rebase_instruction(instruction, offset)],
-        CodeItem::Field(insn) => {
-            vec![Instruction::ConstantPoolIndexWide(
-                crate::raw::ConstantPoolIndexWide {
-                    opcode: insn.opcode,
-                    offset,
-                    index: cp.add_field_ref(&insn.owner, &insn.name, &insn.descriptor)?,
+        CodeItem::Raw(instruction) => out.push(rebase_instruction(instruction, offset)),
+        CodeItem::Field(insn) => out.push(Instruction::ConstantPoolIndexWide(
+            crate::raw::ConstantPoolIndexWide {
+                opcode: insn.opcode,
+                offset,
+                index: cp.add_field_ref(&insn.owner, &insn.name, &insn.descriptor)?,
+            },
+        )),
+        CodeItem::Method(insn) => out.push(Instruction::ConstantPoolIndexWide(
+            crate::raw::ConstantPoolIndexWide {
+                opcode: insn.opcode,
+                offset,
+                index: if insn.is_interface {
+                    cp.add_interface_method_ref(&insn.owner, &insn.name, &insn.descriptor)?
+                } else {
+                    cp.add_method_ref(&insn.owner, &insn.name, &insn.descriptor)?
                 },
-            )]
-        }
-        CodeItem::Method(insn) => {
-            vec![Instruction::ConstantPoolIndexWide(
-                crate::raw::ConstantPoolIndexWide {
-                    opcode: insn.opcode,
-                    offset,
-                    index: if insn.is_interface {
-                        cp.add_interface_method_ref(&insn.owner, &insn.name, &insn.descriptor)?
-                    } else {
-                        cp.add_method_ref(&insn.owner, &insn.name, &insn.descriptor)?
-                    },
-                },
-            )]
-        }
+            },
+        )),
         CodeItem::InterfaceMethod(insn) => {
-            vec![Instruction::InvokeInterface(RawInvokeInterfaceInsn {
+            out.push(Instruction::InvokeInterface(RawInvokeInterfaceInsn {
                 offset,
                 index: cp.add_interface_method_ref(&insn.owner, &insn.name, &insn.descriptor)?,
                 count: operands::interface_method_count(&insn.descriptor)?,
                 reserved: 0,
-            })]
+            }))
         }
-        CodeItem::Type(insn) => {
-            vec![Instruction::ConstantPoolIndexWide(
-                crate::raw::ConstantPoolIndexWide {
-                    opcode: insn.opcode,
-                    offset,
-                    index: cp.add_class(&insn.descriptor)?.into(),
-                },
-            )]
-        }
+        CodeItem::Type(insn) => out.push(Instruction::ConstantPoolIndexWide(
+            crate::raw::ConstantPoolIndexWide {
+                opcode: insn.opcode,
+                offset,
+                index: cp.add_class(&insn.descriptor)?.into(),
+            },
+        )),
         CodeItem::Var(insn) => {
             if let Some(opcode) = operands::var_shortcut_opcode(insn.opcode, insn.slot) {
-                vec![Instruction::Simple { opcode, offset }]
+                out.push(Instruction::Simple { opcode, offset });
             } else if insn.slot <= u8::MAX as u16 {
-                vec![Instruction::LocalIndex {
+                out.push(Instruction::LocalIndex {
                     opcode: insn.opcode,
                     offset,
                     index: insn.slot as u8,
-                }]
+                });
             } else {
-                vec![Instruction::Wide(WideInstruction {
+                out.push(Instruction::Wide(WideInstruction {
                     offset,
                     opcode: insn.opcode,
                     index: insn.slot,
                     value: None,
-                })]
+                }));
             }
         }
         CodeItem::IInc(insn) => {
             if insn.slot <= u8::MAX as u16 && i8::try_from(insn.value).is_ok() {
-                vec![Instruction::IInc {
+                out.push(Instruction::IInc {
                     offset,
                     index: insn.slot as u8,
                     value: insn.value as i8,
-                }]
+                });
             } else {
-                vec![Instruction::Wide(WideInstruction {
+                out.push(Instruction::Wide(WideInstruction {
                     offset,
                     opcode: 0x84,
                     index: insn.slot,
                     value: Some(insn.value),
-                })]
+                }));
             }
         }
-        CodeItem::Ldc(insn) => vec![lower_ldc_instruction(&insn.value, offset, cp)?],
-        CodeItem::InvokeDynamic(insn) => vec![Instruction::InvokeDynamic(RawInvokeDynamicInsn {
+        CodeItem::Ldc(insn) => out.push(lower_ldc_instruction(
+            &insn.value,
             offset,
-            index: cp.add_invoke_dynamic(
-                insn.bootstrap_method_attr_index,
-                &insn.name,
-                &insn.descriptor,
-            )?,
-            reserved: 0,
-        })],
-        CodeItem::MultiANewArray(insn) => vec![Instruction::MultiANewArray {
+            cp,
+            ldc_indexes[item_index],
+        )?),
+        CodeItem::InvokeDynamic(insn) => {
+            out.push(Instruction::InvokeDynamic(RawInvokeDynamicInsn {
+                offset,
+                index: cp.add_invoke_dynamic(
+                    insn.bootstrap_method_attr_index,
+                    &insn.name,
+                    &insn.descriptor,
+                )?,
+                reserved: 0,
+            }))
+        }
+        CodeItem::MultiANewArray(insn) => out.push(Instruction::MultiANewArray {
             offset,
             index: cp.add_class(&insn.descriptor)?,
             dimensions: insn.dimensions,
-        }],
+        }),
         CodeItem::Branch(insn) => {
             let target = *label_offsets
                 .get(&insn.target)
                 .ok_or_else(|| model_error("branch target label missing"))?;
             let delta_from_here = target as i64 - offset as i64;
-            match branch_encodings
-                .get(&item_index)
-                .copied()
-                .unwrap_or(BranchEncoding::Short)
-            {
-                BranchEncoding::Short => vec![Instruction::Branch(Branch {
+            match branch_encodings[item_index] {
+                BranchEncoding::Short => out.push(Instruction::Branch(Branch {
                     opcode: insn.opcode,
                     offset,
                     branch_offset: i16::try_from(delta_from_here)
                         .map_err(|_| model_error("branch offset exceeds i16"))?,
-                })],
-                BranchEncoding::Wide => vec![Instruction::BranchWide {
+                })),
+                BranchEncoding::Wide => out.push(Instruction::BranchWide {
                     opcode: if insn.opcode == 0xA7 { 0xC8 } else { 0xC9 },
                     offset,
                     branch_offset: i32::try_from(delta_from_here)
                         .map_err(|_| model_error("wide branch offset exceeds i32"))?,
-                }],
+                }),
                 BranchEncoding::InvertedWide => {
                     let inverted_opcode = invert_conditional_branch_opcode(insn.opcode)?;
                     let goto_offset = offset + 3;
                     let goto_delta = target as i64 - goto_offset as i64;
-                    vec![
-                        Instruction::Branch(Branch {
-                            opcode: inverted_opcode,
-                            offset,
-                            branch_offset: 8,
-                        }),
-                        Instruction::BranchWide {
-                            opcode: 0xC8,
-                            offset: goto_offset,
-                            branch_offset: i32::try_from(goto_delta)
-                                .map_err(|_| model_error("wide branch offset exceeds i32"))?,
-                        },
-                    ]
+                    out.push(Instruction::Branch(Branch {
+                        opcode: inverted_opcode,
+                        offset,
+                        branch_offset: 8,
+                    }));
+                    out.push(Instruction::BranchWide {
+                        opcode: 0xC8,
+                        offset: goto_offset,
+                        branch_offset: i32::try_from(goto_delta)
+                            .map_err(|_| model_error("wide branch offset exceeds i32"))?,
+                    });
                 }
             }
         }
-        CodeItem::LookupSwitch(insn) => vec![Instruction::LookupSwitch(RawLookupSwitchInsn {
+        CodeItem::LookupSwitch(insn) => out.push(Instruction::LookupSwitch(RawLookupSwitchInsn {
             offset,
             default_offset: switch_target_offset(offset, label_offsets, &insn.default_target)?,
             pairs: insn
@@ -1251,8 +1280,8 @@ fn lower_instruction_sequence(
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
-        })],
-        CodeItem::TableSwitch(insn) => vec![Instruction::TableSwitch(RawTableSwitchInsn {
+        })),
+        CodeItem::TableSwitch(insn) => out.push(Instruction::TableSwitch(RawTableSwitchInsn {
             offset,
             default_offset: switch_target_offset(offset, label_offsets, &insn.default_target)?,
             low: insn.low,
@@ -1262,16 +1291,21 @@ fn lower_instruction_sequence(
                 .iter()
                 .map(|label| switch_target_offset(offset, label_offsets, label))
                 .collect::<Result<Vec<_>>>()?,
-        })],
-    })
+        })),
+    }
+    Ok(())
 }
 
 fn lower_ldc_instruction(
     value: &LdcValue,
     offset: u32,
     cp: &mut ConstantPoolBuilder,
+    cached_index: Option<CpIndex>,
 ) -> Result<Instruction> {
-    let index = add_ldc_value(cp, value)?;
+    let index = match cached_index {
+        Some(index) => index,
+        None => add_ldc_value(cp, value)?,
+    };
     Ok(match value {
         LdcValue::Long(_) | LdcValue::DoubleBits(_) => {
             Instruction::ConstantPoolIndexWide(crate::raw::ConstantPoolIndexWide {
@@ -1323,7 +1357,7 @@ fn add_ldc_value(cp: &mut ConstantPoolBuilder, value: &LdcValue) -> Result<CpInd
 fn lower_nested_attributes(
     code: &CodeModel,
     cp: &mut ConstantPoolBuilder,
-    label_offsets: &HashMap<Label, u32>,
+    label_offsets: &FxHashMap<Label, u32>,
     debug_info_state: DebugInfoState,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
@@ -1367,8 +1401,11 @@ fn lower_nested_attributes(
                 && stack_map_attr_name(attribute).is_some())
         })
         .cloned();
-    let mut stack_map_placed = false;
-    let mut attributes = Vec::new();
+    let mut line_number_attr = line_number_attr;
+    let mut local_variable_attr = local_variable_attr;
+    let mut local_variable_type_attr = local_variable_type_attr;
+    let mut stack_map_table = stack_map_table;
+    let mut attributes = Vec::with_capacity(code.attributes.len() + 4);
     for item in &code.nested_attribute_layout {
         match item {
             NestedCodeAttributeLayout::Other => {
@@ -1377,25 +1414,24 @@ fn lower_nested_attributes(
                 }
             }
             NestedCodeAttributeLayout::LineNumbers => {
-                if let Some(attribute) = line_number_attr.clone() {
+                if let Some(attribute) = line_number_attr.take() {
                     attributes.push(attribute);
                 }
             }
             NestedCodeAttributeLayout::LocalVariables => {
-                if let Some(attribute) = local_variable_attr.clone() {
+                if let Some(attribute) = local_variable_attr.take() {
                     attributes.push(attribute);
                 }
             }
             NestedCodeAttributeLayout::LocalVariableTypes => {
-                if let Some(attribute) = local_variable_type_attr.clone() {
+                if let Some(attribute) = local_variable_type_attr.take() {
                     attributes.push(attribute);
                 }
             }
             NestedCodeAttributeLayout::StackMapTable => {
                 if frame_mode == FrameComputationMode::Recompute {
-                    if let Some(ref attribute) = stack_map_table {
-                        attributes.push(attribute.clone());
-                        stack_map_placed = true;
+                    if let Some(attribute) = stack_map_table.take() {
+                        attributes.push(attribute);
                     }
                 } else if let Some(attribute) = other_iter.next() {
                     attributes.push(attribute);
@@ -1405,28 +1441,16 @@ fn lower_nested_attributes(
     }
 
     attributes.extend(other_iter);
-    if !code
-        .nested_attribute_layout
-        .contains(&NestedCodeAttributeLayout::LineNumbers)
-        && let Some(attribute) = line_number_attr
-    {
+    if let Some(attribute) = line_number_attr {
         attributes.push(attribute);
     }
-    if !code
-        .nested_attribute_layout
-        .contains(&NestedCodeAttributeLayout::LocalVariables)
-        && let Some(attribute) = local_variable_attr
-    {
+    if let Some(attribute) = local_variable_attr {
         attributes.push(attribute);
     }
-    if !code
-        .nested_attribute_layout
-        .contains(&NestedCodeAttributeLayout::LocalVariableTypes)
-        && let Some(attribute) = local_variable_type_attr
-    {
+    if let Some(attribute) = local_variable_type_attr {
         attributes.push(attribute);
     }
-    if !stack_map_placed && let Some(attribute) = stack_map_table {
+    if let Some(attribute) = stack_map_table {
         attributes.push(attribute);
     }
     Ok(attributes)
@@ -1435,14 +1459,16 @@ fn lower_nested_attributes(
 fn lower_stack_map_table(
     frames: &FrameComputationResult,
     cp: &mut ConstantPoolBuilder,
-    item_offsets: &HashMap<usize, u32>,
+    item_offsets: &[Option<u32>],
 ) -> Result<AttributeInfo> {
     let mut entries = Vec::with_capacity(frames.frames.len());
     let mut previous_offset = 0_u32;
     for (frame_index, frame) in frames.frames.iter().enumerate() {
-        let offset = *item_offsets
-            .get(&frame.code_index)
-            .ok_or_else(|| model_error("stack-map frame instruction offset missing"))?;
+        let offset = item_offset(
+            item_offsets,
+            frame.code_index,
+            "stack-map frame instruction offset missing",
+        )?;
         let offset_delta = if frame_index == 0 {
             offset
         } else {
@@ -1480,7 +1506,7 @@ fn lower_stack_map_table(
 fn raw_verification_type(
     value: &VType,
     cp: &mut ConstantPoolBuilder,
-    item_offsets: &HashMap<usize, u32>,
+    item_offsets: &[Option<u32>],
 ) -> Result<crate::raw::VerificationTypeInfo> {
     match value {
         VType::Top => Ok(crate::raw::VerificationTypeInfo::Top),
@@ -1497,14 +1523,28 @@ fn raw_verification_type(
             cpool_index: cp.add_class(class_name)?,
         }),
         VType::Uninitialized { code_index, .. } => {
-            let offset = *item_offsets
-                .get(code_index)
-                .ok_or_else(|| model_error("missing offset for uninitialized new instruction"))?;
+            let offset = item_offset(
+                item_offsets,
+                *code_index,
+                "missing offset for uninitialized new instruction",
+            )?;
             Ok(crate::raw::VerificationTypeInfo::Uninitialized {
                 offset: offset as u16,
             })
         }
     }
+}
+
+fn item_offset(
+    item_offsets: &[Option<u32>],
+    item_index: usize,
+    message: &'static str,
+) -> Result<u32> {
+    item_offsets
+        .get(item_index)
+        .copied()
+        .flatten()
+        .ok_or_else(|| model_error(message))
 }
 
 fn frame_result_contains_return_address(frames: &FrameComputationResult) -> bool {
@@ -1520,7 +1560,7 @@ fn frame_result_contains_return_address(frames: &FrameComputationResult) -> bool
 fn lower_line_number_table(
     entries: &[LineNumberEntry],
     cp: &mut ConstantPoolBuilder,
-    label_offsets: &HashMap<Label, u32>,
+    label_offsets: &FxHashMap<Label, u32>,
 ) -> Result<AttributeInfo> {
     let line_number_table = entries
         .iter()
@@ -1546,7 +1586,7 @@ fn lower_line_number_table(
 fn lower_local_variable_table(
     entries: &[LocalVariableEntry],
     cp: &mut ConstantPoolBuilder,
-    label_offsets: &HashMap<Label, u32>,
+    label_offsets: &FxHashMap<Label, u32>,
     type_table: bool,
 ) -> Result<AttributeInfo> {
     debug_assert!(!type_table);
@@ -1583,7 +1623,7 @@ fn lower_local_variable_table(
 fn lower_local_variable_type_table(
     entries: &[LocalVariableTypeEntry],
     cp: &mut ConstantPoolBuilder,
-    label_offsets: &HashMap<Label, u32>,
+    label_offsets: &FxHashMap<Label, u32>,
 ) -> Result<AttributeInfo> {
     let local_variable_type_table = entries
         .iter()
@@ -1896,7 +1936,7 @@ fn target_label(labels_by_offset: &BTreeMap<u32, Label>, target: i64) -> Result<
 
 fn switch_target_offset(
     offset: u32,
-    label_offsets: &HashMap<Label, u32>,
+    label_offsets: &FxHashMap<Label, u32>,
     label: &Label,
 ) -> Result<i32> {
     let target = *label_offsets

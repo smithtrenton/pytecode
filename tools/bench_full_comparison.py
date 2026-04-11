@@ -2,12 +2,15 @@
 
 Runs both native Rust (via bench-smoke CLI) and Python-via-Rust benchmarks for
 all five pipeline stages, then prints a side-by-side comparison table with
-overhead ratios.  Optionally generates cProfile ``.prof`` files for the Python
-side and/or a JSON report for CI tracking.
+overhead ratios. Optionally rebuilds the Python extension in a chosen profile
+before benchmarking so the Python-via-Rust path is compared against the same
+optimization level as the native Rust CLI. Optionally generates cProfile
+``.prof`` files for the Python side and/or a JSON report for CI tracking.
 
 Usage:
     uv run python tools/bench_full_comparison.py
     uv run python tools/bench_full_comparison.py --iterations 10
+    uv run python tools/bench_full_comparison.py --extension-build installed
     uv run python tools/bench_full_comparison.py --jar path/to/custom.jar --profile
     uv run python tools/bench_full_comparison.py --output report.json --profile --profile-dir output/profiles
 """
@@ -69,6 +72,7 @@ class ComparisonReport:
 
     jar: str
     iterations: int
+    python_extension_build: str
     rows: list[ComparisonRow]
     rust_total_ms: float
     python_total_ms: float
@@ -122,6 +126,31 @@ def run_rust_benchmarks(jar_path: Path, iterations: int) -> list[StageResult]:
             )
         )
     return results
+
+
+def ensure_python_extension(build_profile: str) -> None:
+    """Build and install the Python extension in the requested profile."""
+    if build_profile == "installed":
+        return
+
+    command = [
+        "uv",
+        "run",
+        "maturin",
+        "develop",
+        "-m",
+        str(REPO_ROOT / "crates" / "pytecode-python" / "Cargo.toml"),
+    ]
+    if build_profile == "release":
+        command.insert(4, "--release")
+
+    completed = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"Python extension rebuild failed with profile {build_profile!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +253,10 @@ def _prepare_model_lift(inputs: _PythonInputs) -> _PreparedStage:
 
 def _prepare_model_lower(inputs: _PythonInputs) -> _PreparedStage:
     models = inputs.models()
+    model_values = [model for _ji, model in models]
 
     def workload() -> str:
-        lowered = [bytes(m.to_bytes()) for _ji, m in models]
+        lowered = [model.to_classfile() for model in model_values]
         return f"lowered={len(lowered)}"
 
     return _PreparedStage(name="model-lower", workload=workload)
@@ -317,6 +347,7 @@ def run_python_benchmarks(
 def build_comparison(
     jar_path: Path,
     iterations: int,
+    python_extension_build: str,
     rust_results: list[StageResult],
     python_results: list[StageResult],
 ) -> ComparisonReport:
@@ -338,6 +369,7 @@ def build_comparison(
     return ComparisonReport(
         jar=str(jar_path),
         iterations=iterations,
+        python_extension_build=python_extension_build,
         rows=rows,
         rust_total_ms=rust_total,
         python_total_ms=python_total,
@@ -366,6 +398,7 @@ def print_comparison_table(report: ComparisonReport) -> None:
     print(f"\n{'=' * 78}")
     print("  Rust vs Python-Rust Benchmark Comparison")
     print(f"  JAR: {jar_name}  |  Iterations: {report.iterations}")
+    print(f"  Python extension build: {report.python_extension_build}")
     print(f"{'=' * 78}")
     print()
 
@@ -409,6 +442,7 @@ def report_to_json(report: ComparisonReport) -> dict[str, Any]:
     return {
         "jar": report.jar,
         "iterations": report.iterations,
+        "python_extension_build": report.python_extension_build,
         "rust_total_ms": report.rust_total_ms,
         "python_total_ms": report.python_total_ms,
         "overall_overhead": report.overall_overhead,
@@ -477,6 +511,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Skip Rust benchmarks; only run and report Python-via-Rust timings.",
     )
     parser.add_argument(
+        "--extension-build",
+        choices=("release", "dev", "installed"),
+        default="release",
+        help=(
+            "Python extension build to benchmark: rebuild with the chosen maturin profile "
+            "or use the already-installed extension (default: release)."
+        ),
+    )
+    parser.add_argument(
         "--rust-only",
         action="store_true",
         help="Skip Python benchmarks; only run and report native Rust timings.",
@@ -515,6 +558,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
     if not args.rust_only:
+        print(f"Preparing Python extension ({args.extension_build})...")
+        ensure_python_extension(args.extension_build)
         print(f"Running Python-via-Rust benchmarks ({args.iterations} iterations)...")
         python_results = run_python_benchmarks(
             jar_path,
@@ -535,7 +580,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
     assert rust_results is not None and python_results is not None
-    report = build_comparison(jar_path, args.iterations, rust_results, python_results)
+    report = build_comparison(
+        jar_path,
+        args.iterations,
+        args.extension_build,
+        rust_results,
+        python_results,
+    )
     print_comparison_table(report)
 
     if args.profile and profile_dir:

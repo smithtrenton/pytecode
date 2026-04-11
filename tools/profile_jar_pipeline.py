@@ -29,7 +29,7 @@ from pytecode.archive import JarInfo
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]
 type LiftedModels = list[tuple[JarInfo, ClassModel]]
-type LoweredClasses = list[tuple[JarInfo, bytes]]
+type LoweredClasses = list[tuple[JarInfo, object]]
 type SerializedClasses = list[tuple[JarInfo, bytes]]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -77,8 +77,9 @@ def lift_models(parsed_classes: Sequence[tuple[JarInfo, ClassReader]]) -> Lifted
 
 
 def lower_models(models: Sequence[tuple[JarInfo, ClassModel]]) -> LoweredClasses:
-    """Serialize Rust-backed models back into class bytes."""
-    return [(jar_info, bytes(model.to_bytes())) for jar_info, model in models]
+    """Lower Rust-backed models back into raw ClassFile trees."""
+    lowered = [model.to_classfile() for _jar_info, model in models]
+    return [(jar_info, payload) for (jar_info, _model), payload in zip(models, lowered, strict=True)]
 
 
 def serialize_classfiles(classfiles: Sequence[tuple[JarInfo, ClassReader]]) -> SerializedClasses:
@@ -210,17 +211,16 @@ def prepare_model_lift(inputs: ProfileInputs) -> PreparedStage:
 
 
 def prepare_model_lower(inputs: ProfileInputs) -> PreparedStage:
-    """Profile serializing editable models back into class bytes."""
+    """Profile lowering editable models back into raw classfile trees."""
     models = lift_models(inputs.parsed())
 
     def workload() -> str:
-        class_bytes = lower_models(models)
-        total_bytes = sum(len(payload) for _jar_info, payload in class_bytes)
-        return f"classfiles={len(class_bytes)} total_bytes={total_bytes}"
+        classfiles = lower_models(models)
+        return f"classfiles={len(classfiles)}"
 
     return PreparedStage(
         name="model-lower",
-        description="Serialize Rust-backed ClassModel instances back into class bytes.",
+        description="Lower Rust-backed ClassModel instances back into raw ClassFile trees.",
         workload=workload,
     )
 

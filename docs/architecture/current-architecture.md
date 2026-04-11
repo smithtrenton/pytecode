@@ -23,7 +23,7 @@ The codebase is a Rust engine (`pytecode-engine`, `pytecode-archive`) with thin 
   - Supports explicit archive entry mutation via `add_file()` / `remove_file()`
   - Rewrites archives safely via `rewrite()`, delegating unchanged-on-disk archives with Rust-backed transforms to the Rust archive crate
   - Preserves signature artifacts as pass-through resources but does not re-sign modified archives
-- `pytecode.ClassModel` (alias for `RustClassModel`, Rust-backed)
+- `pytecode.ClassModel` (Rust-backed)
   - Mutable editing model for JVM class files
   - Uses symbolic (resolved) references instead of raw constant-pool indexes
   - Constructed from bytes via `ClassModel.from_bytes()` or from a parsed `ClassFile` via `ClassModel.from_classfile()`
@@ -48,18 +48,9 @@ Low-level big-endian binary I/O primitives for both reading and writing. This is
 `ClassReader` and `ClassWriter` are direct exports from the Rust extension module built via PyO3:
 - `ClassReader.from_bytes(bytes)` and `ClassReader.from_file(path)` parse classfiles through the Rust parser and return a `ClassFile` spec model on the `class_info` property.
 - `ClassWriter.write(classfile)` serializes a spec-model `ClassFile` back to bytes via Rust.
-- `RustClassModel` provides the mutable editing model with symbolic references, constructed via `from_bytes()` or `from_classfile()`, serialized via `to_bytes()`.
+- `ClassModel` provides the mutable editing model with symbolic references, constructed via `from_bytes()` or `from_classfile()`, serialized via `to_bytes()`.
 
 These are the canonical implementations, not Python wrapper layers.
-
-### `pytecode/classfile/modified_utf8.py`
-
-Shared JVM Modified UTF-8 codec helpers for `CONSTANT_Utf8` values. This module
-centralizes spec-correct encoding and decoding of:
-
-- embedded NUL (`U+0000`) using the two-byte modified form
-- supplementary characters via UTF-16 surrogate pairs
-- malformed byte-sequence rejection (for example, illegal four-byte UTF-8 forms)
 
 ### `pytecode/classfile/attributes.py`
 
@@ -77,7 +68,7 @@ Enums and flags representing JVM constants, access flags, verification types, an
 
 The following Python modules have been removed. Their functionality is now entirely owned by the Rust engine (`pytecode-engine`):
 
-- `pytecode/edit/model.py` — `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` (replaced by `RustClassModel`)
+- `pytecode/edit/model.py` — `ClassModel`, `MethodModel`, `FieldModel`, `CodeModel` (replaced by the Rust-backed `ClassModel`)
 - `pytecode/edit/labels.py` — label resolution and bytecode lowering
 - `pytecode/edit/operands.py` — symbolic instruction wrappers
 - `pytecode/edit/constant_pool_builder.py` — constant pool management
@@ -91,7 +82,7 @@ The following Python modules have been removed. Their functionality is now entir
 
 Composable transform helpers for JVM class manipulation:
 
-- **Rust-first transform surface** — `pytecode.transforms.rust` is the canonical production API, centered on `RustPipelineBuilder`, Rust matcher factories, and Rust-backed transform factories that execute natively in Rust
+- **Rust-first transform surface** — `pytecode.transforms` is the canonical production API, centered on `PipelineBuilder`, matcher factories, and Rust-backed transform factories that execute natively in Rust
 - **Compatibility callback surface** — `Pipeline`, `pipeline()`, and the `on_*` lifting helpers remain available for callback-oriented extensions, but they are explicitly non-hot-path and operate on Rust-owned models
 
 ### `pytecode/analysis/hierarchy.py`
@@ -100,7 +91,7 @@ Hierarchy-resolution helpers, now primarily delegating to Rust-backed implementa
 
 - **Resolved snapshots** — `ResolvedClass` and `ResolvedMethod` frozen dataclasses for hierarchy-relevant class metadata, plus `InheritedMethod` for reporting matching inherited declarations
 - **Pluggable interface** — `ClassResolver`, a minimal protocol that resolves an internal class name to a `ResolvedClass | None`
-- **Built-in Rust-backed implementation** — `MappingClassResolver` (backed by `RustMappingClassResolver`) for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
+- **Built-in Rust-backed implementation** — `MappingClassResolver` for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
 - **Query helpers** — `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — delegating to Rust when using a Rust resolver
 
 ### `pytecode/analysis/__init__.py`
@@ -121,12 +112,12 @@ Hierarchy-resolution helpers, now primarily delegating to Rust-backed implementa
 
 - **Resolved snapshots** — `ResolvedClass` and `ResolvedMethod` frozen dataclasses for hierarchy-relevant class metadata, plus `InheritedMethod` for reporting matching inherited declarations
 - **Pluggable interface** — `ClassResolver`, a minimal protocol that resolves an internal class name to a `ResolvedClass | None`
-- **Built-in Rust-backed implementation** — `MappingClassResolver` (backed by `RustMappingClassResolver`) for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
+- **Built-in Rust-backed implementation** — `MappingClassResolver` for in-memory hierarchy graphs, with `from_classfiles()` and `from_models()` convenience constructors
 - **Query helpers** — `iter_superclasses()`, `iter_supertypes()`, `is_subtype()`, `common_superclass()`, and `find_overridden_methods()` — delegating to Rust when using a Rust resolver
 
 ### `pytecode/archive/__init__.py`
 
-JAR container support. `JarFile` reads archive contents, separates `.class` entries from non-class resources, and supports safe rewrite workflows. `JarFile.rewrite()` delegates unchanged-on-disk archives with Rust-backed transforms to the Rust archive crate (`pytecode-archive`), keeping the hot rewrite loop in Rust. The Python fallback path handles in-memory archive edits and Python callback transforms.
+JAR container support. `JarFile` reads archive contents, separates `.class` entries from non-class resources, and supports safe rewrite workflows. `JarFile.rewrite()` now marshals archive state into the Rust archive crate (`pytecode-archive`) for both unchanged archives and in-memory archive edits, keeping the hot rewrite loop in Rust. Python callback pipeline steps are intentional transform behavior but are rejected by archive rewrite rather than triggering a Python fallback path.
 
 ### `run.py`
 
@@ -149,7 +140,7 @@ A repository smoke-test script for ad hoc inspection of real archives during dev
 ### JAR rewriting
 
 1. Callers optionally mutate the in-memory archive state with `JarFile.add_file()` / `remove_file()`.
-2. `JarFile.rewrite()` delegates to the Rust archive crate for unchanged-on-disk archives with Rust transforms.
+2. `JarFile.rewrite()` marshals the current archive state into the Rust archive crate.
 3. The Rust archive crate iterates entries, applies transforms, and writes the output archive.
 4. After a successful rewrite, `JarFile` refreshes itself from disk so its in-memory state matches the written archive metadata.
 
@@ -188,7 +179,6 @@ The test suite provides both integration-level and unit-level coverage:
 - `test_transforms.py` — pipeline ordering, matcher composition, regex/semantic/access helper coverage, owner-filtered lifting, snapshot traversal semantics, abstract/native/no-code method handling, runtime guardrails, and `JarFile.rewrite()` transform interop.
 - `test_descriptors.py` — all 8 base types, object and array types, method descriptors, slot counting (long/double = 2 slots), round-trip parse → construct → parse, malformed descriptor error handling, generic class/method/field signatures with type parameters, wildcards (`+`/`-`/`*`), inner classes, type variables, throws clauses, and invalid internal-name edge cases.
 - `test_constant_pool_builder.py` — builder deduplication, Modified UTF-8 handling, MethodHandle validation, import/export behavior, overflow guards, and defensive-copy semantics.
-- `test_modified_utf8.py` — direct Modified UTF-8 codec coverage for NUL, supplementary characters, round-tripping, and malformed byte rejection.
 - `test_model.py` — mutable editing model: from-scratch creation of `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel`, `from_classfile()` symbolic resolution with error handling for malformed constant-pool references, `from_bytes()` convenience, round-trip `ClassFile → ClassModel → to_classfile()` equivalence across every compiled Java source fixture under `tests/resources/` (including multi-class outputs such as `Outer$Inner.class` and the helper/interface classes generated from `HierarchyFixture.java`), in-place mutation (add/remove fields and methods, rename class, change access flags), and ownership-boundary tests confirming the model does not share mutable state with the source or lowered `ClassFile`.
 - `test_labels.py` — label/layout lowering coverage: offset resolution for linear, forward, backward, and multi-target branches; adjacent/terminal/dangling labels; duplicate label rejection; byte-size verification for every instruction subclass (including switch padding at offsets 0–3); automatic `GOTO_W`/`JSR_W` promotion for both forward and backward overflow; cascading promotion; all 16 conditional-branch inversions (parametrized); editing workflows showing offset recalculation after instruction insertion and removal; dynamic addition of exception handlers and debug entries; code-length boundary enforcement (65535 passes, 65536 raises); lifted exception/debug metadata reconstruction; and symbolic lifting from both manual raw `CodeAttr` fixtures and compiled control-flow bytecode
 - `test_operands.py` — symbolic operand wrapper coverage: constructor validation (opcode rejection, JVM `u1`/`u2`/`i2` bounds, bootstrap-index validation, MethodHandle reference-kind validation), mapping-table sanity (roundtrips for `_IMPLICIT_VAR_SLOTS`/`_VAR_SHORTCUTS`/`_WIDE_TO_BASE`/`_BASE_TO_WIDE`), lifting tests for all 9 wrapper families (FieldInsn/MethodInsn/InterfaceMethodInsn/TypeInsn/LdcInsn/MultiANewArrayInsn/VarInsn/IIncInsn/InvokeDynamicInsn) from compiled `InstructionShowcase.java`, VarInsn normalisation (implicit → VarInsn, no raw implicit opcode survives lifting), LDC value-type discrimination (including `LdcMethodHandle` and `LdcDynamic` lowering coverage), lowering encoding-selection tests (implicit/explicit/WIDE for VarInsn; narrow/wide for IIncInsn; LDC/LDC_W/LDC2_W for LdcInsn based on CP index range; InterfaceMethodref vs Methodref for MethodInsn.is_interface; auto-computed count for InterfaceMethodInsn), mutation-time validation during lowering for mutable wrappers, edit-from-scratch tests (FieldInsn CP entry creation, deduplication of identical LdcInsn, mixed symbolic + raw instruction lists), and InstructionShowcase round-trip verification

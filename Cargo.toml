@@ -29,4 +29,4 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 walkdir = "2.5.0"
-zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+zip = { version = "8.5.1", default-features = false, features = ["deflate", "unreserved"] }

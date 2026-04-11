@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from pytecode._rust import RustClassTransform, RustPipeline
-from pytecode.transforms import rust as rust_api
-from pytecode.transforms.class_transforms import (
+from pytecode._rust import ClassTransform, Pipeline
+from pytecode.transforms import (
+    PipelineBuilder,
     add_access_flags,
     add_interface,
+    class_named,
+    method_named,
     remove_access_flags,
     remove_field,
     remove_interface,
@@ -28,103 +30,95 @@ from pytecode.transforms.class_transforms import (
     set_method_access_flags,
     set_super_class,
 )
-from pytecode.transforms.matchers import (
-    class_name_matches,
-    class_named,
-    field_named,
-    has_code,
-    method_named,
-)
-from pytecode.transforms.pipeline import PipelineBuilder
+from pytecode.transforms.matchers import class_name_matches, field_named, has_code
 
 # ---------------------------------------------------------------------------
 # Transform factory tests
 # ---------------------------------------------------------------------------
 
 
-def test_rust_transform_api_module_exports_builder_and_helpers() -> None:
-    assert rust_api.PipelineBuilder is PipelineBuilder
-    assert rust_api.RustPipelineBuilder is PipelineBuilder
-    assert rust_api.class_named is class_named
-    assert rust_api.method_named is method_named
-    assert rust_api.add_access_flags is add_access_flags
-    assert rust_api.rename_class is rename_class
+def test_transform_api_exports_builder_and_helpers() -> None:
+    assert callable(PipelineBuilder)
+    assert callable(class_named)
+    assert callable(method_named)
+    assert callable(add_access_flags)
+    assert callable(rename_class)
 
 
 class TestTransformFactories:
-    """Each factory returns a valid RustClassTransform."""
+    """Each factory returns a valid ClassTransform."""
 
     def test_rename_class(self) -> None:
         t = rename_class("com/example/Bar")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "rename_class" in str(t)
 
     def test_set_access_flags(self) -> None:
         t = set_access_flags(0x0021)
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "set_access_flags" in str(t)
 
     def test_add_access_flags(self) -> None:
         t = add_access_flags(0x0010)
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "add_access_flags" in str(t)
 
     def test_remove_access_flags(self) -> None:
         t = remove_access_flags(0x0010)
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "remove_access_flags" in str(t)
 
     def test_set_super_class(self) -> None:
         t = set_super_class("com/example/Base")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "set_super_class" in str(t)
 
     def test_add_interface(self) -> None:
         t = add_interface("java/io/Serializable")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "add_interface" in str(t)
 
     def test_remove_interface(self) -> None:
         t = remove_interface("java/io/Serializable")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "remove_interface" in str(t)
 
     def test_remove_method_name_only(self) -> None:
         t = remove_method("foo")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "remove_method" in str(t)
 
     def test_remove_method_with_descriptor(self) -> None:
         t = remove_method("foo", "()V")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "remove_method" in str(t)
 
     def test_remove_field_name_only(self) -> None:
         t = remove_field("bar")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
 
     def test_remove_field_with_descriptor(self) -> None:
         t = remove_field("bar", "I")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
 
     def test_rename_method(self) -> None:
         t = rename_method("old", "new")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "rename_method" in str(t)
 
     def test_rename_field(self) -> None:
         t = rename_field("old", "new")
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "rename_field" in str(t)
 
     def test_set_method_access_flags(self) -> None:
         t = set_method_access_flags("foo", 0x0001)
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "set_method_access_flags" in str(t)
 
     def test_set_field_access_flags(self) -> None:
         t = set_field_access_flags("bar", 0x0002)
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "set_field_access_flags" in str(t)
 
     def test_sequence(self) -> None:
@@ -132,12 +126,12 @@ class TestTransformFactories:
             rename_class("com/example/New"),
             add_access_flags(0x0010),
         )
-        assert isinstance(t, RustClassTransform)
+        assert isinstance(t, ClassTransform)
         assert "sequence" in str(t)
 
     def test_repr(self) -> None:
         t = rename_class("Foo")
-        assert "RustClassTransform" in repr(t)
+        assert "ClassTransform" in repr(t)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +144,7 @@ class TestPipelineBuilder:
 
     def test_empty_pipeline(self) -> None:
         p = PipelineBuilder().build()
-        assert isinstance(p, RustPipeline)
+        assert isinstance(p, Pipeline)
         assert len(p) == 0
 
     def test_single_class_step(self) -> None:
@@ -292,12 +286,12 @@ def multi_class_bytes() -> list[bytes]:
 
 
 class TestPipelineApply:
-    """End-to-end pipeline application on real RustClassModel objects."""
+    """End-to-end pipeline application on real ClassModel objects."""
 
     def test_apply_rename(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original = m.name
 
         p = PipelineBuilder()
@@ -307,9 +301,9 @@ class TestPipelineApply:
         assert m.name == "com/example/Renamed"
 
     def test_apply_no_match(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original_name = m.name
 
         p = PipelineBuilder()
@@ -319,9 +313,9 @@ class TestPipelineApply:
         assert m.name == original_name
 
     def test_apply_add_access_flags(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         orig_flags = m.access_flags
 
         p = PipelineBuilder()
@@ -331,9 +325,9 @@ class TestPipelineApply:
         assert m.access_flags == (orig_flags | 0x0010)
 
     def test_apply_set_super_class(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
 
         p = PipelineBuilder()
         p.on_classes(class_named(m.name), set_super_class("com/example/NewBase"))
@@ -342,9 +336,9 @@ class TestPipelineApply:
         assert m.super_name == "com/example/NewBase"
 
     def test_apply_add_interface(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         orig_ifaces = list(m.interfaces)
 
         p = PipelineBuilder()
@@ -355,9 +349,9 @@ class TestPipelineApply:
         assert len(m.interfaces) == len(orig_ifaces) + 1
 
     def test_apply_remove_interface(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         # First add, then remove
         p1 = PipelineBuilder()
         p1.on_classes(class_named(m.name), add_interface("java/io/Serializable"))
@@ -370,9 +364,9 @@ class TestPipelineApply:
         assert "java/io/Serializable" not in m.interfaces
 
     def test_apply_sequence(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
 
         t = sequence(
             rename_class("com/example/SequenceTest"),
@@ -388,9 +382,9 @@ class TestPipelineApply:
         assert "java/lang/Runnable" in m.interfaces
 
     def test_apply_regex_matcher(self, multi_class_bytes: list[bytes]) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
+        models = [ClassModel.from_bytes(b) for b in multi_class_bytes]
 
         p = PipelineBuilder()
         p.on_classes(
@@ -407,9 +401,9 @@ class TestPipelineApply:
                 assert m.super_name == "com/example/WriterBase"
 
     def test_apply_all_batch(self, multi_class_bytes: list[bytes]) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
+        models = [ClassModel.from_bytes(b) for b in multi_class_bytes]
         p = PipelineBuilder()
         p.on_classes(class_name_matches(".*"), add_access_flags(0x0010))
         p.build().apply_all(models)
@@ -418,9 +412,9 @@ class TestPipelineApply:
             assert m.access_flags & 0x0010
 
     def test_compiled_pipeline(self, multi_class_bytes: list[bytes]) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
+        models = [ClassModel.from_bytes(b) for b in multi_class_bytes]
 
         p = PipelineBuilder()
         p.on_classes(
@@ -438,9 +432,9 @@ class TestPipelineApply:
 
     def test_roundtrip_after_transform(self, class_bytes: bytes) -> None:
         """Transform then serialize — should not crash."""
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         p = PipelineBuilder()
         p.on_classes(class_named(m.name), add_access_flags(0x0010))
         p.build().apply(m)
@@ -452,9 +446,9 @@ class TestPipelineApply:
 
     def test_rename_method_all_matching(self, class_bytes: bytes) -> None:
         """rename_method renames every method with the given name (rename-all)."""
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         methods = list(m.methods)
         if not methods:
             pytest.skip("fixture class has no methods")
@@ -481,9 +475,9 @@ class TestCustomCallbacks:
     """Pipeline with custom Python callbacks in the hot path."""
 
     def test_class_callback_modifies_name(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
 
         def rename(model: object) -> None:
             model.name = "com/callback/Renamed"  # type: ignore[attr-defined]
@@ -495,9 +489,9 @@ class TestCustomCallbacks:
         assert m.name == "com/callback/Renamed"
 
     def test_class_callback_no_match(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original = m.name
         called: list[bool] = []
 
@@ -512,12 +506,12 @@ class TestCustomCallbacks:
         assert not called
 
     def test_mixed_builtin_and_callback(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original_name = m.name
 
-        def add_iface(model: RustClassModel) -> None:
+        def add_iface(model: ClassModel) -> None:
             ifaces = list(model.interfaces)
             ifaces.append("com/callback/Added")
             model.interfaces = ifaces
@@ -533,9 +527,9 @@ class TestCustomCallbacks:
         assert "com/callback/Added" in m.interfaces
 
     def test_callback_on_methods_guard(self, multi_class_bytes: list[bytes]) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        models = [RustClassModel.from_bytes(b) for b in multi_class_bytes]
+        models = [ClassModel.from_bytes(b) for b in multi_class_bytes]
         transformed: list[str] = []
 
         def track(model: object) -> None:
@@ -552,9 +546,9 @@ class TestCustomCallbacks:
 
     def test_callback_exception_propagates(self, class_bytes: bytes) -> None:
         """Python exception in callback must propagate to the caller."""
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original = m.name
 
         def bad_callback(model: object) -> None:
@@ -567,9 +561,9 @@ class TestCustomCallbacks:
 
     def test_callback_exception_after_mutation_propagates(self, class_bytes: bytes) -> None:
         """Callback that mutates then raises: error propagates, model reflects mutation."""
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         original_name = m.name
 
         def mutate_then_raise(model: object) -> None:
@@ -585,9 +579,9 @@ class TestCustomCallbacks:
 
     def test_on_methods_custom_class_scoped(self, class_bytes: bytes) -> None:
         """on_methods_custom fires at most once per class (class-scoped, not per-method)."""
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         invocations: list[int] = []
 
         def track(model: object) -> None:
@@ -602,23 +596,23 @@ class TestCustomCallbacks:
 
     def test_invalid_regex_raises_at_construction(self) -> None:
         """Invalid regex pattern should raise ValueError at matcher construction time."""
-        from pytecode._rust import RustClassMatcher, RustFieldMatcher, RustMethodMatcher
+        from pytecode._rust import ClassMatcher, FieldMatcher, MethodMatcher
 
         with pytest.raises(ValueError, match="invalid regex"):
-            RustClassMatcher.name_matches("[invalid")
+            ClassMatcher.name_matches("[invalid")
         with pytest.raises(ValueError, match="invalid regex"):
-            RustFieldMatcher.name_matches("[invalid")
+            FieldMatcher.name_matches("[invalid")
         with pytest.raises(ValueError, match="invalid regex"):
-            RustFieldMatcher.descriptor_matches("[invalid")
+            FieldMatcher.descriptor_matches("[invalid")
         with pytest.raises(ValueError, match="invalid regex"):
-            RustMethodMatcher.name_matches("[invalid")
+            MethodMatcher.name_matches("[invalid")
         with pytest.raises(ValueError, match="invalid regex"):
-            RustMethodMatcher.descriptor_matches("[invalid")
+            MethodMatcher.descriptor_matches("[invalid")
 
     def test_compiled_with_callback(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
 
         def rename(model: object) -> None:
             model.name = "com/compiled/Callback"  # type: ignore[attr-defined]
@@ -631,9 +625,9 @@ class TestCustomCallbacks:
         assert m.name == "com/compiled/Callback"
 
     def test_interfaces_view_invalidates_after_replace(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         view = m.interfaces
         original = list(view)
 
@@ -643,9 +637,9 @@ class TestCustomCallbacks:
             len(view)
 
     def test_method_ref_invalidates_after_method_list_replace(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         methods = m.methods
         first = methods[0]
 
@@ -655,9 +649,9 @@ class TestCustomCallbacks:
             _ = first.name
 
     def test_constant_pool_view_mutates_owner(self, class_bytes: bytes) -> None:
-        from pytecode._rust import RustClassModel
+        from pytecode._rust import ClassModel
 
-        m = RustClassModel.from_bytes(class_bytes)
+        m = ClassModel.from_bytes(class_bytes)
         cp = m.constant_pool
         before = cp.count()
 

@@ -1,15 +1,20 @@
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::wrap_pyfunction;
 use pytecode_engine::analysis::MappingClassResolver;
 use pytecode_engine::model::{
     ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, DebugInfoState,
     ExceptionHandler, FieldModel, FrameComputationMode, Label, LdcValue, MethodModel,
 };
+use pytecode_engine::raw::ClassFile;
 use pytecode_engine::write_class;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
+
+use crate::PyClassFile;
 
 // ---------------------------------------------------------------------------
 // Helper: convert EngineError → PyErr
@@ -69,7 +74,7 @@ impl ClassModelState {
 }
 
 fn dead_model_err() -> PyErr {
-    PyErr::new::<PyRuntimeError, _>("RustClassModel is no longer live")
+    PyErr::new::<PyRuntimeError, _>("ClassModel is no longer live")
 }
 
 fn stale_ref_err(kind: &str) -> PyErr {
@@ -159,7 +164,7 @@ fn wrap_local_variable_type(
 // PyLabel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustLabel")]
+#[pyclass(name = "Label", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLabel {
     inner: Label,
@@ -200,8 +205,8 @@ impl PyLabel {
 
     fn __repr__(&self) -> String {
         match &self.inner.name {
-            Some(name) => format!("RustLabel(name={name:?})"),
-            None => "RustLabel()".to_owned(),
+            Some(name) => format!("Label(name={name:?})"),
+            None => "Label()".to_owned(),
         }
     }
 
@@ -220,7 +225,7 @@ impl PyLabel {
 // PyModelExceptionHandler
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustExceptionHandler")]
+#[pyclass(name = "ExceptionHandler", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyModelExceptionHandler {
     inner: ExceptionHandler,
@@ -493,7 +498,7 @@ enum CodeListKind {
 // View objects
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustStringListView", unsendable)]
+#[pyclass(name = "StringListView", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyStringListView {
     state: SharedClassState,
@@ -531,7 +536,7 @@ impl PyStringListView {
     }
 }
 
-#[pyclass(name = "RustFieldListView", unsendable)]
+#[pyclass(name = "FieldListView", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyFieldListView {
     state: SharedClassState,
@@ -573,7 +578,7 @@ impl PyFieldListView {
     }
 }
 
-#[pyclass(name = "RustMethodListView", unsendable)]
+#[pyclass(name = "MethodListView", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyMethodListView {
     state: SharedClassState,
@@ -723,7 +728,7 @@ impl AttributeOwner {
     }
 }
 
-#[pyclass(name = "RustAttributeListView", unsendable)]
+#[pyclass(name = "AttributeListView", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyAttributeListView {
     owner: AttributeOwner,
@@ -747,7 +752,7 @@ impl PyAttributeListView {
     }
 }
 
-#[pyclass(name = "RustCodeListView", unsendable)]
+#[pyclass(name = "CodeListView", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyCodeListView {
     access: CodeAccess,
@@ -858,7 +863,7 @@ impl PyCodeListView {
 // PyCodeModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustCodeModel", unsendable)]
+#[pyclass(name = "CodeModel", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyCodeModel {
     access: CodeAccess,
@@ -989,7 +994,7 @@ impl PyCodeModel {
 // PyFieldModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustFieldModel", unsendable)]
+#[pyclass(name = "FieldModel", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyFieldModel {
     access: FieldAccess,
@@ -1118,7 +1123,7 @@ impl PyFieldModel {
 // PyMethodModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustMethodModel", unsendable)]
+#[pyclass(name = "MethodModel", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyMethodModel {
     access: MethodAccess,
@@ -1293,7 +1298,7 @@ impl PyMethodModel {
 // PyConstantPoolBuilder
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustConstantPoolBuilder", unsendable)]
+#[pyclass(name = "ConstantPoolBuilder", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyConstantPoolBuilder {
     access: ConstantPoolAccess,
@@ -1682,7 +1687,7 @@ impl PyConstantPoolBuilder {
 // PyMappingClassResolver
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustMappingClassResolver")]
+#[pyclass(name = "MappingClassResolver", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMappingClassResolver {
     pub(crate) inner: MappingClassResolver,
@@ -1743,7 +1748,103 @@ pub(crate) fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
     }
 }
 
-#[pyclass(name = "RustClassModel", unsendable)]
+fn lower_class_model_bytes(
+    model: &PyClassModel,
+    debug_info: DebugInfoPolicy,
+    frame_mode: FrameComputationMode,
+    resolver: Option<&dyn pytecode_engine::analysis::ClassResolver>,
+) -> PyResult<Vec<u8>> {
+    if debug_info == DebugInfoPolicy::Preserve
+        && frame_mode == FrameComputationMode::Preserve
+        && resolver.is_none()
+    {
+        return with_live_model(&model.state, |model_state| {
+            model_state
+                .inner
+                .as_ref()
+                .unwrap()
+                .to_bytes()
+                .map_err(crate::engine_error_to_py)
+        });
+    }
+
+    write_class(&lower_class_model(model, debug_info, frame_mode, resolver)?)
+        .map_err(crate::engine_error_to_py)
+}
+
+fn lower_class_model(
+    model: &PyClassModel,
+    debug_info: DebugInfoPolicy,
+    frame_mode: FrameComputationMode,
+    resolver: Option<&dyn pytecode_engine::analysis::ClassResolver>,
+) -> PyResult<ClassFile> {
+    with_live_model(&model.state, |model_state| {
+        model_state
+            .inner
+            .as_ref()
+            .unwrap()
+            .to_classfile_with_options(debug_info, frame_mode, resolver)
+            .map_err(crate::engine_error_to_py)
+    })
+}
+
+#[pyfunction]
+#[pyo3(signature = (models, recompute_frames = false, resolver = None, debug_info = "preserve"))]
+fn rust_lower_classmodels(
+    models: &Bound<'_, PyList>,
+    recompute_frames: bool,
+    resolver: Option<&PyMappingClassResolver>,
+    debug_info: &str,
+) -> PyResult<Vec<PyClassFile>> {
+    let policy = parse_debug_info_policy(debug_info)?;
+    let frame_mode = if recompute_frames {
+        FrameComputationMode::Recompute
+    } else {
+        FrameComputationMode::Preserve
+    };
+    let resolver =
+        resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
+
+    models
+        .iter()
+        .map(|item| {
+            let model: PyRef<'_, PyClassModel> = item.extract()?;
+            Ok(PyClassFile {
+                inner: Arc::new(lower_class_model(&model, policy, frame_mode, resolver)?),
+            })
+        })
+        .collect()
+}
+
+#[pyfunction]
+#[pyo3(signature = (models, recompute_frames = false, resolver = None, debug_info = "preserve"))]
+fn rust_lower_classmodels_to_bytes<'py>(
+    py: Python<'py>,
+    models: &Bound<'py, PyList>,
+    recompute_frames: bool,
+    resolver: Option<&PyMappingClassResolver>,
+    debug_info: &str,
+) -> PyResult<Vec<Py<PyBytes>>> {
+    let policy = parse_debug_info_policy(debug_info)?;
+    let frame_mode = if recompute_frames {
+        FrameComputationMode::Recompute
+    } else {
+        FrameComputationMode::Preserve
+    };
+    let resolver =
+        resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
+
+    models
+        .iter()
+        .map(|item| {
+            let model: PyRef<'_, PyClassModel> = item.extract()?;
+            let bytes = lower_class_model_bytes(&model, policy, frame_mode, resolver)?;
+            Ok(PyBytes::new(py, &bytes).unbind())
+        })
+        .collect()
+}
+
+#[pyclass(name = "ClassModel", module = "pytecode._rust", unsendable)]
 #[derive(Clone)]
 pub struct PyClassModel {
     state: SharedClassState,
@@ -1793,15 +1894,24 @@ impl PyClassModel {
     // -- serialisation ------------------------------------------------------
 
     fn to_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
-        let bytes = with_live_model(&self.state, |model_state| {
-            model_state
-                .inner
-                .as_ref()
-                .unwrap()
-                .to_bytes()
-                .map_err(crate::engine_error_to_py)
-        })?;
+        let bytes = lower_class_model_bytes(
+            self,
+            DebugInfoPolicy::Preserve,
+            FrameComputationMode::Preserve,
+            None,
+        )?;
         Ok(PyBytes::new(py, &bytes).unbind())
+    }
+
+    fn to_classfile(&self) -> PyResult<PyClassFile> {
+        Ok(PyClassFile {
+            inner: Arc::new(lower_class_model(
+                self,
+                DebugInfoPolicy::Preserve,
+                FrameComputationMode::Preserve,
+                None,
+            )?),
+        })
     }
 
     #[pyo3(signature = (recompute_frames = false, resolver = None, debug_info = "preserve"))]
@@ -1818,20 +1928,36 @@ impl PyClassModel {
         } else {
             FrameComputationMode::Preserve
         };
-        let classfile = with_live_model(&self.state, |model_state| {
-            model_state
-                .inner
-                .as_ref()
-                .unwrap()
-                .to_classfile_with_options(
-                    policy,
-                    frame_mode,
-                    resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
-                )
-                .map_err(crate::engine_error_to_py)
-        })?;
-        let bytes = write_class(&classfile).map_err(crate::engine_error_to_py)?;
+        let bytes = lower_class_model_bytes(
+            self,
+            policy,
+            frame_mode,
+            resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+        )?;
         Ok(PyBytes::new(py, &bytes).unbind())
+    }
+
+    #[pyo3(signature = (recompute_frames = false, resolver = None, debug_info = "preserve"))]
+    fn to_classfile_with_options(
+        &self,
+        recompute_frames: bool,
+        resolver: Option<&PyMappingClassResolver>,
+        debug_info: &str,
+    ) -> PyResult<PyClassFile> {
+        let policy = parse_debug_info_policy(debug_info)?;
+        let frame_mode = if recompute_frames {
+            FrameComputationMode::Recompute
+        } else {
+            FrameComputationMode::Preserve
+        };
+        Ok(PyClassFile {
+            inner: Arc::new(lower_class_model(
+                self,
+                policy,
+                frame_mode,
+                resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+            )?),
+        })
     }
 
     // -- getters ------------------------------------------------------------
@@ -2019,5 +2145,7 @@ pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add_class::<PyConstantPoolBuilder>()?;
     module.add_class::<PyMappingClassResolver>()?;
     module.add_class::<PyModelExceptionHandler>()?;
+    module.add_function(wrap_pyfunction!(rust_lower_classmodels, module)?)?;
+    module.add_function(wrap_pyfunction!(rust_lower_classmodels_to_bytes, module)?)?;
     Ok(())
 }

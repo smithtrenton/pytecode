@@ -93,15 +93,6 @@ class TestEdgeCases:
         assert inspect.getdoc(verify_classfile)
         assert inspect.getdoc(verify_classmodel)
 
-    def test_descriptor_docstrings(self) -> None:
-        import inspect
-        from typing import cast
-
-        from pytecode.classfile.modified_utf8 import decode_modified_utf8, encode_modified_utf8
-
-        assert inspect.getdoc(cast(object, decode_modified_utf8))
-        assert inspect.getdoc(cast(object, encode_modified_utf8))
-
     def test_constant_docstring(self) -> None:
         import inspect
 

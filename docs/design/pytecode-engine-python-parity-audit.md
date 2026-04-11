@@ -28,7 +28,7 @@ Rust raw attributes in `crates\pytecode-engine\src\raw\attributes.rs:4-75` curre
 
 `crates\pytecode-engine\src\reader.rs:150-215,252-285` and `crates\pytecode-engine\src\writer.rs:193-204` match that narrow set. Everything else is preserved as opaque bytes.
 
-That is why Python currently reparses unsupported Rust `Unknown` attrs through the legacy Python reader. Without adding the missing Rust-side structures, "expose Rust attrs directly" would only expose typed wrappers for a small subset and opaque blobs for the rest.
+Historically that mismatch forced more Python-side interpretation around unsupported Rust `Unknown` attrs. The current bridge exposes those as `UnimplementedAttr` wrappers instead of reparsing them through a legacy Python reader, so the remaining gap is representational completeness rather than an active runtime fallback path.
 
 ## Current parity snapshot
 

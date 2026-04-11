@@ -1,14 +1,11 @@
 """Python bindings for the pytecode engine."""
 
 from . import _rust
-from ._api import Diagnostic, MappingClassResolver, RustClassModel, verify_classfile, verify_classmodel
 from .archive import JarFile
 
-RustClassReader = _rust.ClassReader
-RustClassWriter = _rust.ClassWriter
-ClassReader = RustClassReader
-ClassWriter = RustClassWriter
-ClassModel = RustClassModel
+ClassReader = _rust.ClassReader
+ClassWriter = _rust.ClassWriter
+ClassModel = _rust.ClassModel
 backend_info = _rust.backend_info
 
 __all__ = [
@@ -16,12 +13,5 @@ __all__ = [
     "ClassReader",
     "ClassWriter",
     "JarFile",
-    "RustClassReader",
-    "RustClassWriter",
-    "RustClassModel",
-    "MappingClassResolver",
-    "Diagnostic",
-    "verify_classfile",
-    "verify_classmodel",
     "backend_info",
 ]

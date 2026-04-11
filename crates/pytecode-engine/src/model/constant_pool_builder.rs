@@ -109,6 +109,10 @@ impl ConstantPoolBuilder {
         self.entries.clone()
     }
 
+    pub fn into_entries(self) -> Vec<Option<ConstantPoolEntry>> {
+        self.entries
+    }
+
     pub fn entries(&self) -> &[Option<ConstantPoolEntry>] {
         &self.entries
     }

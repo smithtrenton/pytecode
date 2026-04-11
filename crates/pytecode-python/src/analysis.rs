@@ -53,7 +53,7 @@ fn inherited_method_to_py(py: Python<'_>, method: &InheritedMethod) -> PyResult<
 // PyDiagnostic
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "RustDiagnostic")]
+#[pyclass(name = "Diagnostic", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyDiagnostic {
     inner: Diagnostic,
@@ -128,7 +128,7 @@ impl PyDiagnostic {
 
     fn __repr__(&self) -> String {
         format!(
-            "RustDiagnostic(severity={:?}, category={:?}, message={:?})",
+            "Diagnostic(severity={:?}, category={:?}, message={:?})",
             self.severity(),
             self.category(),
             self.message()

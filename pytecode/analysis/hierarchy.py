@@ -68,8 +68,8 @@ class ResolvedClass:
     def from_model(cls, model: object) -> ResolvedClass:
         """Build a resolved hierarchy snapshot from a Rust-backed class model."""
 
-        if not isinstance(model, _rust.RustClassModel):
-            raise TypeError("ResolvedClass.from_model expects a RustClassModel")
+        if not isinstance(model, _rust.ClassModel):
+            raise TypeError("ResolvedClass.from_model expects a ClassModel")
         return _resolved_class_from_rust(_rust.rust_resolved_classmodel(model))
 
 
@@ -83,8 +83,8 @@ class InheritedMethod:
     access_flags: MethodAccessFlag
 
 
-ClassResolver = _rust.RustMappingClassResolver
-MappingClassResolver = _rust.RustMappingClassResolver
+ClassResolver = _rust.MappingClassResolver
+MappingClassResolver = _rust.MappingClassResolver
 
 
 class _RustResolvedMethodData(TypedDict):
@@ -108,9 +108,9 @@ class _RustInheritedMethodData(TypedDict):
     access_flags: int
 
 
-def _require_resolver(resolver: object) -> _rust.RustMappingClassResolver:
-    if not isinstance(resolver, _rust.RustMappingClassResolver):
-        raise TypeError("Hierarchy helpers require a Rust MappingClassResolver")
+def _require_resolver(resolver: object) -> _rust.MappingClassResolver:
+    if not isinstance(resolver, _rust.MappingClassResolver):
+        raise TypeError("Hierarchy helpers require a MappingClassResolver")
     return resolver
 
 
