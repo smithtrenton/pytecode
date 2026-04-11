@@ -16,3 +16,10 @@ pytecode-engine = { path = "../pytecode-engine" }
 serde.workspace = true
 thiserror.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "jar_read"
+harness = false
