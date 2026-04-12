@@ -1,6 +1,7 @@
 # Ignore output dir and jars
 output
 *.jar
+!crates/pytecode-engine/fixtures/jars/*.jar
 
 # Cython compiled extensions (orphaned, replaced by Rust)
 *_cy.*.pyd

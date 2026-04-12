@@ -8,6 +8,8 @@ Tests that:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import pytecode.model as model_api
@@ -34,6 +36,17 @@ from pytecode.transforms import (
     set_super_class,
 )
 from pytecode.transforms.matchers import class_name_matches, field_named, has_code
+from tests.helpers import TEST_RESOURCES, compile_java_sources
+
+SINGLE_CLASS_RESOURCE = "CfgFixture.java"
+MULTI_CLASS_RESOURCES = (
+    "HelloWorld.java",
+    "AnnotatedClass.java",
+    "TypeAnnotationShowcase.java",
+    "SimpleInterface.java",
+    "MultiInterface.java",
+    "Outer.java",
+)
 
 CodeItem = (
     model_api.Label
@@ -328,40 +341,28 @@ class TestComposition:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def class_bytes() -> bytes:
-    """First .class from the byte-buddy fixture jar."""
-    import os
-    import zipfile
+@pytest.fixture(scope="module")
+def compiled_test_classes(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Compile Python-owned Java resources once for this module."""
 
-    jar = os.path.join(
-        "crates",
-        "pytecode-engine",
-        "fixtures",
-        "jars",
-        "byte-buddy-1.17.5.jar",
-    )
-    with zipfile.ZipFile(jar) as z:
-        names = [n for n in z.namelist() if n.endswith(".class")]
-        return z.read(names[0])
+    temp_dir = tmp_path_factory.mktemp("rust-transform-fixtures")
+    source_files = [TEST_RESOURCES / SINGLE_CLASS_RESOURCE]
+    source_files.extend(TEST_RESOURCES / resource for resource in MULTI_CLASS_RESOURCES)
+    return compile_java_sources(temp_dir, source_files)
 
 
 @pytest.fixture()
-def multi_class_bytes() -> list[bytes]:
-    """First 10 .class entries from the byte-buddy fixture jar."""
-    import os
-    import zipfile
+def class_bytes(compiled_test_classes: Path) -> bytes:
+    """Compiled class bytes for one Python-owned fixture class."""
 
-    jar = os.path.join(
-        "crates",
-        "pytecode-engine",
-        "fixtures",
-        "jars",
-        "byte-buddy-1.17.5.jar",
-    )
-    with zipfile.ZipFile(jar) as z:
-        names = [n for n in z.namelist() if n.endswith(".class")][:10]
-        return [z.read(n) for n in names]
+    return (compiled_test_classes / "CfgFixture.class").read_bytes()
+
+
+@pytest.fixture()
+def multi_class_bytes(compiled_test_classes: Path) -> list[bytes]:
+    """Compiled class bytes for a Python-owned multi-class fixture corpus."""
+
+    return [path.read_bytes() for path in sorted(compiled_test_classes.rglob("*.class"))]
 
 
 def _matcher_for_item(item: object) -> InsnMatcher | None:
@@ -689,8 +690,8 @@ class TestPipelineApply:
 
         p = PipelineBuilder()
         p.on_classes(
-            class_name_matches(".*Writer"),
-            set_super_class("com/example/WriterBase"),
+            class_name_matches(".*Interface.*"),
+            set_super_class("com/example/InterfaceBase"),
         )
         pipeline = p.build()
 
@@ -698,8 +699,8 @@ class TestPipelineApply:
             pipeline.apply(m)
 
         for m in models:
-            if "Writer" in m.name:
-                assert m.super_name == "com/example/WriterBase"
+            if "Interface" in m.name:
+                assert m.super_name == "com/example/InterfaceBase"
 
     def test_apply_all_batch(self, multi_class_bytes: list[bytes]) -> None:
         from pytecode._rust import ClassModel
@@ -719,7 +720,7 @@ class TestPipelineApply:
 
         p = PipelineBuilder()
         p.on_classes(
-            class_name_matches(".*Attribute.*"),
+            class_name_matches(".*Annotation.*"),
             add_interface("java/io/Serializable"),
         )
         compiled = p.compile()
@@ -728,7 +729,7 @@ class TestPipelineApply:
             compiled.apply(m)
 
         for m in models:
-            if "Attribute" in m.name:
+            if "Annotation" in m.name:
                 assert "java/io/Serializable" in m.interfaces
 
     def test_roundtrip_after_transform(self, class_bytes: bytes) -> None:
