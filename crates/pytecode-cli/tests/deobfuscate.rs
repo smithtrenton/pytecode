@@ -82,20 +82,56 @@ fn instrumented_hello_world_bytes() -> TestResult<Vec<u8>> {
     Ok(model.to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)?)
 }
 
+fn renamed_hello_world_bytes(class_name: &str) -> TestResult<Vec<u8>> {
+    let mut model = ClassModel::from_bytes(&fixture_bytes("HelloWorld.java", "HelloWorld.class"))?;
+    model.name = class_name.to_owned();
+    Ok(model.to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)?)
+}
+
+fn make_analysis_fixture_jar(path: &Path) -> TestResult<()> {
+    let aa = renamed_hello_world_bytes("aa")?;
+    let bb = renamed_hello_world_bytes("bb")?;
+    let rl4 = renamed_hello_world_bytes("rl4")?;
+    let normal = renamed_hello_world_bytes("pkg/Normal")?;
+    let compiler_control = br#"
+[
+  {"match":["ed::ad([B)V"],"c2":{"exclude":true}},
+  {"match":["keep::me()V"],"c2":{"exclude":false}}
+]
+"#;
+    make_jar(
+        path,
+        &[
+            ("aa.class", aa.as_slice()),
+            ("bb.class", bb.as_slice()),
+            ("rl4.class", rl4.as_slice()),
+            ("pkg/Normal.class", normal.as_slice()),
+            ("compilercontrol.json", compiler_control.as_ref()),
+        ],
+    )
+}
+
 #[test]
-fn analyze_deobfuscation_reports_injected_client_patterns() -> TestResult<()> {
-    let jar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("injected-client-1.12.22.1.jar");
+fn analyze_deobfuscation_reports_synthetic_patterns() -> TestResult<()> {
+    let temp_dir = fresh_temp_dir("deobfuscate-analyze");
+    let jar = temp_dir.join("input.jar");
+    make_analysis_fixture_jar(&jar)?;
     let report = analyze_deobfuscation(&jar)?;
-    assert!(report.class_entries > 700);
-    assert!(report.suspicious_class_count > 600);
+    assert_eq!(report.class_entries, 4);
+    assert_eq!(report.resource_entries, 1);
+    assert_eq!(report.suspicious_class_count, 2);
+    assert_eq!(report.rl_class_count, 1);
     assert!(
         report
             .sample_suspicious_classes
             .iter()
             .any(|name| name == "aa")
+    );
+    assert!(
+        report
+            .sample_suspicious_classes
+            .iter()
+            .any(|name| name == "bb")
     );
     assert!(report.sample_rl_classes.iter().any(|name| name == "rl4"));
     assert!(
@@ -104,13 +140,13 @@ fn analyze_deobfuscation_reports_injected_client_patterns() -> TestResult<()> {
             .iter()
             .any(|entry| entry == "ed::ad([B)V")
     );
-    assert_eq!(
-        report
-            .top_packages
-            .first()
-            .map(|entry| entry.package.as_str()),
-        Some("<root>")
-    );
+    let top_package = report
+        .top_packages
+        .first()
+        .expect("top package summary should exist");
+    assert_eq!(top_package.package, "<root>");
+    assert_eq!(top_package.class_count, 3);
+    assert_eq!(top_package.suspicious_class_count, 2);
     Ok(())
 }
 

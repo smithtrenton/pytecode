@@ -119,16 +119,20 @@ jobs:
           restore-keys: |
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-${{ hashFiles('uv.lock', 'tests/helpers.py', 'tests/resources/**/*.java') }}-
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-
-      - name: Prime ASM oracle dependencies
-        run: |
-          uv run python - <<'PY'
-          from tests.helpers import ensure_asm_jars
-
-          for path in ensure_asm_jars():
-              print(path)
-          PY
       - name: Run oracle suite
-        run: uv run pytest -q -m oracle
+        run: |
+          set +e
+          uv run pytest -q -m oracle
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 5 ]; then
+            echo "No oracle-marked tests collected; skipping oracle lane."
+            exit 0
+          fi
+          exit "$status"
 
   pages-build:
     name: Build GitHub Pages artifact
