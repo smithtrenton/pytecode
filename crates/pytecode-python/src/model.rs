@@ -21,6 +21,8 @@ use std::sync::Arc;
 use crate::PyClassFile;
 use crate::transforms::PyInsnMatcher;
 
+type PyObject = Py<PyAny>;
+
 // ---------------------------------------------------------------------------
 // Helper: convert EngineError → PyErr
 // ---------------------------------------------------------------------------
@@ -181,7 +183,7 @@ fn wrap_local_variable_type(
 // PyLabel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Label", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "Label", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLabel {
     inner: Label,
@@ -247,7 +249,7 @@ impl PyLabel {
 // PyModelExceptionHandler
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "ExceptionHandler", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "ExceptionHandler", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyModelExceptionHandler {
     inner: ExceptionHandler,
@@ -276,7 +278,7 @@ impl PyModelExceptionHandler {
     }
 }
 
-#[pyclass(name = "LineNumberEntry", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "LineNumberEntry", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLineNumberEntry {
     label: Label,
@@ -304,7 +306,7 @@ impl PyLineNumberEntry {
     }
 }
 
-#[pyclass(name = "LocalVariableEntry", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "LocalVariableEntry", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLocalVariableEntry {
     start: Label,
@@ -353,7 +355,11 @@ impl PyLocalVariableEntry {
     }
 }
 
-#[pyclass(name = "LocalVariableTypeEntry", module = "pytecode._rust")]
+#[pyclass(
+    from_py_object,
+    name = "LocalVariableTypeEntry",
+    module = "pytecode._rust"
+)]
 #[derive(Clone)]
 pub struct PyLocalVariableTypeEntry {
     start: Label,
@@ -402,7 +408,7 @@ impl PyLocalVariableTypeEntry {
     }
 }
 
-#[pyclass(name = "MethodHandleValue", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "MethodHandleValue", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodHandleValue {
     inner: MethodHandleValue,
@@ -455,7 +461,7 @@ impl PyMethodHandleValue {
     }
 }
 
-#[pyclass(name = "DynamicValue", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "DynamicValue", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyDynamicValue {
     inner: DynamicValue,
@@ -490,7 +496,7 @@ impl PyDynamicValue {
     }
 }
 
-#[pyclass(name = "RawInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "RawInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyRawInsn {
     opcode: u8,
@@ -514,7 +520,7 @@ impl PyRawInsn {
     }
 }
 
-#[pyclass(name = "ByteInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "ByteInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyByteInsn {
     opcode: u8,
@@ -544,7 +550,7 @@ impl PyByteInsn {
     }
 }
 
-#[pyclass(name = "ShortInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "ShortInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyShortInsn {
     opcode: u8,
@@ -574,7 +580,7 @@ impl PyShortInsn {
     }
 }
 
-#[pyclass(name = "NewArrayInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "NewArrayInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyNewArrayInsn {
     atype: u8,
@@ -600,7 +606,7 @@ impl PyNewArrayInsn {
     }
 }
 
-#[pyclass(name = "FieldInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "FieldInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyFieldInsn {
     inner: FieldInsn,
@@ -646,7 +652,7 @@ impl PyFieldInsn {
     }
 }
 
-#[pyclass(name = "MethodInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "MethodInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodInsn {
     inner: MethodInsn,
@@ -705,7 +711,11 @@ impl PyMethodInsn {
     }
 }
 
-#[pyclass(name = "InterfaceMethodInsn", module = "pytecode._rust")]
+#[pyclass(
+    from_py_object,
+    name = "InterfaceMethodInsn",
+    module = "pytecode._rust"
+)]
 #[derive(Clone)]
 pub struct PyInterfaceMethodInsn {
     inner: InterfaceMethodInsn,
@@ -745,7 +755,7 @@ impl PyInterfaceMethodInsn {
     }
 }
 
-#[pyclass(name = "TypeInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "TypeInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyTypeInsn {
     inner: TypeInsn,
@@ -776,7 +786,7 @@ impl PyTypeInsn {
     }
 }
 
-#[pyclass(name = "VarInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "VarInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyVarInsn {
     inner: VarInsn,
@@ -807,7 +817,7 @@ impl PyVarInsn {
     }
 }
 
-#[pyclass(name = "IIncInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "IIncInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyIIncInsn {
     inner: IIncInsn,
@@ -838,7 +848,7 @@ impl PyIIncInsn {
     }
 }
 
-#[pyclass(name = "LdcInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "LdcInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLdcInsn {
     inner: LdcInsn,
@@ -981,7 +991,7 @@ impl PyLdcInsn {
     }
 }
 
-#[pyclass(name = "InvokeDynamicInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "InvokeDynamicInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyInvokeDynamicInsn {
     inner: InvokeDynamicInsn,
@@ -1021,7 +1031,7 @@ impl PyInvokeDynamicInsn {
     }
 }
 
-#[pyclass(name = "MultiANewArrayInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "MultiANewArrayInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMultiANewArrayInsn {
     inner: MultiANewArrayInsn,
@@ -1055,7 +1065,7 @@ impl PyMultiANewArrayInsn {
     }
 }
 
-#[pyclass(name = "BranchInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "BranchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyBranchInsn {
     inner: BranchInsn,
@@ -1089,7 +1099,7 @@ impl PyBranchInsn {
     }
 }
 
-#[pyclass(name = "LookupSwitchInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "LookupSwitchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLookupSwitchInsn {
     inner: LookupSwitchInsn,
@@ -1130,7 +1140,7 @@ impl PyLookupSwitchInsn {
     }
 }
 
-#[pyclass(name = "TableSwitchInsn", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "TableSwitchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyTableSwitchInsn {
     inner: TableSwitchInsn,
@@ -1340,7 +1350,7 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
         })),
         "lookupswitch" => {
             let pairs = required_code_item_key(dict, "pairs")?
-                .downcast::<PyList>()
+                .cast::<PyList>()
                 .map_err(|_| code_item_value_error("lookupswitch pairs must be a list"))?
                 .iter()
                 .map(|entry| {
@@ -1355,7 +1365,7 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
         }
         "tableswitch" => {
             let targets = required_code_item_key(dict, "targets")?
-                .downcast::<PyList>()
+                .cast::<PyList>()
                 .map_err(|_| code_item_value_error("tableswitch targets must be a list"))?
                 .iter()
                 .map(|target| extract_label(&target))
@@ -1441,7 +1451,7 @@ pub(crate) fn extract_code_item(item: &Bound<'_, PyAny>) -> PyResult<CodeItem> {
     if let Ok(insn) = item.extract::<PyRef<'_, PyTableSwitchInsn>>() {
         return Ok(CodeItem::TableSwitch(insn.inner.clone()));
     }
-    if let Ok(dict) = item.downcast::<PyDict>() {
+    if let Ok(dict) = item.cast::<PyDict>() {
         return extract_code_item_dict(dict);
     }
     Err(code_item_value_error(
@@ -1591,7 +1601,12 @@ enum CodeListKind {
 // View objects
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "StringListView", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "StringListView",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyStringListView {
     state: SharedClassState,
@@ -1629,7 +1644,12 @@ impl PyStringListView {
     }
 }
 
-#[pyclass(name = "FieldListView", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "FieldListView",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyFieldListView {
     state: SharedClassState,
@@ -1671,7 +1691,12 @@ impl PyFieldListView {
     }
 }
 
-#[pyclass(name = "MethodListView", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "MethodListView",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyMethodListView {
     state: SharedClassState,
@@ -1821,7 +1846,12 @@ impl AttributeOwner {
     }
 }
 
-#[pyclass(name = "AttributeListView", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "AttributeListView",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyAttributeListView {
     owner: AttributeOwner,
@@ -1845,7 +1875,12 @@ impl PyAttributeListView {
     }
 }
 
-#[pyclass(name = "CodeListView", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "CodeListView",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyCodeListView {
     access: CodeAccess,
@@ -1956,7 +1991,12 @@ impl PyCodeListView {
 // PyCodeModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "CodeModel", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "CodeModel",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyCodeModel {
     access: CodeAccess,
@@ -2152,7 +2192,12 @@ impl PyCodeModel {
 // PyFieldModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "FieldModel", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "FieldModel",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyFieldModel {
     access: FieldAccess,
@@ -2281,7 +2326,12 @@ impl PyFieldModel {
 // PyMethodModel
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "MethodModel", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "MethodModel",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyMethodModel {
     access: MethodAccess,
@@ -2456,7 +2506,12 @@ impl PyMethodModel {
 // PyConstantPoolBuilder
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "ConstantPoolBuilder", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "ConstantPoolBuilder",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyConstantPoolBuilder {
     access: ConstantPoolAccess,
@@ -2845,7 +2900,11 @@ impl PyConstantPoolBuilder {
 // PyMappingClassResolver
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "MappingClassResolver", module = "pytecode._rust")]
+#[pyclass(
+    from_py_object,
+    name = "MappingClassResolver",
+    module = "pytecode._rust"
+)]
 #[derive(Clone)]
 pub struct PyMappingClassResolver {
     pub(crate) inner: MappingClassResolver,
@@ -3030,7 +3089,12 @@ fn rust_lower_classmodels_to_bytes<'py>(
         .collect()
 }
 
-#[pyclass(name = "ClassModel", module = "pytecode._rust", unsendable)]
+#[pyclass(
+    from_py_object,
+    name = "ClassModel",
+    module = "pytecode._rust",
+    unsendable
+)]
 #[derive(Clone)]
 pub struct PyClassModel {
     state: SharedClassState,

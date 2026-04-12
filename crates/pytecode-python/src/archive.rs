@@ -33,7 +33,7 @@ fn archive_error_to_py(error: ArchiveError) -> PyErr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "_ArchiveEntryState")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "_ArchiveEntryState")]
 #[derive(Clone)]
 struct PyArchiveEntryState {
     filename: String,
@@ -256,7 +256,7 @@ struct PythonCallableArchiveTransform {
 
 impl ApplyClassTransform for PythonCallableArchiveTransform {
     fn apply(&mut self, model: &mut ClassModel) -> pytecode_engine::Result<()> {
-        let callback_result = Python::with_gil(|py| -> PyResult<bool> {
+        let callback_result = Python::attach(|py| -> PyResult<bool> {
             let mut py_model = PyClassModel::from_model(std::mem::take(model));
             let call_result = (|| -> PyResult<bool> {
                 let cell = Py::new(py, py_model.clone())?;

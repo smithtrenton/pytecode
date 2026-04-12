@@ -15,6 +15,8 @@ mod attributes;
 mod model;
 mod transforms;
 
+type PyObject = Py<PyAny>;
+
 create_exception!(
     pytecode,
     MalformedClassException,
@@ -760,7 +762,7 @@ fn wrap_instruction_type(py: Python<'_>, instruction: &raw::Instruction) -> PyRe
 
 macro_rules! define_numeric_cp_wrapper {
     ($wrapper:ident, $pyname:literal, $inner:ty, $tag:expr, { $($field:ident : $ty:ty),* $(,)? }) => {
-        #[pyclass(module = "pytecode._rust", name = $pyname)]
+        #[pyclass(from_py_object, module = "pytecode._rust", name = $pyname)]
         #[derive(Clone)]
         pub struct $wrapper {
             pub(crate) index: usize,
@@ -794,7 +796,7 @@ macro_rules! define_numeric_cp_wrapper {
     };
 }
 
-#[pyclass(module = "pytecode._rust", name = "Utf8Info")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "Utf8Info")]
 #[derive(Clone)]
 pub struct PyUtf8Info {
     pub(crate) index: usize,
@@ -1131,7 +1133,7 @@ pub(crate) fn constant_pool_entry_to_pyobject(
     Ok(obj)
 }
 
-#[pyclass(module = "pytecode._rust", name = "MatchOffsetPair")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "MatchOffsetPair")]
 #[derive(Clone)]
 pub struct PyMatchOffsetPair {
     inner: raw::MatchOffsetPair,
@@ -1150,7 +1152,7 @@ impl PyMatchOffsetPair {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "InsnInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "InsnInfo")]
 #[derive(Clone)]
 pub struct PyInsnInfo {
     inner: raw::Instruction,
@@ -1311,7 +1313,7 @@ impl PyInsnInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ExceptionInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ExceptionInfo")]
 #[derive(Clone)]
 pub struct PyExceptionInfo {
     inner: raw::ExceptionHandler,
@@ -1340,7 +1342,7 @@ impl PyExceptionInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ConstantValueAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ConstantValueAttr")]
 #[derive(Clone)]
 pub struct PyConstantValueAttr {
     inner: raw::ConstantValueAttribute,
@@ -1364,7 +1366,7 @@ impl PyConstantValueAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SignatureAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "SignatureAttr")]
 #[derive(Clone)]
 pub struct PySignatureAttr {
     inner: raw::SignatureAttribute,
@@ -1388,7 +1390,7 @@ impl PySignatureAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SourceFileAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "SourceFileAttr")]
 #[derive(Clone)]
 pub struct PySourceFileAttr {
     inner: raw::SourceFileAttribute,
@@ -1412,7 +1414,11 @@ impl PySourceFileAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SourceDebugExtensionAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "SourceDebugExtensionAttr"
+)]
 #[derive(Clone)]
 pub struct PySourceDebugExtensionAttr {
     inner: raw::SourceDebugExtensionAttribute,
@@ -1436,7 +1442,7 @@ impl PySourceDebugExtensionAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ExceptionsAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ExceptionsAttr")]
 #[derive(Clone)]
 pub struct PyExceptionsAttr {
     inner: raw::ExceptionsAttribute,
@@ -1469,7 +1475,7 @@ impl PyExceptionsAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "CodeAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "CodeAttr")]
 #[derive(Clone)]
 pub struct PyCodeAttr {
     inner: raw::CodeAttribute,
@@ -1547,7 +1553,7 @@ impl PyCodeAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "UnimplementedAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "UnimplementedAttr")]
 #[derive(Clone)]
 pub struct PyUnimplementedAttr {
     inner: raw::UnknownAttribute,
@@ -2079,7 +2085,7 @@ pub(crate) fn wrap_attribute(
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "FieldInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "FieldInfo")]
 #[derive(Clone)]
 pub struct PyFieldInfo {
     inner: raw::FieldInfo,
@@ -2117,7 +2123,7 @@ impl PyFieldInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "MethodInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "MethodInfo")]
 #[derive(Clone)]
 pub struct PyMethodInfo {
     inner: raw::MethodInfo,
@@ -2155,7 +2161,7 @@ impl PyMethodInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ClassFile")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ClassFile")]
 #[derive(Clone)]
 pub struct PyClassFile {
     inner: Arc<ClassFile>,

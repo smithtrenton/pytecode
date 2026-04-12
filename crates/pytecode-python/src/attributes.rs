@@ -11,7 +11,7 @@ macro_rules! wrap_pyclass {
 // Verification Type Info variants
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "TopVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "TopVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyTopVariableInfo;
 
@@ -23,7 +23,11 @@ impl PyTopVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "IntegerVariableInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "IntegerVariableInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyIntegerVariableInfo;
 
@@ -35,7 +39,7 @@ impl PyIntegerVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "FloatVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "FloatVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyFloatVariableInfo;
 
@@ -47,7 +51,7 @@ impl PyFloatVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "DoubleVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "DoubleVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyDoubleVariableInfo;
 
@@ -59,7 +63,7 @@ impl PyDoubleVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LongVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "LongVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyLongVariableInfo;
 
@@ -71,7 +75,7 @@ impl PyLongVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "NullVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "NullVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyNullVariableInfo;
 
@@ -83,7 +87,11 @@ impl PyNullVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "UninitializedThisVariableInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "UninitializedThisVariableInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyUninitializedThisVariableInfo;
 
@@ -98,7 +106,7 @@ impl PyUninitializedThisVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ObjectVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ObjectVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyObjectVariableInfo {
     cpool_index: u16,
@@ -117,7 +125,11 @@ impl PyObjectVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "UninitializedVariableInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "UninitializedVariableInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyUninitializedVariableInfo {
     offset: u16,
@@ -171,7 +183,7 @@ fn wrap_verification_type_info(
 // Stack Map Frame Info variants
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "SameFrameInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "SameFrameInfo")]
 #[derive(Clone)]
 pub(crate) struct PySameFrameInfo {
     frame_type: u8,
@@ -185,7 +197,11 @@ impl PySameFrameInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SameLocals1StackItemFrameInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "SameLocals1StackItemFrameInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PySameLocals1StackItemFrameInfo {
     frame_type: u8,
@@ -206,6 +222,7 @@ impl PySameLocals1StackItemFrameInfo {
 }
 
 #[pyclass(
+    from_py_object,
     module = "pytecode._rust",
     name = "SameLocals1StackItemFrameExtendedInfo"
 )]
@@ -234,7 +251,7 @@ impl PySameLocals1StackItemFrameExtendedInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ChopFrameInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ChopFrameInfo")]
 #[derive(Clone)]
 pub(crate) struct PyChopFrameInfo {
     frame_type: u8,
@@ -254,7 +271,11 @@ impl PyChopFrameInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SameFrameExtendedInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "SameFrameExtendedInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PySameFrameExtendedInfo {
     frame_type: u8,
@@ -274,7 +295,7 @@ impl PySameFrameExtendedInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "AppendFrameInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "AppendFrameInfo")]
 #[derive(Clone)]
 pub(crate) struct PyAppendFrameInfo {
     frame_type: u8,
@@ -303,7 +324,7 @@ impl PyAppendFrameInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "FullFrameInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "FullFrameInfo")]
 #[derive(Clone)]
 pub(crate) struct PyFullFrameInfo {
     frame_type: u8,
@@ -438,7 +459,7 @@ fn wrap_stack_map_frame_info(
 // Simple entry types
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "LineNumberInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "LineNumberInfo")]
 #[derive(Clone)]
 pub(crate) struct PyLineNumberInfo {
     inner: raw::LineNumberInfo,
@@ -457,7 +478,7 @@ impl PyLineNumberInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LocalVariableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "LocalVariableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyLocalVariableInfo {
     inner: raw::LocalVariableInfo,
@@ -491,7 +512,11 @@ impl PyLocalVariableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LocalVariableTypeInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "LocalVariableTypeInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyLocalVariableTypeInfo {
     inner: raw::LocalVariableTypeInfo,
@@ -525,7 +550,7 @@ impl PyLocalVariableTypeInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "InnerClassInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "InnerClassInfo")]
 #[derive(Clone)]
 pub(crate) struct PyInnerClassInfo {
     inner: raw::InnerClassInfo,
@@ -558,7 +583,7 @@ impl PyInnerClassInfo {
 // Annotation sub-types
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "ConstValueInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ConstValueInfo")]
 #[derive(Clone)]
 pub(crate) struct PyConstValueInfo {
     const_value_index: u16,
@@ -572,7 +597,11 @@ impl PyConstValueInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "EnumConstantValueInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "EnumConstantValueInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyEnumConstantValueInfo {
     type_name_index: u16,
@@ -592,7 +621,7 @@ impl PyEnumConstantValueInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ClassInfoValueInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ClassInfoValueInfo")]
 #[derive(Clone)]
 pub(crate) struct PyClassInfoValueInfo {
     class_info_index: u16,
@@ -606,7 +635,7 @@ impl PyClassInfoValueInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ArrayValueInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ArrayValueInfo")]
 #[derive(Clone)]
 pub(crate) struct PyArrayValueInfo {
     values: Vec<raw::ElementValueInfo>,
@@ -628,7 +657,7 @@ impl PyArrayValueInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ElementValueInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ElementValueInfo")]
 #[derive(Clone)]
 pub(crate) struct PyElementValueInfo {
     inner: raw::ElementValueInfo,
@@ -705,7 +734,11 @@ fn wrap_element_value_info(py: Python<'_>, value: &raw::ElementValueInfo) -> PyR
     )
 }
 
-#[pyclass(module = "pytecode._rust", name = "ElementValuePairInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "ElementValuePairInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyElementValuePairInfo {
     inner: raw::ElementValuePairInfo,
@@ -724,7 +757,7 @@ impl PyElementValuePairInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "AnnotationInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "AnnotationInfo")]
 #[derive(Clone)]
 pub(crate) struct PyAnnotationInfo {
     inner: raw::AnnotationInfo,
@@ -759,7 +792,11 @@ impl PyAnnotationInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ParameterAnnotationInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "ParameterAnnotationInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyParameterAnnotationInfo {
     inner: raw::ParameterAnnotationInfo,
@@ -786,7 +823,11 @@ impl PyParameterAnnotationInfo {
 // Type annotation sub-types
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "TypeParameterTargetInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "TypeParameterTargetInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyTypeParameterTargetInfo {
     type_parameter_index: u8,
@@ -800,7 +841,11 @@ impl PyTypeParameterTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SupertypeTargetInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "SupertypeTargetInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PySupertypeTargetInfo {
     supertype_index: u16,
@@ -814,7 +859,11 @@ impl PySupertypeTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "TypeParameterBoundTargetInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "TypeParameterBoundTargetInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyTypeParameterBoundTargetInfo {
     type_parameter_index: u8,
@@ -834,11 +883,15 @@ impl PyTypeParameterBoundTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "EmptyTargetInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "EmptyTargetInfo")]
 #[derive(Clone)]
 pub(crate) struct PyEmptyTargetInfo;
 
-#[pyclass(module = "pytecode._rust", name = "FormalParameterTargetInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "FormalParameterTargetInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyFormalParameterTargetInfo {
     formal_parameter_index: u8,
@@ -852,7 +905,7 @@ impl PyFormalParameterTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ThrowsTargetInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ThrowsTargetInfo")]
 #[derive(Clone)]
 pub(crate) struct PyThrowsTargetInfo {
     throws_type_index: u16,
@@ -866,7 +919,7 @@ impl PyThrowsTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "TableInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "TableInfo")]
 #[derive(Clone)]
 pub(crate) struct PyTableInfo {
     inner: raw::TableInfo,
@@ -890,7 +943,7 @@ impl PyTableInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LocalvarTargetInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "LocalvarTargetInfo")]
 #[derive(Clone)]
 pub(crate) struct PyLocalvarTargetInfo {
     table: Vec<raw::TableInfo>,
@@ -912,7 +965,7 @@ impl PyLocalvarTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "CatchTargetInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "CatchTargetInfo")]
 #[derive(Clone)]
 pub(crate) struct PyCatchTargetInfo {
     exception_table_index: u16,
@@ -926,7 +979,7 @@ impl PyCatchTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "OffsetTargetInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "OffsetTargetInfo")]
 #[derive(Clone)]
 pub(crate) struct PyOffsetTargetInfo {
     offset: u16,
@@ -940,7 +993,11 @@ impl PyOffsetTargetInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "TypeArgumentTargetInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "TypeArgumentTargetInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyTypeArgumentTargetInfo {
     offset: u16,
@@ -1035,7 +1092,7 @@ fn wrap_target_info(py: Python<'_>, info: &raw::TargetInfo) -> PyResult<Py<PyAny
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "PathInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "PathInfo")]
 #[derive(Clone)]
 pub(crate) struct PyPathInfo {
     inner: raw::PathInfo,
@@ -1054,7 +1111,7 @@ impl PyPathInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "TypePathInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "TypePathInfo")]
 #[derive(Clone)]
 pub(crate) struct PyTypePathInfo {
     inner: raw::TypePathInfo,
@@ -1077,7 +1134,7 @@ impl PyTypePathInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "TypeAnnotationInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "TypeAnnotationInfo")]
 #[derive(Clone)]
 pub(crate) struct PyTypeAnnotationInfo {
     inner: raw::TypeAnnotationInfo,
@@ -1136,7 +1193,11 @@ impl PyTypeAnnotationInfo {
 // Bootstrap, method parameter, and module sub-types
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "BootstrapMethodInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "BootstrapMethodInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyBootstrapMethodInfo {
     inner: raw::BootstrapMethodInfo,
@@ -1165,7 +1226,11 @@ impl PyBootstrapMethodInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "MethodParameterInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "MethodParameterInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyMethodParameterInfo {
     inner: raw::MethodParameterInfo,
@@ -1184,7 +1249,7 @@ impl PyMethodParameterInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RequiresInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "RequiresInfo")]
 #[derive(Clone)]
 pub(crate) struct PyRequiresInfo {
     inner: raw::RequiresInfo,
@@ -1209,7 +1274,7 @@ impl PyRequiresInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ExportInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ExportInfo")]
 #[derive(Clone)]
 pub(crate) struct PyExportInfo {
     inner: raw::ExportInfo,
@@ -1242,7 +1307,7 @@ impl PyExportInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "OpensInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "OpensInfo")]
 #[derive(Clone)]
 pub(crate) struct PyOpensInfo {
     inner: raw::OpensInfo,
@@ -1275,7 +1340,7 @@ impl PyOpensInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ProvidesInfo")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ProvidesInfo")]
 #[derive(Clone)]
 pub(crate) struct PyProvidesInfo {
     inner: raw::ProvidesInfo,
@@ -1303,7 +1368,11 @@ impl PyProvidesInfo {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RecordComponentInfo")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "RecordComponentInfo"
+)]
 #[derive(Clone)]
 pub(crate) struct PyRecordComponentInfo {
     inner: raw::RecordComponentInfo,
@@ -1340,7 +1409,7 @@ impl PyRecordComponentInfo {
 // Top-level attribute types
 // ===========================================================================
 
-#[pyclass(module = "pytecode._rust", name = "StackMapTableAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "StackMapTableAttr")]
 #[derive(Clone)]
 pub(crate) struct PyStackMapTableAttr {
     pub(crate) inner: raw::StackMapTableAttribute,
@@ -1373,7 +1442,7 @@ impl PyStackMapTableAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "InnerClassesAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "InnerClassesAttr")]
 #[derive(Clone)]
 pub(crate) struct PyInnerClassesAttr {
     pub(crate) inner: raw::InnerClassesAttribute,
@@ -1406,7 +1475,11 @@ impl PyInnerClassesAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "EnclosingMethodAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "EnclosingMethodAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyEnclosingMethodAttr {
     pub(crate) inner: raw::EnclosingMethodAttribute,
@@ -1435,7 +1508,7 @@ impl PyEnclosingMethodAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "SyntheticAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "SyntheticAttr")]
 #[derive(Clone)]
 pub(crate) struct PySyntheticAttr {
     pub(crate) inner: raw::SyntheticAttribute,
@@ -1454,7 +1527,7 @@ impl PySyntheticAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "DeprecatedAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "DeprecatedAttr")]
 #[derive(Clone)]
 pub(crate) struct PyDeprecatedAttr {
     pub(crate) inner: raw::DeprecatedAttribute,
@@ -1473,7 +1546,11 @@ impl PyDeprecatedAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LineNumberTableAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "LineNumberTableAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyLineNumberTableAttr {
     pub(crate) inner: raw::LineNumberTableAttribute,
@@ -1506,7 +1583,11 @@ impl PyLineNumberTableAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LocalVariableTableAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "LocalVariableTableAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyLocalVariableTableAttr {
     pub(crate) inner: raw::LocalVariableTableAttribute,
@@ -1539,7 +1620,11 @@ impl PyLocalVariableTableAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "LocalVariableTypeTableAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "LocalVariableTypeTableAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyLocalVariableTypeTableAttr {
     pub(crate) inner: raw::LocalVariableTypeTableAttribute,
@@ -1572,7 +1657,11 @@ impl PyLocalVariableTypeTableAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RuntimeVisibleAnnotationsAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "RuntimeVisibleAnnotationsAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyRuntimeVisibleAnnotationsAttr {
     pub(crate) inner: raw::RuntimeVisibleAnnotationsAttribute,
@@ -1605,7 +1694,11 @@ impl PyRuntimeVisibleAnnotationsAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RuntimeInvisibleAnnotationsAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "RuntimeInvisibleAnnotationsAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyRuntimeInvisibleAnnotationsAttr {
     pub(crate) inner: raw::RuntimeInvisibleAnnotationsAttribute,
@@ -1639,6 +1732,7 @@ impl PyRuntimeInvisibleAnnotationsAttr {
 }
 
 #[pyclass(
+    from_py_object,
     module = "pytecode._rust",
     name = "RuntimeVisibleParameterAnnotationsAttr"
 )]
@@ -1675,6 +1769,7 @@ impl PyRuntimeVisibleParameterAnnotationsAttr {
 }
 
 #[pyclass(
+    from_py_object,
     module = "pytecode._rust",
     name = "RuntimeInvisibleParameterAnnotationsAttr"
 )]
@@ -1710,7 +1805,11 @@ impl PyRuntimeInvisibleParameterAnnotationsAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RuntimeVisibleTypeAnnotationsAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "RuntimeVisibleTypeAnnotationsAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyRuntimeVisibleTypeAnnotationsAttr {
     pub(crate) inner: raw::RuntimeVisibleTypeAnnotationsAttribute,
@@ -1744,6 +1843,7 @@ impl PyRuntimeVisibleTypeAnnotationsAttr {
 }
 
 #[pyclass(
+    from_py_object,
     module = "pytecode._rust",
     name = "RuntimeInvisibleTypeAnnotationsAttr"
 )]
@@ -1779,7 +1879,11 @@ impl PyRuntimeInvisibleTypeAnnotationsAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "AnnotationDefaultAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "AnnotationDefaultAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyAnnotationDefaultAttr {
     pub(crate) inner: raw::AnnotationDefaultAttribute,
@@ -1803,7 +1907,11 @@ impl PyAnnotationDefaultAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "BootstrapMethodsAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "BootstrapMethodsAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyBootstrapMethodsAttr {
     pub(crate) inner: raw::BootstrapMethodsAttribute,
@@ -1836,7 +1944,11 @@ impl PyBootstrapMethodsAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "MethodParametersAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "MethodParametersAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyMethodParametersAttr {
     pub(crate) inner: raw::MethodParametersAttribute,
@@ -1869,7 +1981,7 @@ impl PyMethodParametersAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ModuleAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ModuleAttr")]
 #[derive(Clone)]
 pub(crate) struct PyModuleAttr {
     pub(crate) inner: raw::ModuleAttribute,
@@ -1978,7 +2090,7 @@ impl PyModuleAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ModulePackagesAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "ModulePackagesAttr")]
 #[derive(Clone)]
 pub(crate) struct PyModulePackagesAttr {
     pub(crate) inner: raw::ModulePackagesAttribute,
@@ -2011,7 +2123,11 @@ impl PyModulePackagesAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "ModuleMainClassAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "ModuleMainClassAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyModuleMainClassAttr {
     pub(crate) inner: raw::ModuleMainClassAttribute,
@@ -2035,7 +2151,7 @@ impl PyModuleMainClassAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "NestHostAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "NestHostAttr")]
 #[derive(Clone)]
 pub(crate) struct PyNestHostAttr {
     pub(crate) inner: raw::NestHostAttribute,
@@ -2059,7 +2175,7 @@ impl PyNestHostAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "NestMembersAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "NestMembersAttr")]
 #[derive(Clone)]
 pub(crate) struct PyNestMembersAttr {
     pub(crate) inner: raw::NestMembersAttribute,
@@ -2088,7 +2204,7 @@ impl PyNestMembersAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "RecordAttr")]
+#[pyclass(from_py_object, module = "pytecode._rust", name = "RecordAttr")]
 #[derive(Clone)]
 pub(crate) struct PyRecordAttr {
     pub(crate) inner: raw::RecordAttribute,
@@ -2121,7 +2237,11 @@ impl PyRecordAttr {
     }
 }
 
-#[pyclass(module = "pytecode._rust", name = "PermittedSubclassesAttr")]
+#[pyclass(
+    from_py_object,
+    module = "pytecode._rust",
+    name = "PermittedSubclassesAttr"
+)]
 #[derive(Clone)]
 pub(crate) struct PyPermittedSubclassesAttr {
     pub(crate) inner: raw::PermittedSubclassesAttribute,

@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAny, PyDict};
 use pytecode_engine::analysis::{
     AnalysisError, Category, Diagnostic, InheritedMethod, ResolvedClass, ResolvedMethod, Severity,
     common_superclass as engine_common_superclass,
@@ -12,6 +12,8 @@ use pytecode_engine::constants::MethodAccessFlags;
 use pytecode_engine::parse_class;
 
 use crate::model::{PyClassModel, PyMappingClassResolver};
+
+type PyObject = Py<PyAny>;
 
 fn analysis_error_to_py(error: AnalysisError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error.to_string())
@@ -53,7 +55,7 @@ fn inherited_method_to_py(py: Python<'_>, method: &InheritedMethod) -> PyResult<
 // PyDiagnostic
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Diagnostic", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "Diagnostic", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyDiagnostic {
     inner: Diagnostic,

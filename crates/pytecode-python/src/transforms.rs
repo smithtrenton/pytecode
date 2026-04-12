@@ -4,6 +4,7 @@
 //! Python code can construct matcher trees that Rust evaluates natively.
 
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::matcher_spec::{
     ClassMatcherSpec, FieldMatcherSpec, InsnMatcherSpec, MethodMatcherSpec,
@@ -14,6 +15,8 @@ use pytecode_engine::transform::pipeline_spec::{
 use pytecode_engine::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
 
 use crate::model::{PyClassModel, extract_code_items};
+
+type PyObject = Py<PyAny>;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -31,7 +34,7 @@ fn validate_fullmatch_pattern(pattern: &str) -> PyResult<()> {
 // ---------------------------------------------------------------------------
 
 /// A declarative instruction matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "InsnMatcher", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "InsnMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyInsnMatcher {
     pub(crate) spec: InsnMatcherSpec,
@@ -296,7 +299,7 @@ impl PyInsnMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative class matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "ClassMatcher", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "ClassMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyClassMatcher {
     pub(crate) spec: ClassMatcherSpec,
@@ -477,7 +480,7 @@ impl PyClassMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative field matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "FieldMatcher", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "FieldMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyFieldMatcher {
     pub(crate) spec: FieldMatcherSpec,
@@ -633,7 +636,7 @@ impl PyFieldMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative method matcher that Rust evaluates without FFI per-match.
-#[pyclass(name = "MethodMatcher", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "MethodMatcher", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodMatcher {
     pub(crate) spec: MethodMatcherSpec,
@@ -817,7 +820,7 @@ impl PyMethodMatcher {
 // ---------------------------------------------------------------------------
 
 /// A declarative code transform that Rust applies natively.
-#[pyclass(name = "CodeTransform", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "CodeTransform", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyCodeTransform {
     pub(crate) spec: CodeTransformSpec,
@@ -969,7 +972,7 @@ impl PyCodeTransform {
 // ---------------------------------------------------------------------------
 
 /// A declarative class transform that Rust applies natively.
-#[pyclass(name = "ClassTransform", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "ClassTransform", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyClassTransform {
     pub(crate) spec: ClassTransformSpec,
@@ -1107,7 +1110,7 @@ impl PyClassTransform {
 // ---------------------------------------------------------------------------
 
 /// A declarative transform pipeline that Rust evaluates natively.
-#[pyclass(name = "Pipeline", module = "pytecode._rust")]
+#[pyclass(from_py_object, name = "Pipeline", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyPipeline {
     pub(crate) spec: PipelineSpec,
@@ -1176,7 +1179,7 @@ impl PyPipeline {
         self.spec.steps.push(PipelineStep::Class {
             matcher: matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     // Swap model into wrapper — zero-copy move, not clone
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
@@ -1226,7 +1229,7 @@ impl PyPipeline {
                 .unwrap_or(ClassMatcherSpec::Any),
             field_matcher: field_matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
@@ -1274,7 +1277,7 @@ impl PyPipeline {
                 .unwrap_or(ClassMatcherSpec::Any),
             method_matcher: method_matcher.spec.clone(),
             action: TransformAction::Custom(std::sync::Arc::new(move |model: &mut ClassModel| {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
