@@ -212,31 +212,10 @@ These differences exist, but they are mostly representation mismatches rather th
 
 ### Raw instruction layer
 
-Python exposes one dataclass per operand form plus enum helpers in `pytecode\classfile\instructions.py:37-482`.
-Rust instead stores instructions in one enum with specialized payload structs in `crates\pytecode-engine\src\raw\instructions.rs:34-212`.
+Python now exposes the live raw reader shape directly: `_rust.InsnInfo` is re-exported from `pytecode.classfile`, and its opcode helpers live in `pytecode\classfile\bytecode.py`.
+Rust stores instructions in one enum with specialized payload structs in `crates\pytecode-engine\src\raw\instructions.rs:34-212`.
 
-That means:
-
-- engine semantics are mostly present,
-- but a 1:1 Python wrapper still needs adapter logic for:
-  - `InsnInfo`
-  - `InsnInfoType`
-  - `LocalIndex`
-  - `LocalIndexW`
-  - `ConstPoolIndex`
-  - `ByteValue`
-  - `ShortValue`
-  - `BranchW`
-  - `IInc`
-  - `IIncW`
-  - `InvokeDynamic`
-  - `InvokeInterface`
-  - `NewArray`
-  - `MultiANewArray`
-  - `LookupSwitch`
-  - `TableSwitch`
-
-This is mostly a binding-shape issue, not an engine raw-data gap.
+This is now mostly aligned: the raw binding surface is one instruction object plus enums, rather than a parallel Python-only dataclass hierarchy.
 
 ### Edit operand layer
 

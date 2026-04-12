@@ -15,6 +15,7 @@ categories = ["command-line-utilities", "development-tools"]
 clap.workspace = true
 pytecode-archive = { path = "../pytecode-archive" }
 pytecode-engine = { path = "../pytecode-engine" }
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

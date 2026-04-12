@@ -3,14 +3,14 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule};
 use pyo3::wrap_pyfunction;
 use pytecode_archive::{ArchiveError, JarEntryMetadata, JarFile, JarInfo, RewriteOptions};
-use pytecode_engine::model::{ClassModel, FrameComputationMode};
+use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::ApplyClassTransform;
 use pytecode_engine::transform::pipeline_spec::CompiledPipeline;
 use pytecode_engine::transform::transform_spec::ClassTransformSpec;
 use std::path::PathBuf;
 use zip::{CompressionMethod, DateTime, System};
 
-use crate::model::{PyMappingClassResolver, parse_debug_info_policy};
+use crate::model::{PyMappingClassResolver, parse_debug_info_policy, parse_frame_computation_mode};
 use crate::transforms::{PyClassTransform, PyCompiledPipeline, PyPipeline};
 
 fn archive_error_to_py(error: ArchiveError) -> PyErr {
@@ -225,16 +225,12 @@ impl ApplyClassTransform for ClassTransformArchiveTransform<'_> {
 }
 
 fn rewrite_options<'a>(
-    recompute_frames: bool,
+    frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&'a PyMappingClassResolver>,
     debug_info: &str,
 ) -> PyResult<RewriteOptions<'a>> {
     let debug_info = parse_debug_info_policy(debug_info)?;
-    let frame_mode = if recompute_frames {
-        FrameComputationMode::Recompute
-    } else {
-        FrameComputationMode::Preserve
-    };
+    let frame_mode = parse_frame_computation_mode(frame_mode)?;
     Ok(RewriteOptions {
         frame_mode,
         resolver: resolver
@@ -304,22 +300,22 @@ fn jar_from_state(
 }
 
 #[pyfunction]
-#[pyo3(signature = (source_path, transform, output_path=None, recompute_frames=false, resolver=None, debug_info="preserve"))]
+#[pyo3(signature = (source_path, transform, output_path=None, frame_mode=None, resolver=None, debug_info="preserve"))]
 fn rewrite_archive_with_rust_transform(
     source_path: PathBuf,
     transform: &Bound<'_, PyAny>,
     output_path: Option<PathBuf>,
-    recompute_frames: bool,
+    frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: &str,
 ) -> PyResult<PathBuf> {
-    let options = rewrite_options(recompute_frames, resolver, debug_info)?;
+    let options = rewrite_options(frame_mode, resolver, debug_info)?;
     let mut jar = JarFile::open(&source_path).map_err(archive_error_to_py)?;
     rewrite_with_transform(&mut jar, transform, output_path, options)
 }
 
 #[pyfunction]
-#[pyo3(signature = (source_path, entries, transform=None, output_path=None, recompute_frames=false, resolver=None, debug_info="preserve"))]
+#[pyo3(signature = (source_path, entries, transform=None, output_path=None, frame_mode=None, resolver=None, debug_info="preserve"))]
 #[allow(clippy::too_many_arguments)]
 fn rewrite_archive_state(
     py: Python<'_>,
@@ -327,11 +323,11 @@ fn rewrite_archive_state(
     entries: Vec<Py<PyArchiveEntryState>>,
     transform: Option<&Bound<'_, PyAny>>,
     output_path: Option<PathBuf>,
-    recompute_frames: bool,
+    frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: &str,
 ) -> PyResult<PathBuf> {
-    let options = rewrite_options(recompute_frames, resolver, debug_info)?;
+    let options = rewrite_options(frame_mode, resolver, debug_info)?;
     let mut jar = jar_from_state(py, source_path, entries)?;
     if let Some(transform) = transform {
         rewrite_with_transform(&mut jar, transform, output_path, options)

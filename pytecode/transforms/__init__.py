@@ -95,15 +95,19 @@ from .pipeline import PipelineBuilder
 ClassMatcher = _rust.ClassMatcher
 FieldMatcher = _rust.FieldMatcher
 MethodMatcher = _rust.MethodMatcher
+InsnMatcher = _rust.InsnMatcher
 ClassTransform = _rust.ClassTransform
+CodeTransform = _rust.CodeTransform
 Pipeline = _rust.Pipeline
 CompiledPipeline = _rust.CompiledPipeline
 
 __all__ = [
     "ClassMatcher",
     "ClassTransform",
+    "CodeTransform",
     "CompiledPipeline",
     "FieldMatcher",
+    "InsnMatcher",
     "MethodMatcher",
     "Pipeline",
     "PipelineBuilder",

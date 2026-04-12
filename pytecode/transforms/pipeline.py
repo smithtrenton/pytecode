@@ -21,6 +21,7 @@ from pytecode._rust import (
     ClassMatcher,
     ClassModel,
     ClassTransform,
+    CodeTransform,
     CompiledPipeline,
     FieldMatcher,
     MethodMatcher,
@@ -63,6 +64,17 @@ class PipelineBuilder:
     ) -> PipelineBuilder:
         """Add a method-level step (optional class-level guard)."""
         self._pipeline.on_methods(method_matcher, transform, owner_matcher)
+        return self
+
+    def on_code(
+        self,
+        method_matcher: MethodMatcher,
+        transform: CodeTransform,
+        *,
+        owner_matcher: ClassMatcher | None = None,
+    ) -> PipelineBuilder:
+        """Add a code-level step for methods whose bodies should be rewritten."""
+        self._pipeline.on_code(method_matcher, transform, owner_matcher)
         return self
 
     # -- custom callback variants --

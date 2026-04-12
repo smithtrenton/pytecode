@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from .. import _rust
+from ..classfile import ClassFile
+from ..model import ClassModel
 from .hierarchy import MappingClassResolver
 
 Diagnostic = _rust.Diagnostic
@@ -11,7 +13,7 @@ Diagnostic = _rust.Diagnostic
 def _classfile_bytes(value: object) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
-    if isinstance(value, _rust.ClassFile):
+    if isinstance(value, ClassFile):
         return bytes(value.to_bytes())
 
     class_info = getattr(value, "class_info", None)
@@ -35,7 +37,7 @@ def verify_classmodel(
 ) -> list[Diagnostic]:
     """Verify a Rust-backed class model through the Rust verifier."""
 
-    if not isinstance(value, _rust.ClassModel):
+    if not isinstance(value, ClassModel):
         raise TypeError("verify_classmodel expects a ClassModel")
     return _rust.rust_verify_classmodel(value, resolver=resolver, fail_fast=fail_fast)
 

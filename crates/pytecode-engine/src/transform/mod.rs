@@ -4,7 +4,8 @@ pub mod transform_spec;
 
 use crate::Result;
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
-use crate::model::{ClassModel, CodeModel, FieldModel, MethodModel};
+use crate::model::{ClassModel, CodeItem, CodeModel, FieldModel, LdcValue, MethodModel};
+use crate::transform::matcher_spec::insn_matches_opcode;
 use regex::Regex;
 use std::fmt;
 use std::ops::{BitAnd, BitOr, Not};
@@ -155,6 +156,7 @@ impl<T: 'static> Not for Matcher<T> {
 pub type ClassMatcher = Matcher<ClassModel>;
 pub type FieldMatcher = Matcher<FieldModel>;
 pub type MethodMatcher = Matcher<MethodModel>;
+pub type InsnMatcher = Matcher<CodeItem>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassContext {
@@ -573,6 +575,267 @@ pub fn is_constructor() -> MethodMatcher {
 
 pub fn is_static_initializer() -> MethodMatcher {
     method_named("<clinit>")
+}
+
+pub fn insn_opcode(opcode: u8) -> InsnMatcher {
+    Matcher::of(
+        move |item: &CodeItem| insn_matches_opcode(item, opcode),
+        format!("insn_opcode(0x{opcode:02X})"),
+    )
+}
+
+pub fn insn_opcode_any(opcodes: &[u8]) -> InsnMatcher {
+    let opcodes = opcodes.to_vec();
+    let description = format!("insn_opcode_any({opcodes:?})");
+    Matcher::of(
+        move |item: &CodeItem| {
+            opcodes
+                .iter()
+                .any(|opcode| insn_matches_opcode(item, *opcode))
+        },
+        description,
+    )
+}
+
+pub fn insn_is_field_access() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| matches!(item, CodeItem::Field(_)),
+        "insn_is_field_access()",
+    )
+}
+
+pub fn insn_is_method_call() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| {
+            matches!(
+                item,
+                CodeItem::Method(_) | CodeItem::InterfaceMethod(_) | CodeItem::InvokeDynamic(_)
+            )
+        },
+        "insn_is_method_call()",
+    )
+}
+
+pub fn insn_is_branch() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| {
+            matches!(
+                item,
+                CodeItem::Branch(_) | CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_)
+            )
+        },
+        "insn_is_branch()",
+    )
+}
+
+pub fn insn_is_return() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| match item {
+            CodeItem::Raw(insn) => matches!(insn.opcode(), 0xAC..=0xB1),
+            _ => false,
+        },
+        "insn_is_return()",
+    )
+}
+
+pub fn insn_is_label() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| matches!(item, CodeItem::Label(_)),
+        "insn_is_label()",
+    )
+}
+
+pub fn insn_is_ldc() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| matches!(item, CodeItem::Ldc(_)),
+        "insn_is_ldc()",
+    )
+}
+
+pub fn insn_is_var() -> InsnMatcher {
+    Matcher::of(
+        |item: &CodeItem| matches!(item, CodeItem::Var(_)),
+        "insn_is_var()",
+    )
+}
+
+pub fn insn_field_owner(owner: &str) -> InsnMatcher {
+    let owner = owner.to_owned();
+    let expected = owner.clone();
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Field(insn) if insn.owner == expected),
+        format!("insn_field_owner({owner:?})"),
+    )
+}
+
+pub fn insn_field_named(name: &str) -> InsnMatcher {
+    let name = name.to_owned();
+    let expected = name.clone();
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Field(insn) if insn.name == expected),
+        format!("insn_field_named({name:?})"),
+    )
+}
+
+pub fn insn_field_descriptor(descriptor: &str) -> InsnMatcher {
+    let descriptor = descriptor.to_owned();
+    let expected = descriptor.clone();
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Field(insn) if insn.descriptor == expected),
+        format!("insn_field_descriptor({descriptor:?})"),
+    )
+}
+
+pub fn insn_field(owner: &str, name: &str, descriptor: &str) -> InsnMatcher {
+    let owner = owner.to_owned();
+    let name = name.to_owned();
+    let descriptor = descriptor.to_owned();
+    let expected_owner = owner.clone();
+    let expected_name = name.clone();
+    let expected_descriptor = descriptor.clone();
+    Matcher::of(
+        move |item: &CodeItem| {
+            matches!(
+                item,
+                CodeItem::Field(insn)
+                    if insn.owner == expected_owner
+                        && insn.name == expected_name
+                        && insn.descriptor == expected_descriptor
+            )
+        },
+        format!("insn_field({owner:?}, {name:?}, {descriptor:?})"),
+    )
+}
+
+pub fn insn_method_owner(owner: &str) -> InsnMatcher {
+    let owner = owner.to_owned();
+    let expected = owner.clone();
+    Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => insn.owner == expected,
+            CodeItem::InterfaceMethod(insn) => insn.owner == expected,
+            _ => false,
+        },
+        format!("insn_method_owner({owner:?})"),
+    )
+}
+
+pub fn insn_method_named(name: &str) -> InsnMatcher {
+    let name = name.to_owned();
+    let expected = name.clone();
+    Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => insn.name == expected,
+            CodeItem::InterfaceMethod(insn) => insn.name == expected,
+            CodeItem::InvokeDynamic(insn) => insn.name == expected,
+            _ => false,
+        },
+        format!("insn_method_named({name:?})"),
+    )
+}
+
+pub fn insn_method_descriptor(descriptor: &str) -> InsnMatcher {
+    let descriptor = descriptor.to_owned();
+    let expected = descriptor.clone();
+    Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => insn.descriptor == expected,
+            CodeItem::InterfaceMethod(insn) => insn.descriptor == expected,
+            CodeItem::InvokeDynamic(insn) => insn.descriptor == expected,
+            _ => false,
+        },
+        format!("insn_method_descriptor({descriptor:?})"),
+    )
+}
+
+pub fn insn_method(owner: &str, name: &str, descriptor: &str) -> InsnMatcher {
+    let owner = owner.to_owned();
+    let name = name.to_owned();
+    let descriptor = descriptor.to_owned();
+    let expected_owner = owner.clone();
+    let expected_name = name.clone();
+    let expected_descriptor = descriptor.clone();
+    Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => {
+                insn.owner == expected_owner
+                    && insn.name == expected_name
+                    && insn.descriptor == expected_descriptor
+            }
+            CodeItem::InterfaceMethod(insn) => {
+                insn.owner == expected_owner
+                    && insn.name == expected_name
+                    && insn.descriptor == expected_descriptor
+            }
+            _ => false,
+        },
+        format!("insn_method({owner:?}, {name:?}, {descriptor:?})"),
+    )
+}
+
+pub fn insn_type_descriptor(descriptor: &str) -> InsnMatcher {
+    let descriptor = descriptor.to_owned();
+    let expected = descriptor.clone();
+    Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Type(insn) => insn.descriptor == expected,
+            CodeItem::MultiANewArray(insn) => insn.descriptor == expected,
+            _ => false,
+        },
+        format!("insn_type_descriptor({descriptor:?})"),
+    )
+}
+
+pub fn insn_ldc_string(value: &str) -> InsnMatcher {
+    let value = value.to_owned();
+    let expected = value.clone();
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(found) if found == &expected)),
+        format!("insn_ldc_string({value:?})"),
+    )
+}
+
+pub fn insn_var_slot(slot: u16) -> InsnMatcher {
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Var(insn) if insn.slot == slot),
+        format!("insn_var_slot({slot})"),
+    )
+}
+
+pub fn insn_field_owner_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
+    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let description = format!("insn_field_owner_matches({pattern:?})");
+    Ok(Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Field(insn) if regex.is_match(&insn.owner)),
+        description,
+    ))
+}
+
+pub fn insn_method_owner_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
+    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let description = format!("insn_method_owner_matches({pattern:?})");
+    Ok(Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => regex.is_match(&insn.owner),
+            CodeItem::InterfaceMethod(insn) => regex.is_match(&insn.owner),
+            _ => false,
+        },
+        description,
+    ))
+}
+
+pub fn insn_method_name_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
+    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let description = format!("insn_method_name_matches({pattern:?})");
+    Ok(Matcher::of(
+        move |item: &CodeItem| match item {
+            CodeItem::Method(insn) => regex.is_match(&insn.name),
+            CodeItem::InterfaceMethod(insn) => regex.is_match(&insn.name),
+            CodeItem::InvokeDynamic(insn) => regex.is_match(&insn.name),
+            _ => false,
+        },
+        description,
+    ))
 }
 
 fn parenthesize_description(description: &str) -> String {

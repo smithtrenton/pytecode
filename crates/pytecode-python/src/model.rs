@@ -1,13 +1,17 @@
 use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
 use pyo3::wrap_pyfunction;
 use pytecode_engine::analysis::MappingClassResolver;
+use pytecode_engine::indexes::BootstrapMethodIndex;
 use pytecode_engine::model::{
-    ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, DebugInfoState,
-    ExceptionHandler, FieldModel, FrameComputationMode, Label, LdcValue, MethodModel,
+    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
+    DebugInfoState, DynamicValue, ExceptionHandler, FieldInsn, FieldModel, FrameComputationMode,
+    IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn, Label, LdcInsn, LdcValue, LookupSwitchInsn,
+    MethodHandleValue, MethodInsn, MethodModel, MultiANewArrayInsn, TableSwitchInsn, TypeInsn,
+    VarInsn,
 };
-use pytecode_engine::raw::ClassFile;
+use pytecode_engine::raw::{ArrayType, ClassFile, Instruction, NewArrayInsn};
 use pytecode_engine::write_class;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -15,6 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::PyClassFile;
+use crate::transforms::PyInsnMatcher;
 
 // ---------------------------------------------------------------------------
 // Helper: convert EngineError → PyErr
@@ -120,10 +125,14 @@ fn with_live_model_mut<R>(
 }
 
 fn wrap_line_number(py: Python<'_>, label: &Label, line_number: u16) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    dict.set_item("label", wrap_label(py, label)?)?;
-    dict.set_item("line_number", line_number)?;
-    Ok(dict.into_any().unbind())
+    Ok(Py::new(
+        py,
+        PyLineNumberEntry {
+            label: label.clone(),
+            line_number,
+        },
+    )?
+    .into_any())
 }
 
 fn wrap_local_variable(
@@ -134,13 +143,17 @@ fn wrap_local_variable(
     descriptor: &str,
     index: u16,
 ) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    dict.set_item("start", wrap_label(py, start)?)?;
-    dict.set_item("end", wrap_label(py, end)?)?;
-    dict.set_item("name", name)?;
-    dict.set_item("descriptor", descriptor)?;
-    dict.set_item("index", index)?;
-    Ok(dict.into_any().unbind())
+    Ok(Py::new(
+        py,
+        PyLocalVariableEntry {
+            start: start.clone(),
+            end: end.clone(),
+            name: name.to_owned(),
+            descriptor: descriptor.to_owned(),
+            index,
+        },
+    )?
+    .into_any())
 }
 
 fn wrap_local_variable_type(
@@ -151,13 +164,17 @@ fn wrap_local_variable_type(
     signature: &str,
     index: u16,
 ) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    dict.set_item("start", wrap_label(py, start)?)?;
-    dict.set_item("end", wrap_label(py, end)?)?;
-    dict.set_item("name", name)?;
-    dict.set_item("signature", signature)?;
-    dict.set_item("index", index)?;
-    Ok(dict.into_any().unbind())
+    Ok(Py::new(
+        py,
+        PyLocalVariableTypeEntry {
+            start: start.clone(),
+            end: end.clone(),
+            name: name.to_owned(),
+            signature: signature.to_owned(),
+            index,
+        },
+    )?
+    .into_any())
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +218,11 @@ impl PyLabel {
     #[getter]
     fn name(&self) -> Option<String> {
         self.inner.name.clone()
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "label"
     }
 
     fn __repr__(&self) -> String {
@@ -254,6 +276,911 @@ impl PyModelExceptionHandler {
     }
 }
 
+#[pyclass(name = "LineNumberEntry", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyLineNumberEntry {
+    label: Label,
+    line_number: u16,
+}
+
+#[pymethods]
+impl PyLineNumberEntry {
+    #[new]
+    fn new(label: PyLabel, line_number: u16) -> Self {
+        Self {
+            label: label.inner,
+            line_number,
+        }
+    }
+
+    #[getter]
+    fn label(&self) -> PyLabel {
+        PyLabel::from(self.label.clone())
+    }
+
+    #[getter]
+    fn line_number(&self) -> u16 {
+        self.line_number
+    }
+}
+
+#[pyclass(name = "LocalVariableEntry", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyLocalVariableEntry {
+    start: Label,
+    end: Label,
+    name: String,
+    descriptor: String,
+    index: u16,
+}
+
+#[pymethods]
+impl PyLocalVariableEntry {
+    #[new]
+    fn new(start: PyLabel, end: PyLabel, name: String, descriptor: String, index: u16) -> Self {
+        Self {
+            start: start.inner,
+            end: end.inner,
+            name,
+            descriptor,
+            index,
+        }
+    }
+
+    #[getter]
+    fn start(&self) -> PyLabel {
+        PyLabel::from(self.start.clone())
+    }
+
+    #[getter]
+    fn end(&self) -> PyLabel {
+        PyLabel::from(self.end.clone())
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.descriptor.clone()
+    }
+
+    #[getter]
+    fn index(&self) -> u16 {
+        self.index
+    }
+}
+
+#[pyclass(name = "LocalVariableTypeEntry", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyLocalVariableTypeEntry {
+    start: Label,
+    end: Label,
+    name: String,
+    signature: String,
+    index: u16,
+}
+
+#[pymethods]
+impl PyLocalVariableTypeEntry {
+    #[new]
+    fn new(start: PyLabel, end: PyLabel, name: String, signature: String, index: u16) -> Self {
+        Self {
+            start: start.inner,
+            end: end.inner,
+            name,
+            signature,
+            index,
+        }
+    }
+
+    #[getter]
+    fn start(&self) -> PyLabel {
+        PyLabel::from(self.start.clone())
+    }
+
+    #[getter]
+    fn end(&self) -> PyLabel {
+        PyLabel::from(self.end.clone())
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[getter]
+    fn signature(&self) -> String {
+        self.signature.clone()
+    }
+
+    #[getter]
+    fn index(&self) -> u16 {
+        self.index
+    }
+}
+
+#[pyclass(name = "MethodHandleValue", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyMethodHandleValue {
+    inner: MethodHandleValue,
+}
+
+#[pymethods]
+impl PyMethodHandleValue {
+    #[new]
+    fn new(
+        reference_kind: u8,
+        owner: String,
+        name: String,
+        descriptor: String,
+        is_interface: bool,
+    ) -> Self {
+        Self {
+            inner: MethodHandleValue {
+                reference_kind,
+                owner,
+                name,
+                descriptor,
+                is_interface,
+            },
+        }
+    }
+
+    #[getter]
+    fn reference_kind(&self) -> u8 {
+        self.inner.reference_kind
+    }
+
+    #[getter]
+    fn owner(&self) -> String {
+        self.inner.owner.clone()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+
+    #[getter]
+    fn is_interface(&self) -> bool {
+        self.inner.is_interface
+    }
+}
+
+#[pyclass(name = "DynamicValue", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyDynamicValue {
+    inner: DynamicValue,
+}
+
+#[pymethods]
+impl PyDynamicValue {
+    #[new]
+    fn new(bootstrap_method_attr_index: u16, name: String, descriptor: String) -> Self {
+        Self {
+            inner: DynamicValue {
+                bootstrap_method_attr_index: BootstrapMethodIndex::new(bootstrap_method_attr_index),
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[getter]
+    fn bootstrap_method_attr_index(&self) -> u16 {
+        self.inner.bootstrap_method_attr_index.value()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+}
+
+#[pyclass(name = "RawInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyRawInsn {
+    opcode: u8,
+}
+
+#[pymethods]
+impl PyRawInsn {
+    #[new]
+    fn new(opcode: u8) -> Self {
+        Self { opcode }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "raw"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.opcode
+    }
+}
+
+#[pyclass(name = "ByteInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyByteInsn {
+    opcode: u8,
+    value: i8,
+}
+
+#[pymethods]
+impl PyByteInsn {
+    #[new]
+    fn new(opcode: u8, value: i8) -> Self {
+        Self { opcode, value }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "byte"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    #[getter]
+    fn value(&self) -> i8 {
+        self.value
+    }
+}
+
+#[pyclass(name = "ShortInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyShortInsn {
+    opcode: u8,
+    value: i16,
+}
+
+#[pymethods]
+impl PyShortInsn {
+    #[new]
+    fn new(opcode: u8, value: i16) -> Self {
+        Self { opcode, value }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "short"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    #[getter]
+    fn value(&self) -> i16 {
+        self.value
+    }
+}
+
+#[pyclass(name = "NewArrayInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyNewArrayInsn {
+    atype: u8,
+}
+
+#[pymethods]
+impl PyNewArrayInsn {
+    #[new]
+    fn new(atype: u8) -> PyResult<Self> {
+        ArrayType::try_from(atype)
+            .map(|_| Self { atype })
+            .map_err(|err| code_item_value_error(format!("invalid newarray atype: {err}")))
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "newarray"
+    }
+
+    #[getter]
+    fn atype(&self) -> u8 {
+        self.atype
+    }
+}
+
+#[pyclass(name = "FieldInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyFieldInsn {
+    inner: FieldInsn,
+}
+
+#[pymethods]
+impl PyFieldInsn {
+    #[new]
+    fn new(opcode: u8, owner: String, name: String, descriptor: String) -> Self {
+        Self {
+            inner: FieldInsn {
+                opcode,
+                owner,
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "field"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+
+    #[getter]
+    fn owner(&self) -> String {
+        self.inner.owner.clone()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+}
+
+#[pyclass(name = "MethodInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyMethodInsn {
+    inner: MethodInsn,
+}
+
+#[pymethods]
+impl PyMethodInsn {
+    #[new]
+    #[pyo3(signature = (opcode, owner, name, descriptor, is_interface=false))]
+    fn new(
+        opcode: u8,
+        owner: String,
+        name: String,
+        descriptor: String,
+        is_interface: bool,
+    ) -> Self {
+        Self {
+            inner: MethodInsn {
+                opcode,
+                owner,
+                name,
+                descriptor,
+                is_interface,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "method"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+
+    #[getter]
+    fn owner(&self) -> String {
+        self.inner.owner.clone()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+
+    #[getter]
+    fn is_interface(&self) -> bool {
+        self.inner.is_interface
+    }
+}
+
+#[pyclass(name = "InterfaceMethodInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyInterfaceMethodInsn {
+    inner: InterfaceMethodInsn,
+}
+
+#[pymethods]
+impl PyInterfaceMethodInsn {
+    #[new]
+    fn new(owner: String, name: String, descriptor: String) -> Self {
+        Self {
+            inner: InterfaceMethodInsn {
+                owner,
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "interface_method"
+    }
+
+    #[getter]
+    fn owner(&self) -> String {
+        self.inner.owner.clone()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+}
+
+#[pyclass(name = "TypeInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyTypeInsn {
+    inner: TypeInsn,
+}
+
+#[pymethods]
+impl PyTypeInsn {
+    #[new]
+    fn new(opcode: u8, descriptor: String) -> Self {
+        Self {
+            inner: TypeInsn { opcode, descriptor },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "type"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+}
+
+#[pyclass(name = "VarInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyVarInsn {
+    inner: VarInsn,
+}
+
+#[pymethods]
+impl PyVarInsn {
+    #[new]
+    fn new(opcode: u8, slot: u16) -> Self {
+        Self {
+            inner: VarInsn { opcode, slot },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "var"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+
+    #[getter]
+    fn slot(&self) -> u16 {
+        self.inner.slot
+    }
+}
+
+#[pyclass(name = "IIncInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyIIncInsn {
+    inner: IIncInsn,
+}
+
+#[pymethods]
+impl PyIIncInsn {
+    #[new]
+    fn new(slot: u16, value: i16) -> Self {
+        Self {
+            inner: IIncInsn { slot, value },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "iinc"
+    }
+
+    #[getter]
+    fn slot(&self) -> u16 {
+        self.inner.slot
+    }
+
+    #[getter]
+    fn value(&self) -> i16 {
+        self.inner.value
+    }
+}
+
+#[pyclass(name = "LdcInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyLdcInsn {
+    inner: LdcInsn,
+}
+
+#[pymethods]
+impl PyLdcInsn {
+    #[staticmethod]
+    fn int(value: u32) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::Int(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn float_bits(value: u32) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::FloatBits(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn long(value: u64) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::Long(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn double_bits(value: u64) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::DoubleBits(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn string(value: String) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::String(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn class_value(value: String) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::Class(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn method_type(value: String) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::MethodType(value),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn method_handle(
+        reference_kind: u8,
+        owner: String,
+        name: String,
+        descriptor: String,
+        is_interface: bool,
+    ) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::MethodHandle(MethodHandleValue {
+                    reference_kind,
+                    owner,
+                    name,
+                    descriptor,
+                    is_interface,
+                }),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn dynamic(bootstrap_method_attr_index: u16, name: String, descriptor: String) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::Dynamic(DynamicValue {
+                    bootstrap_method_attr_index: BootstrapMethodIndex::new(
+                        bootstrap_method_attr_index,
+                    ),
+                    name,
+                    descriptor,
+                }),
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "ldc"
+    }
+
+    #[getter]
+    fn value_type(&self) -> &'static str {
+        match &self.inner.value {
+            LdcValue::Int(_) => "int",
+            LdcValue::FloatBits(_) => "float",
+            LdcValue::Long(_) => "long",
+            LdcValue::DoubleBits(_) => "double",
+            LdcValue::String(_) => "string",
+            LdcValue::Class(_) => "class",
+            LdcValue::MethodType(_) => "method_type",
+            LdcValue::MethodHandle(_) => "method_handle",
+            LdcValue::Dynamic(_) => "dynamic",
+        }
+    }
+
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match &self.inner.value {
+            LdcValue::Int(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::FloatBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::Long(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::DoubleBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::String(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::Class(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::MethodType(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            LdcValue::MethodHandle(value) => wrap_method_handle_value(py, value),
+            LdcValue::Dynamic(value) => wrap_dynamic_value(py, value),
+        }
+    }
+}
+
+#[pyclass(name = "InvokeDynamicInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyInvokeDynamicInsn {
+    inner: InvokeDynamicInsn,
+}
+
+#[pymethods]
+impl PyInvokeDynamicInsn {
+    #[new]
+    fn new(bootstrap_method_attr_index: u16, name: String, descriptor: String) -> Self {
+        Self {
+            inner: InvokeDynamicInsn {
+                bootstrap_method_attr_index: BootstrapMethodIndex::new(bootstrap_method_attr_index),
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "invokedynamic"
+    }
+
+    #[getter]
+    fn bootstrap_method_attr_index(&self) -> u16 {
+        self.inner.bootstrap_method_attr_index.value()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+}
+
+#[pyclass(name = "MultiANewArrayInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyMultiANewArrayInsn {
+    inner: MultiANewArrayInsn,
+}
+
+#[pymethods]
+impl PyMultiANewArrayInsn {
+    #[new]
+    fn new(descriptor: String, dimensions: u8) -> Self {
+        Self {
+            inner: MultiANewArrayInsn {
+                descriptor,
+                dimensions,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "multianewarray"
+    }
+
+    #[getter]
+    fn descriptor(&self) -> String {
+        self.inner.descriptor.clone()
+    }
+
+    #[getter]
+    fn dimensions(&self) -> u8 {
+        self.inner.dimensions
+    }
+}
+
+#[pyclass(name = "BranchInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyBranchInsn {
+    inner: BranchInsn,
+}
+
+#[pymethods]
+impl PyBranchInsn {
+    #[new]
+    fn new(opcode: u8, target: PyLabel) -> Self {
+        Self {
+            inner: BranchInsn {
+                opcode,
+                target: target.inner,
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "branch"
+    }
+
+    #[getter]
+    fn opcode(&self) -> u8 {
+        self.inner.opcode
+    }
+
+    #[getter]
+    fn target(&self) -> PyLabel {
+        PyLabel::from(self.inner.target.clone())
+    }
+}
+
+#[pyclass(name = "LookupSwitchInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyLookupSwitchInsn {
+    inner: LookupSwitchInsn,
+}
+
+#[pymethods]
+impl PyLookupSwitchInsn {
+    #[new]
+    fn new(default_target: PyLabel, pairs: Vec<(i32, PyLabel)>) -> Self {
+        Self {
+            inner: LookupSwitchInsn {
+                default_target: default_target.inner,
+                pairs: pairs
+                    .into_iter()
+                    .map(|(key, label)| (key, label.inner))
+                    .collect(),
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "lookupswitch"
+    }
+
+    #[getter]
+    fn default_target(&self) -> PyLabel {
+        PyLabel::from(self.inner.default_target.clone())
+    }
+
+    #[getter]
+    fn pairs(&self) -> Vec<(i32, PyLabel)> {
+        self.inner
+            .pairs
+            .iter()
+            .map(|(key, label)| (*key, PyLabel::from(label.clone())))
+            .collect()
+    }
+}
+
+#[pyclass(name = "TableSwitchInsn", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyTableSwitchInsn {
+    inner: TableSwitchInsn,
+}
+
+#[pymethods]
+impl PyTableSwitchInsn {
+    #[new]
+    fn new(default_target: PyLabel, low: i32, high: i32, targets: Vec<PyLabel>) -> Self {
+        Self {
+            inner: TableSwitchInsn {
+                default_target: default_target.inner,
+                low,
+                high,
+                targets: targets.into_iter().map(|label| label.inner).collect(),
+            },
+        }
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "tableswitch"
+    }
+
+    #[getter]
+    fn default_target(&self) -> PyLabel {
+        PyLabel::from(self.inner.default_target.clone())
+    }
+
+    #[getter]
+    fn low(&self) -> i32 {
+        self.inner.low
+    }
+
+    #[getter]
+    fn high(&self) -> i32 {
+        self.inner.high
+    }
+
+    #[getter]
+    fn targets(&self) -> Vec<PyLabel> {
+        self.inner
+            .targets
+            .iter()
+            .cloned()
+            .map(PyLabel::from)
+            .collect()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CodeItem → Python dict helper
 // ---------------------------------------------------------------------------
@@ -262,165 +1189,331 @@ fn wrap_label(py: Python<'_>, label: &Label) -> PyResult<PyObject> {
     Ok(Py::new(py, PyLabel::from(label.clone()))?.into_any())
 }
 
-fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    match item {
-        CodeItem::Label(label) => {
-            dict.set_item("type", "label")?;
-            dict.set_item("label", wrap_label(py, label)?)?;
+fn wrap_method_handle_value(py: Python<'_>, value: &MethodHandleValue) -> PyResult<PyObject> {
+    Ok(Py::new(
+        py,
+        PyMethodHandleValue {
+            inner: value.clone(),
+        },
+    )?
+    .into_any())
+}
+
+fn wrap_dynamic_value(py: Python<'_>, value: &DynamicValue) -> PyResult<PyObject> {
+    Ok(Py::new(
+        py,
+        PyDynamicValue {
+            inner: value.clone(),
+        },
+    )?
+    .into_any())
+}
+
+fn code_item_value_error(message: impl Into<String>) -> PyErr {
+    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+}
+
+fn required_code_item_key<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    dict.get_item(key)?
+        .ok_or_else(|| code_item_value_error(format!("code item missing required key {key:?}")))
+}
+
+fn extract_label(item: &Bound<'_, PyAny>) -> PyResult<Label> {
+    item.extract::<PyRef<'_, PyLabel>>()
+        .map(|label| label.inner.clone())
+        .map_err(|_| code_item_value_error("expected Label for code item label field"))
+}
+
+fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
+    let item_type = required_code_item_key(dict, "type")?.extract::<String>()?;
+
+    match item_type.as_str() {
+        "label" => Ok(CodeItem::Label(extract_label(&required_code_item_key(
+            dict, "label",
+        )?)?)),
+        "raw" => Ok(CodeItem::Raw(Instruction::Simple {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            offset: 0,
+        })),
+        "byte" => Ok(CodeItem::Raw(Instruction::Byte {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            offset: 0,
+            value: required_code_item_key(dict, "value")?.extract()?,
+        })),
+        "short" => Ok(CodeItem::Raw(Instruction::Short {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            offset: 0,
+            value: required_code_item_key(dict, "value")?.extract()?,
+        })),
+        "newarray" => {
+            let atype =
+                ArrayType::try_from(required_code_item_key(dict, "atype")?.extract::<u8>()?)
+                    .map_err(|err| {
+                        code_item_value_error(format!("invalid newarray atype: {err}"))
+                    })?;
+            Ok(CodeItem::Raw(Instruction::NewArray(NewArrayInsn {
+                offset: 0,
+                atype,
+            })))
         }
-        CodeItem::Raw(insn) => {
-            dict.set_item("opcode", insn.opcode())?;
-            match insn {
-                pytecode_engine::raw::Instruction::Byte { value, .. } => {
-                    dict.set_item("type", "byte")?;
-                    dict.set_item("value", *value)?;
+        "field" => Ok(CodeItem::Field(FieldInsn {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            owner: required_code_item_key(dict, "owner")?.extract()?,
+            name: required_code_item_key(dict, "name")?.extract()?,
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+        })),
+        "method" => Ok(CodeItem::Method(MethodInsn {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            owner: required_code_item_key(dict, "owner")?.extract()?,
+            name: required_code_item_key(dict, "name")?.extract()?,
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+            is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
+        })),
+        "interface_method" => Ok(CodeItem::InterfaceMethod(InterfaceMethodInsn {
+            owner: required_code_item_key(dict, "owner")?.extract()?,
+            name: required_code_item_key(dict, "name")?.extract()?,
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+        })),
+        "type" => Ok(CodeItem::Type(TypeInsn {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+        })),
+        "var" => Ok(CodeItem::Var(VarInsn {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            slot: required_code_item_key(dict, "slot")?.extract()?,
+        })),
+        "iinc" => Ok(CodeItem::IInc(IIncInsn {
+            slot: required_code_item_key(dict, "slot")?.extract()?,
+            value: required_code_item_key(dict, "value")?.extract()?,
+        })),
+        "ldc" => {
+            let value_type = required_code_item_key(dict, "value_type")?.extract::<String>()?;
+            let value = match value_type.as_str() {
+                "int" => LdcValue::Int(required_code_item_key(dict, "value")?.extract()?),
+                "float" => LdcValue::FloatBits(required_code_item_key(dict, "value")?.extract()?),
+                "long" => LdcValue::Long(required_code_item_key(dict, "value")?.extract()?),
+                "double" => LdcValue::DoubleBits(required_code_item_key(dict, "value")?.extract()?),
+                "string" => LdcValue::String(required_code_item_key(dict, "value")?.extract()?),
+                "class" => LdcValue::Class(required_code_item_key(dict, "value")?.extract()?),
+                "method_type" => {
+                    LdcValue::MethodType(required_code_item_key(dict, "value")?.extract()?)
                 }
-                pytecode_engine::raw::Instruction::Short { value, .. } => {
-                    dict.set_item("type", "short")?;
-                    dict.set_item("value", *value)?;
+                "method_handle" => LdcValue::MethodHandle(MethodHandleValue {
+                    reference_kind: required_code_item_key(dict, "reference_kind")?.extract()?,
+                    owner: required_code_item_key(dict, "owner")?.extract()?,
+                    name: required_code_item_key(dict, "name")?.extract()?,
+                    descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+                    is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
+                }),
+                "dynamic" => LdcValue::Dynamic(DynamicValue {
+                    bootstrap_method_attr_index: BootstrapMethodIndex::new(
+                        required_code_item_key(dict, "bootstrap_method_attr_index")?.extract()?,
+                    ),
+                    name: required_code_item_key(dict, "name")?.extract()?,
+                    descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+                }),
+                other => {
+                    return Err(code_item_value_error(format!(
+                        "unsupported ldc value_type {other:?}"
+                    )));
                 }
-                pytecode_engine::raw::Instruction::NewArray(na) => {
-                    dict.set_item("type", "newarray")?;
-                    dict.set_item("atype", na.atype as u8)?;
-                }
-                _ => {
-                    dict.set_item("type", "raw")?;
-                }
-            }
+            };
+            Ok(CodeItem::Ldc(LdcInsn { value }))
         }
-        CodeItem::Field(f) => {
-            dict.set_item("type", "field")?;
-            dict.set_item("opcode", f.opcode)?;
-            dict.set_item("owner", &f.owner)?;
-            dict.set_item("name", &f.name)?;
-            dict.set_item("descriptor", &f.descriptor)?;
-        }
-        CodeItem::Method(m) => {
-            dict.set_item("type", "method")?;
-            dict.set_item("opcode", m.opcode)?;
-            dict.set_item("owner", &m.owner)?;
-            dict.set_item("name", &m.name)?;
-            dict.set_item("descriptor", &m.descriptor)?;
-            dict.set_item("is_interface", m.is_interface)?;
-        }
-        CodeItem::InterfaceMethod(im) => {
-            dict.set_item("type", "interface_method")?;
-            dict.set_item("owner", &im.owner)?;
-            dict.set_item("name", &im.name)?;
-            dict.set_item("descriptor", &im.descriptor)?;
-        }
-        CodeItem::Type(t) => {
-            dict.set_item("type", "type")?;
-            dict.set_item("opcode", t.opcode)?;
-            dict.set_item("descriptor", &t.descriptor)?;
-        }
-        CodeItem::Var(v) => {
-            dict.set_item("type", "var")?;
-            dict.set_item("opcode", v.opcode)?;
-            dict.set_item("slot", v.slot)?;
-        }
-        CodeItem::IInc(ii) => {
-            dict.set_item("type", "iinc")?;
-            dict.set_item("slot", ii.slot)?;
-            dict.set_item("value", ii.value)?;
-        }
-        CodeItem::Ldc(ldc) => {
-            dict.set_item("type", "ldc")?;
-            match &ldc.value {
-                LdcValue::Int(v) => {
-                    dict.set_item("value_type", "int")?;
-                    dict.set_item("value", *v)?;
-                }
-                LdcValue::FloatBits(v) => {
-                    dict.set_item("value_type", "float")?;
-                    dict.set_item("value", *v)?;
-                }
-                LdcValue::Long(v) => {
-                    dict.set_item("value_type", "long")?;
-                    dict.set_item("value", *v)?;
-                }
-                LdcValue::DoubleBits(v) => {
-                    dict.set_item("value_type", "double")?;
-                    dict.set_item("value", *v)?;
-                }
-                LdcValue::String(v) => {
-                    dict.set_item("value_type", "string")?;
-                    dict.set_item("value", v.as_str())?;
-                }
-                LdcValue::Class(v) => {
-                    dict.set_item("value_type", "class")?;
-                    dict.set_item("value", v.as_str())?;
-                }
-                LdcValue::MethodType(v) => {
-                    dict.set_item("value_type", "method_type")?;
-                    dict.set_item("value", v.as_str())?;
-                }
-                LdcValue::MethodHandle(mh) => {
-                    dict.set_item("value_type", "method_handle")?;
-                    dict.set_item("reference_kind", mh.reference_kind)?;
-                    dict.set_item("owner", &mh.owner)?;
-                    dict.set_item("name", &mh.name)?;
-                    dict.set_item("descriptor", &mh.descriptor)?;
-                    dict.set_item("is_interface", mh.is_interface)?;
-                }
-                LdcValue::Dynamic(dv) => {
-                    dict.set_item("value_type", "dynamic")?;
-                    dict.set_item(
-                        "bootstrap_method_attr_index",
-                        dv.bootstrap_method_attr_index.value(),
-                    )?;
-                    dict.set_item("name", &dv.name)?;
-                    dict.set_item("descriptor", &dv.descriptor)?;
-                }
-            }
-        }
-        CodeItem::InvokeDynamic(id) => {
-            dict.set_item("type", "invokedynamic")?;
-            dict.set_item(
-                "bootstrap_method_attr_index",
-                id.bootstrap_method_attr_index.value(),
-            )?;
-            dict.set_item("name", &id.name)?;
-            dict.set_item("descriptor", &id.descriptor)?;
-        }
-        CodeItem::MultiANewArray(m) => {
-            dict.set_item("type", "multianewarray")?;
-            dict.set_item("descriptor", &m.descriptor)?;
-            dict.set_item("dimensions", m.dimensions)?;
-        }
-        CodeItem::Branch(b) => {
-            dict.set_item("type", "branch")?;
-            dict.set_item("opcode", b.opcode)?;
-            dict.set_item("target", wrap_label(py, &b.target)?)?;
-        }
-        CodeItem::LookupSwitch(ls) => {
-            dict.set_item("type", "lookupswitch")?;
-            dict.set_item("default_target", wrap_label(py, &ls.default_target)?)?;
-            let pairs = ls
-                .pairs
+        "invokedynamic" => Ok(CodeItem::InvokeDynamic(InvokeDynamicInsn {
+            bootstrap_method_attr_index: BootstrapMethodIndex::new(
+                required_code_item_key(dict, "bootstrap_method_attr_index")?.extract()?,
+            ),
+            name: required_code_item_key(dict, "name")?.extract()?,
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+        })),
+        "multianewarray" => Ok(CodeItem::MultiANewArray(MultiANewArrayInsn {
+            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+            dimensions: required_code_item_key(dict, "dimensions")?.extract()?,
+        })),
+        "branch" => Ok(CodeItem::Branch(BranchInsn {
+            opcode: required_code_item_key(dict, "opcode")?.extract()?,
+            target: extract_label(&required_code_item_key(dict, "target")?)?,
+        })),
+        "lookupswitch" => {
+            let pairs = required_code_item_key(dict, "pairs")?
+                .downcast::<PyList>()
+                .map_err(|_| code_item_value_error("lookupswitch pairs must be a list"))?
                 .iter()
-                .map(|(key, label)| -> PyResult<PyObject> {
-                    let tuple = (key, wrap_label(py, label)?);
-                    Ok(tuple.into_pyobject(py)?.into_any().unbind())
+                .map(|entry| {
+                    let (key, label_obj): (i32, PyObject) = entry.extract()?;
+                    Ok((key, extract_label(label_obj.bind(entry.py()))?))
                 })
                 .collect::<PyResult<Vec<_>>>()?;
-            dict.set_item("pairs", pairs)?;
+            Ok(CodeItem::LookupSwitch(LookupSwitchInsn {
+                default_target: extract_label(&required_code_item_key(dict, "default_target")?)?,
+                pairs,
+            }))
+        }
+        "tableswitch" => {
+            let targets = required_code_item_key(dict, "targets")?
+                .downcast::<PyList>()
+                .map_err(|_| code_item_value_error("tableswitch targets must be a list"))?
+                .iter()
+                .map(|target| extract_label(&target))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(CodeItem::TableSwitch(TableSwitchInsn {
+                default_target: extract_label(&required_code_item_key(dict, "default_target")?)?,
+                low: required_code_item_key(dict, "low")?.extract()?,
+                high: required_code_item_key(dict, "high")?.extract()?,
+                targets,
+            }))
+        }
+        other => Err(code_item_value_error(format!(
+            "unsupported code item type {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn extract_code_item(item: &Bound<'_, PyAny>) -> PyResult<CodeItem> {
+    if let Ok(label) = item.extract::<PyRef<'_, PyLabel>>() {
+        return Ok(CodeItem::Label(label.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyRawInsn>>() {
+        return Ok(CodeItem::Raw(Instruction::Simple {
+            opcode: insn.opcode,
+            offset: 0,
+        }));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyByteInsn>>() {
+        return Ok(CodeItem::Raw(Instruction::Byte {
+            opcode: insn.opcode,
+            offset: 0,
+            value: insn.value,
+        }));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyShortInsn>>() {
+        return Ok(CodeItem::Raw(Instruction::Short {
+            opcode: insn.opcode,
+            offset: 0,
+            value: insn.value,
+        }));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyNewArrayInsn>>() {
+        let atype = ArrayType::try_from(insn.atype)
+            .map_err(|err| code_item_value_error(format!("invalid newarray atype: {err}")))?;
+        return Ok(CodeItem::Raw(Instruction::NewArray(NewArrayInsn {
+            offset: 0,
+            atype,
+        })));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyFieldInsn>>() {
+        return Ok(CodeItem::Field(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyMethodInsn>>() {
+        return Ok(CodeItem::Method(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyInterfaceMethodInsn>>() {
+        return Ok(CodeItem::InterfaceMethod(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyTypeInsn>>() {
+        return Ok(CodeItem::Type(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyVarInsn>>() {
+        return Ok(CodeItem::Var(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyIIncInsn>>() {
+        return Ok(CodeItem::IInc(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyLdcInsn>>() {
+        return Ok(CodeItem::Ldc(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyInvokeDynamicInsn>>() {
+        return Ok(CodeItem::InvokeDynamic(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyMultiANewArrayInsn>>() {
+        return Ok(CodeItem::MultiANewArray(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyBranchInsn>>() {
+        return Ok(CodeItem::Branch(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyLookupSwitchInsn>>() {
+        return Ok(CodeItem::LookupSwitch(insn.inner.clone()));
+    }
+    if let Ok(insn) = item.extract::<PyRef<'_, PyTableSwitchInsn>>() {
+        return Ok(CodeItem::TableSwitch(insn.inner.clone()));
+    }
+    if let Ok(dict) = item.downcast::<PyDict>() {
+        return extract_code_item_dict(&dict);
+    }
+    Err(code_item_value_error(
+        "code items must be typed instruction objects or legacy dicts produced by CodeModel.instructions",
+    ))
+}
+
+pub(crate) fn extract_code_items(py: Python<'_>, items: Vec<PyObject>) -> PyResult<Vec<CodeItem>> {
+    items
+        .into_iter()
+        .map(|item| extract_code_item(item.bind(py)))
+        .collect()
+}
+
+fn wrap_code_item(py: Python<'_>, item: &CodeItem) -> PyResult<PyObject> {
+    match item {
+        CodeItem::Label(label) => wrap_label(py, label),
+        CodeItem::Raw(insn) => match insn {
+            Instruction::Byte { opcode, value, .. } => Ok(Py::new(
+                py,
+                PyByteInsn {
+                    opcode: *opcode,
+                    value: *value,
+                },
+            )?
+            .into_any()),
+            Instruction::Short { opcode, value, .. } => Ok(Py::new(
+                py,
+                PyShortInsn {
+                    opcode: *opcode,
+                    value: *value,
+                },
+            )?
+            .into_any()),
+            Instruction::NewArray(na) => Ok(Py::new(
+                py,
+                PyNewArrayInsn {
+                    atype: na.atype as u8,
+                },
+            )?
+            .into_any()),
+            _ => Ok(Py::new(
+                py,
+                PyRawInsn {
+                    opcode: insn.opcode(),
+                },
+            )?
+            .into_any()),
+        },
+        CodeItem::Field(f) => Ok(Py::new(py, PyFieldInsn { inner: f.clone() })?.into_any()),
+        CodeItem::Method(m) => Ok(Py::new(py, PyMethodInsn { inner: m.clone() })?.into_any()),
+        CodeItem::InterfaceMethod(im) => {
+            Ok(Py::new(py, PyInterfaceMethodInsn { inner: im.clone() })?.into_any())
+        }
+        CodeItem::Type(t) => Ok(Py::new(py, PyTypeInsn { inner: t.clone() })?.into_any()),
+        CodeItem::Var(v) => Ok(Py::new(py, PyVarInsn { inner: v.clone() })?.into_any()),
+        CodeItem::IInc(ii) => Ok(Py::new(py, PyIIncInsn { inner: ii.clone() })?.into_any()),
+        CodeItem::Ldc(ldc) => Ok(Py::new(py, PyLdcInsn { inner: ldc.clone() })?.into_any()),
+        CodeItem::InvokeDynamic(id) => {
+            Ok(Py::new(py, PyInvokeDynamicInsn { inner: id.clone() })?.into_any())
+        }
+        CodeItem::MultiANewArray(m) => {
+            Ok(Py::new(py, PyMultiANewArrayInsn { inner: m.clone() })?.into_any())
+        }
+        CodeItem::Branch(b) => Ok(Py::new(py, PyBranchInsn { inner: b.clone() })?.into_any()),
+        CodeItem::LookupSwitch(ls) => {
+            Ok(Py::new(py, PyLookupSwitchInsn { inner: ls.clone() })?.into_any())
         }
         CodeItem::TableSwitch(ts) => {
-            dict.set_item("type", "tableswitch")?;
-            dict.set_item("default_target", wrap_label(py, &ts.default_target)?)?;
-            dict.set_item("low", ts.low)?;
-            dict.set_item("high", ts.high)?;
-            let targets = ts
-                .targets
-                .iter()
-                .map(|label| wrap_label(py, label))
-                .collect::<PyResult<Vec<_>>>()?;
-            dict.set_item("targets", targets)?;
+            Ok(Py::new(py, PyTableSwitchInsn { inner: ts.clone() })?.into_any())
         }
     }
-    Ok(dict.into_any().unbind())
 }
 
 // ---------------------------------------------------------------------------
@@ -985,6 +2078,71 @@ impl PyCodeModel {
                 .nested_attribute_layout()
                 .iter()
                 .map(|s| s.to_string())
+                .collect())
+        })
+    }
+
+    fn find_insns(&self, matcher: &PyInsnMatcher) -> PyResult<Vec<usize>> {
+        let matcher = matcher.spec.compile();
+        self.with_code(|code| {
+            Ok(code
+                .instructions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| matcher.matches(item).then_some(index))
+                .collect())
+        })
+    }
+
+    #[pyo3(signature = (matcher, start=0))]
+    fn find_insn(&self, matcher: &PyInsnMatcher, start: usize) -> PyResult<Option<usize>> {
+        let matcher = matcher.spec.compile();
+        self.with_code(|code| {
+            Ok(code
+                .instructions
+                .iter()
+                .enumerate()
+                .skip(start)
+                .find_map(|(index, item)| matcher.matches(item).then_some(index)))
+        })
+    }
+
+    fn contains_insn(&self, matcher: &PyInsnMatcher) -> PyResult<bool> {
+        let matcher = matcher.spec.compile();
+        self.with_code(|code| Ok(code.instructions.iter().any(|item| matcher.matches(item))))
+    }
+
+    fn count_insns(&self, matcher: &PyInsnMatcher) -> PyResult<usize> {
+        let matcher = matcher.spec.compile();
+        self.with_code(|code| {
+            Ok(code
+                .instructions
+                .iter()
+                .filter(|item| matcher.matches(item))
+                .count())
+        })
+    }
+
+    fn find_sequences(&self, matchers: Vec<PyInsnMatcher>) -> PyResult<Vec<usize>> {
+        let matchers = matchers
+            .into_iter()
+            .map(|matcher| matcher.spec.compile())
+            .collect::<Vec<_>>();
+        self.with_code(|code| {
+            if matchers.is_empty() || matchers.len() > code.instructions.len() {
+                return Ok(Vec::new());
+            }
+            Ok(code
+                .instructions
+                .windows(matchers.len())
+                .enumerate()
+                .filter_map(|(index, window)| {
+                    matchers
+                        .iter()
+                        .zip(window.iter())
+                        .all(|(matcher, item)| matcher.matches(item))
+                        .then_some(index)
+                })
                 .collect())
         })
     }
@@ -1748,6 +2906,42 @@ pub(crate) fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
     }
 }
 
+fn parse_frame_mode_str(s: &str) -> PyResult<FrameComputationMode> {
+    match s {
+        "preserve" => Ok(FrameComputationMode::Preserve),
+        "recompute" => Ok(FrameComputationMode::Recompute),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "invalid frame mode: {s:?}, expected \"preserve\" or \"recompute\""
+        ))),
+    }
+}
+
+fn parse_frame_mode_value(frame_mode: &Bound<'_, PyAny>) -> PyResult<FrameComputationMode> {
+    let value = frame_mode
+        .getattr("value")
+        .map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "frame_mode must be a pytecode.archive.FrameComputationMode",
+            )
+        })?
+        .extract::<String>()
+        .map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "frame_mode must be a pytecode.archive.FrameComputationMode",
+            )
+        })?;
+    parse_frame_mode_str(&value)
+}
+
+pub(crate) fn parse_frame_computation_mode(
+    frame_mode: Option<&Bound<'_, PyAny>>,
+) -> PyResult<FrameComputationMode> {
+    Ok(match frame_mode {
+        Some(value) => parse_frame_mode_value(value)?,
+        None => FrameComputationMode::Preserve,
+    })
+}
+
 fn lower_class_model_bytes(
     model: &PyClassModel,
     debug_info: DebugInfoPolicy,
@@ -1789,19 +2983,15 @@ fn lower_class_model(
 }
 
 #[pyfunction]
-#[pyo3(signature = (models, recompute_frames = false, resolver = None, debug_info = "preserve"))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = "preserve"))]
 fn rust_lower_classmodels(
     models: &Bound<'_, PyList>,
-    recompute_frames: bool,
+    frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: &str,
 ) -> PyResult<Vec<PyClassFile>> {
     let policy = parse_debug_info_policy(debug_info)?;
-    let frame_mode = if recompute_frames {
-        FrameComputationMode::Recompute
-    } else {
-        FrameComputationMode::Preserve
-    };
+    let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
 
@@ -1817,20 +3007,16 @@ fn rust_lower_classmodels(
 }
 
 #[pyfunction]
-#[pyo3(signature = (models, recompute_frames = false, resolver = None, debug_info = "preserve"))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = "preserve"))]
 fn rust_lower_classmodels_to_bytes<'py>(
     py: Python<'py>,
     models: &Bound<'py, PyList>,
-    recompute_frames: bool,
+    frame_mode: Option<&Bound<'py, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: &str,
 ) -> PyResult<Vec<Py<PyBytes>>> {
     let policy = parse_debug_info_policy(debug_info)?;
-    let frame_mode = if recompute_frames {
-        FrameComputationMode::Recompute
-    } else {
-        FrameComputationMode::Preserve
-    };
+    let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
 
@@ -1914,20 +3100,16 @@ impl PyClassModel {
         })
     }
 
-    #[pyo3(signature = (recompute_frames = false, resolver = None, debug_info = "preserve"))]
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = "preserve"))]
     fn to_bytes_with_options<'py>(
         &self,
         py: Python<'py>,
-        recompute_frames: bool,
+        frame_mode: Option<&Bound<'py, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
         debug_info: &str,
     ) -> PyResult<Py<PyBytes>> {
         let policy = parse_debug_info_policy(debug_info)?;
-        let frame_mode = if recompute_frames {
-            FrameComputationMode::Recompute
-        } else {
-            FrameComputationMode::Preserve
-        };
+        let frame_mode = parse_frame_computation_mode(frame_mode)?;
         let bytes = lower_class_model_bytes(
             self,
             policy,
@@ -1937,19 +3119,15 @@ impl PyClassModel {
         Ok(PyBytes::new(py, &bytes).unbind())
     }
 
-    #[pyo3(signature = (recompute_frames = false, resolver = None, debug_info = "preserve"))]
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = "preserve"))]
     fn to_classfile_with_options(
         &self,
-        recompute_frames: bool,
+        frame_mode: Option<&Bound<'_, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
         debug_info: &str,
     ) -> PyResult<PyClassFile> {
         let policy = parse_debug_info_policy(debug_info)?;
-        let frame_mode = if recompute_frames {
-            FrameComputationMode::Recompute
-        } else {
-            FrameComputationMode::Preserve
-        };
+        let frame_mode = parse_frame_computation_mode(frame_mode)?;
         Ok(PyClassFile {
             inner: Arc::new(lower_class_model(
                 self,
@@ -2142,6 +3320,27 @@ pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add_class::<PyAttributeListView>()?;
     module.add_class::<PyCodeListView>()?;
     module.add_class::<PyLabel>()?;
+    module.add_class::<PyLineNumberEntry>()?;
+    module.add_class::<PyLocalVariableEntry>()?;
+    module.add_class::<PyLocalVariableTypeEntry>()?;
+    module.add_class::<PyMethodHandleValue>()?;
+    module.add_class::<PyDynamicValue>()?;
+    module.add_class::<PyRawInsn>()?;
+    module.add_class::<PyByteInsn>()?;
+    module.add_class::<PyShortInsn>()?;
+    module.add_class::<PyNewArrayInsn>()?;
+    module.add_class::<PyFieldInsn>()?;
+    module.add_class::<PyMethodInsn>()?;
+    module.add_class::<PyInterfaceMethodInsn>()?;
+    module.add_class::<PyTypeInsn>()?;
+    module.add_class::<PyVarInsn>()?;
+    module.add_class::<PyIIncInsn>()?;
+    module.add_class::<PyLdcInsn>()?;
+    module.add_class::<PyInvokeDynamicInsn>()?;
+    module.add_class::<PyMultiANewArrayInsn>()?;
+    module.add_class::<PyBranchInsn>()?;
+    module.add_class::<PyLookupSwitchInsn>()?;
+    module.add_class::<PyTableSwitchInsn>()?;
     module.add_class::<PyConstantPoolBuilder>()?;
     module.add_class::<PyMappingClassResolver>()?;
     module.add_class::<PyModelExceptionHandler>()?;

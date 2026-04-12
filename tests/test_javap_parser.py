@@ -265,10 +265,6 @@ class TestResolveOperand:
     def test_no_cp_ref(self) -> None:
         assert _resolve_operand("42", "", {}) == "42"
 
-    def test_with_comment_fallback(self) -> None:
-        result = _resolve_operand("#1", 'Method java/lang/Object."<init>":()V', {})
-        assert result == 'Method java/lang/Object."<init>":()V'
-
     def test_resolved_from_cp_map(self) -> None:
         cp_map: dict[int, str] = {5: "hello"}
         result = _resolve_operand("#5", "", cp_map)

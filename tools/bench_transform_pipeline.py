@@ -8,8 +8,8 @@ from __future__ import annotations
 import time
 import zipfile
 
-from pytecode._rust import ClassModel
 from pytecode.classfile.constants import ClassAccessFlag, MethodAccessFlag
+from pytecode.model import ClassModel
 from pytecode.transforms.class_transforms import add_access_flags
 from pytecode.transforms.matchers import class_is_public as rust_class_is_public
 from pytecode.transforms.matchers import has_code as rust_has_code

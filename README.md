@@ -36,7 +36,7 @@ uv add pytecode
 ```python
 from pathlib import Path
 
-from pytecode import ClassReader, ClassWriter
+from pytecode.classfile import ClassReader, ClassWriter
 
 reader = ClassReader.from_file("HelloWorld.class")
 classfile = reader.class_info
@@ -52,7 +52,7 @@ Path("HelloWorld-copy.class").write_bytes(ClassWriter.write(classfile))
 ```python
 from pathlib import Path
 
-from pytecode import ClassModel
+from pytecode.model import ClassModel
 
 model = ClassModel.from_bytes(Path("HelloWorld.class").read_bytes())
 print(model.name)
@@ -61,7 +61,7 @@ updated_bytes = model.to_bytes()
 Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 ```
 
-Use `to_bytes_with_options(recompute_frames=True)` when an edit changes control flow or stack/local layout.
+Import `FrameComputationMode` from `pytecode.archive` and use `to_bytes_with_options(frame_mode=FrameComputationMode.RECOMPUTE)` when an edit changes control flow or stack/local layout.
 
 ## JAR rewriting example
 
@@ -69,6 +69,7 @@ Use `to_bytes_with_options(recompute_frames=True)` when an edit changes control 
 
 ```python
 from pytecode import JarFile
+from pytecode.archive import FrameComputationMode
 from pytecode.transforms import (
     PipelineBuilder,
     add_access_flags,
@@ -96,7 +97,7 @@ JarFile("input.jar").rewrite(
 )
 ```
 
-For code-shape changes, pass `recompute_frames=True`. To strip debug metadata during rewrite, pass `skip_debug=True`.
+For code-shape changes, pass `frame_mode=FrameComputationMode.RECOMPUTE`. To strip debug metadata during rewrite, pass `skip_debug=True`.
 
 `JarFile.rewrite()` now routes archive rewriting through the Rust archive layer for supported cases, including in-memory archive edits and Rust-backed transforms. Pipelines that contain Python callback steps are rejected instead of falling back to a Python archive rewrite path.
 
@@ -107,6 +108,11 @@ Top-level exports:
 - `pytecode.ClassReader` / `pytecode.ClassWriter` for Rust-backed raw classfile parsing and emission.
 - `pytecode.ClassModel` for Rust-owned mutable editing.
 - `pytecode.JarFile` for Rust-backed archive reads and rewrite workflows.
+
+Canonical semantic modules:
+
+- `pytecode.classfile` for raw Rust-backed classfile reading and writing.
+- `pytecode.model` for editable class models, typed code items, labels, and code metadata wrappers.
 
 ### Rust-first API map
 
@@ -166,7 +172,140 @@ uv run python tools\benchmark_jar_pipeline.py crates\pytecode-engine\fixtures\ja
 uv run python tools\compare_rust_python_benchmarks.py --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5 --output output\benchmarks\rust-vs-python-byte-buddy.json
 cargo run -p pytecode-cli -- class-summary --path target\pytecode-rust-javac\release-8\HelloWorld\classes\HelloWorld.class
 cargo run -p pytecode-cli -- rewrite-smoke --jar input.jar --output output.jar --class-name HelloWorld
+cargo run -p pytecode-cli -- patch-jar --jar input.jar --output output.jar --rules rules.json
+uv run python examples\patch_jar.py --jar input.jar --output output.jar --rules rules.json
+cargo run -p pytecode-cli -- deobfuscate analyze --jar injected-client-1.12.22.1.jar
+cargo run -p pytecode-cli -- deobfuscate rewrite --jar injected-client-1.12.22.1.jar --output output\injected-client-cleaned.jar
+uv run python examples\deobfuscate.py analyze --jar injected-client-1.12.22.1.jar
+uv run python examples\deobfuscate.py rewrite --jar injected-client-1.12.22.1.jar --output output\injected-client-python-cleaned.jar
 ```
+
+`patch-jar` is the first real config-driven consumer of the Rust archive + transform stack. It reads a JSON rule file, rewrites matching classes in a JAR, and prints a JSON report with per-rule match/change counts.
+
+`examples\patch_jar.py` mirrors that workflow from Python and accepts the same `rules.json` shape, but applies it through the Python API.
+
+Example `rules.json`:
+
+```json
+{
+  "options": {
+    "debug_info": "preserve",
+    "frame_mode": "preserve"
+  },
+  "rules": [
+    {
+      "name": "finalize-main",
+      "kind": "method",
+      "owner": {
+        "name": "HelloWorld"
+      },
+      "matcher": {
+        "name": "main",
+        "access_all": ["public", "static"],
+        "has_code": true
+      },
+      "action": {
+        "type": "add-access-flags",
+        "flags": ["final"]
+      }
+    }
+  ]
+}
+```
+
+The first version supports:
+
+- class rules for access-flag edits, `set-super-class`, `add-interface`, and `remove-interface`
+- field rules for access-flag edits, `rename`, and `remove`
+- method rules for access-flag edits, `rename`, and `remove`
+- method `code_actions` for string replacement, method-call redirection, field-access redirection, opcode-based instruction removal, single-instruction replacement, before/after insertion, contiguous sequence replacement/removal, and grouped `sequence` action blocks
+
+Example sequence rewrite inside `code_actions`:
+
+```json
+{
+  "type": "replace-sequence",
+  "pattern": [
+    { "ldc_string": "Hello from fixture" },
+    {
+      "method_owner": "java/io/PrintStream",
+      "method_name": "println",
+      "method_descriptor": "(Ljava/lang/String;)V"
+    }
+  ],
+  "replacement": [
+    { "type": "ldc-string", "value": "patched via sequence action" },
+    {
+      "type": "method",
+      "opcode": 182,
+      "owner": "java/io/PrintStream",
+      "name": "print",
+      "descriptor": "(Ljava/lang/String;)V"
+    }
+  ]
+}
+```
+
+Sequence patterns use matcher objects (`opcode`, `opcode_any`, `method_owner`, `method_name`, `method_descriptor`, `field_owner`, `field_name`, `field_descriptor`, `ldc_string`, `var_slot`, `type_descriptor`, and the `is_*` category flags). Replacement items support symbolic instructions like `raw`, `ldc-string`, `field`, `method`, `type`, `var`, and `iinc`, plus label-based control-flow items.
+
+Replacement items can also express symbolic control flow with `label`, `branch`, `lookup-switch`, and `table-switch`. Branch and switch targets must reference labels declared inside the same replacement block, so malformed control-flow edits fail fast during plan loading instead of producing broken classfiles.
+
+Example grouped rewrite that patches one instruction and brackets another with inserted NOPs:
+
+```json
+[
+  {
+    "type": "replace-insn",
+    "matcher": { "ldc_string": "Hello from fixture" },
+    "replacement": [
+      { "type": "ldc-string", "value": "patched via replace-insn" }
+    ]
+  },
+  {
+    "type": "sequence",
+    "actions": [
+      {
+        "type": "insert-before",
+        "matcher": {
+          "method_owner": "java/io/PrintStream",
+          "method_name": "println",
+          "method_descriptor": "(Ljava/lang/String;)V"
+        },
+        "items": [{ "type": "raw", "opcode": 0 }]
+      },
+      {
+        "type": "insert-after",
+        "matcher": {
+          "method_owner": "java/io/PrintStream",
+          "method_name": "println",
+          "method_descriptor": "(Ljava/lang/String;)V"
+        },
+        "items": [{ "type": "raw", "opcode": 0 }]
+      }
+    ]
+  }
+]
+```
+
+`deobfuscate` is the higher-level workflow tool built on top of the same archive/model stack. It is aimed at jars like `injected-client`, where the goal is to inspect obfuscation signals first and then apply safe cleanup passes without hand-authoring JSON rules.
+
+`deobfuscate analyze` currently reports:
+
+- suspicious short-name class counts and samples
+- package concentration (`<root>` versus named packages)
+- `compilercontrol.json` JIT exclusion hints
+- hotspot classes by size/method count
+- classes with readable string constants that can anchor reverse-engineering work
+
+`deobfuscate rewrite` currently applies conservative bytecode cleanup:
+
+- remove `nop` instructions
+- remove unconditional `goto` instructions that already target the immediate fallthrough label
+- collapse unconditional `goto` chains to their terminal target
+
+Use `patch-jar` when you already know the exact bytecode rewrite you want and want a declarative rule file. Use `deobfuscate` when you want a product-shaped inspection/cleanup pass over an obfuscated jar, especially `injected-client`.
+
+If you want the same workflow from the Python side, `examples\deobfuscate.py` reimplements the deobfuscation analyze/rewrite flow on top of `pytecode.JarFile`, `ClassModel`, and Rust-backed Python transforms instead of shelling out to the Rust CLI. The Python rewrite path stays intentionally conservative today: it only strips `nop` instructions from straight-line methods, while the richer control-flow cleanup still lives in the Rust CLI implementation.
 
 Rust-owned fixtures now live under `crates\pytecode-engine\fixtures\`. Rust crate tests only read those copied fixture sources and do not invoke Python. The Rust harness lazily compiles `crates\pytecode-engine\fixtures\java\*.java` into `target\pytecode-rust-javac\...` and only reruns `javac` when the source bytes, required `--release`, or `javac` identity changes.
 

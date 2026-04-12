@@ -8,7 +8,7 @@ import pytest
 
 import pytecode
 import pytecode.archive as jar_module
-from pytecode.archive import JarFile, JarInfo
+from pytecode.archive import FrameComputationMode, JarFile, JarInfo
 from pytecode.classfile.constants import ClassAccessFlag
 from pytecode.transforms import PipelineBuilder, add_access_flags, class_named
 from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
@@ -583,6 +583,26 @@ def test_rewrite_supports_skip_debug_with_rust_pipeline_transform(tmp_path: Path
     assert not any(
         isinstance(attr, (rust.SourceFileAttr, rust.SourceDebugExtensionAttr)) for attr in class_info.attributes
     )
+
+
+def test_rewrite_accepts_frame_mode_enum(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "frame-mode-enum.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    jar.rewrite(out_path, transform=pipeline, frame_mode=FrameComputationMode.PRESERVE)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
 
 
 def test_rewrite_serializes_added_and_removed_entries(tmp_path: Path):

@@ -1,11 +1,13 @@
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
 use pytecode_engine::indexes::*;
 use pytecode_engine::model::{
-    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy, Label,
-    MethodModel, VarInsn, mark_class_debug_info_stale, mark_method_debug_info_stale,
+    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
+    DebugInfoState, Label, MethodModel, VarInsn, mark_class_debug_info_stale,
+    mark_method_debug_info_stale,
 };
 use pytecode_engine::modified_utf8::decode_modified_utf8;
 use pytecode_engine::raw::{AttributeInfo, ConstantPoolEntry, Instruction};
+use pytecode_engine::transform::{insn_is_label, insn_opcode, insn_var_slot};
 use pytecode_engine::{EngineErrorKind, parse_class};
 use std::fs;
 
@@ -151,6 +153,74 @@ fn raw_nop() -> CodeItem {
         opcode: 0x00,
         offset: 0,
     })
+}
+
+#[test]
+fn code_model_search_helpers_find_and_count_matches() {
+    let mut code = CodeModel::new(1, 1, DebugInfoState::Fresh);
+    let label = Label::named("start");
+    code.instructions = vec![
+        CodeItem::Label(label),
+        raw_nop(),
+        CodeItem::Var(VarInsn {
+            opcode: 0x15,
+            slot: 2,
+        }),
+        raw_nop(),
+    ];
+
+    assert_eq!(code.find_insns(&insn_opcode(0x00)), vec![1, 3]);
+    assert_eq!(code.find_insn(&insn_var_slot(2), 0), Some(2));
+    assert!(code.contains_insn(&insn_is_label()));
+    assert_eq!(code.count_insns(&insn_opcode(0x00)), 2);
+    assert_eq!(
+        code.find_sequences(&[insn_opcode(0x00), insn_var_slot(2)]),
+        vec![1]
+    );
+}
+
+#[test]
+fn code_model_edit_helpers_replace_insert_and_remove() {
+    let mut code = CodeModel::new(1, 1, DebugInfoState::Fresh);
+    code.instructions = vec![raw_nop(), raw_nop()];
+
+    assert_eq!(code.insert_before(&insn_opcode(0x00), &[raw_nop()]), 2);
+    assert_eq!(code.instructions.len(), 4);
+    assert_eq!(code.insert_after(&insn_opcode(0x00), &[raw_nop()]), 4);
+    assert_eq!(code.instructions.len(), 8);
+    assert_eq!(code.replace_insns(&insn_opcode(0x00), &[]), 8);
+    assert!(code.instructions.is_empty());
+}
+
+#[test]
+fn code_model_sequence_edit_helpers_use_non_overlapping_matches() {
+    let mut code = CodeModel::new(1, 1, DebugInfoState::Fresh);
+    code.instructions = vec![raw_nop(), raw_nop(), raw_nop(), raw_nop(), raw_nop()];
+
+    assert_eq!(
+        code.replace_sequences(
+            &[insn_opcode(0x00), insn_opcode(0x00)],
+            &[CodeItem::Var(VarInsn {
+                opcode: 0x15,
+                slot: 7,
+            })]
+        ),
+        2
+    );
+    assert_eq!(code.instructions.len(), 3);
+    assert_eq!(
+        code.find_insns(&insn_var_slot(7)),
+        vec![0, 1],
+        "sequence replacement should skip overlaps"
+    );
+    assert_eq!(code.count_insns(&insn_opcode(0x00)), 1);
+
+    assert_eq!(
+        code.remove_sequences(&[insn_var_slot(7), insn_var_slot(7)]),
+        1
+    );
+    assert_eq!(code.instructions.len(), 1);
+    assert_eq!(code.count_insns(&insn_opcode(0x00)), 1);
 }
 
 fn install_jsr_subroutine(code: &mut CodeModel) {

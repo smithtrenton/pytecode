@@ -107,7 +107,7 @@ Construction and lowering options that matter publicly:
 | Option | Where | Meaning |
 |---|---|---|
 | `skip_debug=True` | lift phase | omit debug metadata when building `ClassModel` |
-| `recompute_frames=True` | lower phase | recompute `max_stack`, `max_locals`, and `StackMapTable` |
+| `frame_mode=FrameComputationMode.RECOMPUTE` | lower phase | recompute `max_stack`, `max_locals`, and `StackMapTable` |
 | `resolver=...` | lower phase | supply class hierarchy information for frame computation |
 | `debug_info="preserve"` or `debug_info="strip"` | lower phase | preserve or strip debug metadata during emission |
 
@@ -124,7 +124,7 @@ Main public raw-model modules:
 | `pytecode.classfile.info` | top-level `ClassFile`, `FieldInfo`, `MethodInfo` |
 | `pytecode.classfile.constant_pool` | all constant-pool entry dataclasses |
 | `pytecode.classfile.attributes` | all attribute and nested attribute dataclasses |
-| `pytecode.classfile.instructions` | raw decoded bytecode instruction dataclasses |
+| `pytecode.classfile.bytecode` | raw bytecode enums used by `InsnInfo` |
 | `pytecode.classfile.constants` | access flags, target enums, verification enums, magic constant |
 | `pytecode.classfile.descriptors` | descriptor and generic-signature parsing/building |
 This layer should stay spec-faithful. It is allowed to be verbose because its purpose is exact representation of on-disk structures.
@@ -418,7 +418,12 @@ updated = model.to_bytes()
 ### 3. Recompute frames after code-shape changes
 
 ```python
-updated = model.to_bytes(recompute_frames=True, resolver=resolver)
+from pytecode.archive import FrameComputationMode
+
+updated = model.to_bytes_with_options(
+    frame_mode=FrameComputationMode.RECOMPUTE,
+    resolver=resolver,
+)
 ```
 
 ### 4. Rewrite a JAR with matchers and transform pipelines
@@ -456,7 +461,7 @@ The repository treats the module list in `tools/generate_api_docs.py` as the aut
 - `pytecode.classfile.constants`
 - `pytecode.classfile.descriptors`
 - `pytecode.classfile.info`
-- `pytecode.classfile.instructions`
+- `pytecode.classfile.bytecode`
 - `pytecode.classfile.reader`
 - `pytecode.classfile.writer`
 - `pytecode.edit.constant_pool_builder`

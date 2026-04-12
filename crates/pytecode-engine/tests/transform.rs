@@ -1,10 +1,13 @@
 use pytecode_engine::constants::{ClassAccessFlags, MethodAccessFlags};
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
-use pytecode_engine::model::{ClassModel, CodeItem};
+use pytecode_engine::model::{ClassModel, CodeItem, LdcInsn, LdcValue, MethodInsn};
 use pytecode_engine::raw::Instruction;
+use pytecode_engine::transform::matcher_spec::InsnMatcherSpec;
+use pytecode_engine::transform::pipeline_spec::PipelineSpec;
+use pytecode_engine::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
 use pytecode_engine::transform::{
-    Pipeline, class_named, method_is_public, method_is_static, method_name_matches, method_named,
-    on_code, on_methods,
+    Pipeline, class_named, insn_ldc_string, insn_method, method_is_public, method_is_static,
+    method_name_matches, method_named, on_code, on_methods,
 };
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -173,5 +176,109 @@ fn pipeline_macro_builds_composed_pipeline() -> TestResult<()> {
             .access_flags
             .contains(MethodAccessFlags::FINAL)
     );
+    Ok(())
+}
+
+#[test]
+fn code_transform_spec_rewrites_matching_method_body() -> TestResult<()> {
+    let bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    let mut model = ClassModel::from_bytes(&bytes)?;
+    ClassTransformSpec::CodeTransform {
+        method_name: Some("main".to_owned()),
+        method_descriptor: Some("([Ljava/lang/String;)V".to_owned()),
+        transform: CodeTransformSpec::Sequence(vec![
+            CodeTransformSpec::ReplaceString {
+                from: "Hello from fixture".to_owned(),
+                to: "patched string".to_owned(),
+            },
+            CodeTransformSpec::RedirectMethodCall {
+                from_owner: "java/io/PrintStream".to_owned(),
+                from_name: "println".to_owned(),
+                from_descriptor: "(Ljava/lang/String;)V".to_owned(),
+                to_owner: "java/io/PrintStream".to_owned(),
+                to_name: "print".to_owned(),
+                to_descriptor: None,
+            },
+        ]),
+    }
+    .apply(&mut model);
+
+    let main = method_named_mut(&mut model, "main");
+    let code = main.code.as_ref().expect("main should have code");
+    assert!(code.contains_insn(&insn_ldc_string("patched string")));
+    assert!(code.contains_insn(&insn_method(
+        "java/io/PrintStream",
+        "print",
+        "(Ljava/lang/String;)V"
+    )));
+    Ok(())
+}
+
+#[test]
+fn code_transform_spec_replaces_matching_instruction_sequences() -> TestResult<()> {
+    let bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    let mut model = ClassModel::from_bytes(&bytes)?;
+    ClassTransformSpec::CodeTransform {
+        method_name: Some("main".to_owned()),
+        method_descriptor: Some("([Ljava/lang/String;)V".to_owned()),
+        transform: CodeTransformSpec::ReplaceSequence {
+            pattern: vec![
+                InsnMatcherSpec::LdcString("Hello from fixture".to_owned()),
+                InsnMatcherSpec::Method {
+                    owner: "java/io/PrintStream".to_owned(),
+                    name: "println".to_owned(),
+                    descriptor: "(Ljava/lang/String;)V".to_owned(),
+                },
+            ],
+            replacement: vec![
+                CodeItem::Ldc(LdcInsn {
+                    value: LdcValue::String("patched sequence".to_owned()),
+                }),
+                CodeItem::Method(MethodInsn {
+                    opcode: 0xB6,
+                    owner: "java/io/PrintStream".to_owned(),
+                    name: "print".to_owned(),
+                    descriptor: "(Ljava/lang/String;)V".to_owned(),
+                    is_interface: false,
+                }),
+            ],
+        },
+    }
+    .apply(&mut model);
+
+    let main = method_named_mut(&mut model, "main");
+    let code = main.code.as_ref().expect("main should have code");
+    assert!(!code.contains_insn(&insn_ldc_string("Hello from fixture")));
+    assert!(code.contains_insn(&insn_ldc_string("patched sequence")));
+    assert!(!code.contains_insn(&insn_method(
+        "java/io/PrintStream",
+        "println",
+        "(Ljava/lang/String;)V"
+    )));
+    assert!(code.contains_insn(&insn_method(
+        "java/io/PrintStream",
+        "print",
+        "(Ljava/lang/String;)V"
+    )));
+    Ok(())
+}
+
+#[test]
+fn pipeline_spec_code_step_applies_to_matching_methods() -> TestResult<()> {
+    let bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    let mut model = ClassModel::from_bytes(&bytes)?;
+    let pipeline = PipelineSpec::new().on_code(
+        pytecode_engine::transform::matcher_spec::MethodMatcherSpec::Named("main".to_owned()),
+        pytecode_engine::transform::matcher_spec::ClassMatcherSpec::Named("HelloWorld".to_owned()),
+        CodeTransformSpec::RemoveInsn {
+            matcher: InsnMatcherSpec::LdcString("Hello from fixture".to_owned()),
+        },
+    );
+
+    pipeline.apply(&mut model);
+
+    let main = method_named_mut(&mut model, "main");
+    let code = main.code.as_ref().expect("main should have code");
+    assert!(!code.contains_insn(&insn_ldc_string("Hello from fixture")));
     Ok(())
 }

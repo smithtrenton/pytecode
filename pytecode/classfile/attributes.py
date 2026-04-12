@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
-from . import constants, instructions
+from . import constants
+
+if TYPE_CHECKING:
+    from . import ExceptionInfo, InsnInfo
 
 __all__ = [
     "AnnotationDefaultAttr",
@@ -29,7 +33,6 @@ __all__ = [
     "EmptyTargetInfo",
     "EnclosingMethodAttr",
     "EnumConstantValueInfo",
-    "ExceptionInfo",
     "ExceptionsAttr",
     "ExportInfo",
     "FloatVariableInfo",
@@ -122,23 +125,13 @@ class ConstantValueAttr(AttributeInfo):
 
 
 @dataclass
-class ExceptionInfo:
-    """Entry in the Code attribute exception_table (┬º4.7.3)."""
-
-    start_pc: int
-    end_pc: int
-    handler_pc: int
-    catch_type: int
-
-
-@dataclass
 class CodeAttr(AttributeInfo):
     """Represents the Code attribute (┬º4.7.3)."""
 
     max_stacks: int
     max_locals: int
     code_length: int
-    code: list[instructions.InsnInfo]
+    code: list[InsnInfo]
     exception_table_length: int
     exception_table: list[ExceptionInfo]
     attributes_count: int

@@ -6,7 +6,7 @@
 //! per-match FFI overhead when running transform pipelines from Python.
 
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
-use crate::model::{ClassModel, FieldModel, MethodModel};
+use crate::model::{ClassModel, CodeItem, FieldModel, LdcValue, MethodModel};
 use regex::Regex;
 use std::fmt;
 
@@ -356,6 +356,286 @@ impl fmt::Display for MethodMatcherSpec {
 }
 
 // ---------------------------------------------------------------------------
+// Instruction matcher helpers + InsnMatcherSpec
+// ---------------------------------------------------------------------------
+
+pub(crate) fn insn_matches_opcode(item: &CodeItem, opcode: u8) -> bool {
+    match item {
+        CodeItem::Label(_) => false,
+        CodeItem::Raw(insn) => insn.opcode() == opcode,
+        CodeItem::Field(insn) => insn.opcode == opcode,
+        CodeItem::Method(insn) => insn.opcode == opcode,
+        CodeItem::InterfaceMethod(_) => opcode == 0xB9,
+        CodeItem::Type(insn) => insn.opcode == opcode,
+        CodeItem::Var(insn) => insn.opcode == opcode,
+        CodeItem::IInc(_) => opcode == 0x84,
+        CodeItem::Ldc(_) => matches!(opcode, 0x12..=0x14),
+        CodeItem::InvokeDynamic(_) => opcode == 0xBA,
+        CodeItem::MultiANewArray(_) => opcode == 0xC5,
+        CodeItem::Branch(insn) => insn.opcode == opcode,
+        CodeItem::LookupSwitch(_) => opcode == 0xAB,
+        CodeItem::TableSwitch(_) => opcode == 0xAA,
+    }
+}
+
+fn is_return_opcode(opcode: u8) -> bool {
+    matches!(opcode, 0xAC..=0xB1)
+}
+
+/// A declarative matcher for [`CodeItem`] instances.
+#[derive(Debug, Clone)]
+pub enum InsnMatcherSpec {
+    /// Always matches.
+    Any,
+    /// Match by opcode.
+    Opcode(u8),
+    /// Match by any opcode in the set.
+    OpcodeAny(Vec<u8>),
+    /// Match any field access instruction.
+    IsFieldAccess,
+    /// Match any method invocation instruction.
+    IsMethodCall,
+    /// Match any return instruction.
+    IsReturn,
+    /// Match any branch or switch instruction.
+    IsBranch,
+    /// Match labels.
+    IsLabel,
+    /// Match LDC-family instructions.
+    IsLdc,
+    /// Match variable load/store instructions.
+    IsVar,
+    /// Match field owner exactly.
+    FieldOwner(String),
+    /// Match field name exactly.
+    FieldNamed(String),
+    /// Match field descriptor exactly.
+    FieldDescriptor(String),
+    /// Match field owner/name/descriptor exactly.
+    Field {
+        owner: String,
+        name: String,
+        descriptor: String,
+    },
+    /// Match method owner exactly.
+    MethodOwner(String),
+    /// Match method name exactly.
+    MethodNamed(String),
+    /// Match method descriptor exactly.
+    MethodDescriptor(String),
+    /// Match method owner/name/descriptor exactly.
+    Method {
+        owner: String,
+        name: String,
+        descriptor: String,
+    },
+    /// Match type descriptor exactly.
+    TypeDescriptor(String),
+    /// Match string LDC values exactly.
+    LdcString(String),
+    /// Match variable slot exactly.
+    VarSlot(u16),
+    /// Match field owner by regex.
+    FieldOwnerMatches(String),
+    /// Match method owner by regex.
+    MethodOwnerMatches(String),
+    /// Match method name by regex.
+    MethodNameMatches(String),
+    /// Logical AND of child specs.
+    And(Vec<InsnMatcherSpec>),
+    /// Logical OR of child specs.
+    Or(Vec<InsnMatcherSpec>),
+    /// Logical negation.
+    Not(Box<InsnMatcherSpec>),
+}
+
+impl InsnMatcherSpec {
+    /// Evaluate this spec against a [`CodeItem`].
+    pub fn matches(&self, item: &CodeItem) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Opcode(opcode) => insn_matches_opcode(item, *opcode),
+            Self::OpcodeAny(opcodes) => opcodes
+                .iter()
+                .any(|opcode| insn_matches_opcode(item, *opcode)),
+            Self::IsFieldAccess => matches!(item, CodeItem::Field(_)),
+            Self::IsMethodCall => matches!(
+                item,
+                CodeItem::Method(_) | CodeItem::InterfaceMethod(_) | CodeItem::InvokeDynamic(_)
+            ),
+            Self::IsReturn => match item {
+                CodeItem::Raw(insn) => is_return_opcode(insn.opcode()),
+                _ => false,
+            },
+            Self::IsBranch => matches!(
+                item,
+                CodeItem::Branch(_) | CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_)
+            ),
+            Self::IsLabel => matches!(item, CodeItem::Label(_)),
+            Self::IsLdc => matches!(item, CodeItem::Ldc(_)),
+            Self::IsVar => matches!(item, CodeItem::Var(_)),
+            Self::FieldOwner(owner) => {
+                matches!(item, CodeItem::Field(insn) if insn.owner == *owner)
+            }
+            Self::FieldNamed(name) => matches!(item, CodeItem::Field(insn) if insn.name == *name),
+            Self::FieldDescriptor(descriptor) => {
+                matches!(item, CodeItem::Field(insn) if insn.descriptor == *descriptor)
+            }
+            Self::Field {
+                owner,
+                name,
+                descriptor,
+            } => matches!(
+                item,
+                CodeItem::Field(insn)
+                    if insn.owner == *owner
+                        && insn.name == *name
+                        && insn.descriptor == *descriptor
+            ),
+            Self::MethodOwner(owner) => match item {
+                CodeItem::Method(insn) => insn.owner == *owner,
+                CodeItem::InterfaceMethod(insn) => insn.owner == *owner,
+                _ => false,
+            },
+            Self::MethodNamed(name) => match item {
+                CodeItem::Method(insn) => insn.name == *name,
+                CodeItem::InterfaceMethod(insn) => insn.name == *name,
+                CodeItem::InvokeDynamic(insn) => insn.name == *name,
+                _ => false,
+            },
+            Self::MethodDescriptor(descriptor) => match item {
+                CodeItem::Method(insn) => insn.descriptor == *descriptor,
+                CodeItem::InterfaceMethod(insn) => insn.descriptor == *descriptor,
+                CodeItem::InvokeDynamic(insn) => insn.descriptor == *descriptor,
+                _ => false,
+            },
+            Self::Method {
+                owner,
+                name,
+                descriptor,
+            } => match item {
+                CodeItem::Method(insn) => {
+                    insn.owner == *owner && insn.name == *name && insn.descriptor == *descriptor
+                }
+                CodeItem::InterfaceMethod(insn) => {
+                    insn.owner == *owner && insn.name == *name && insn.descriptor == *descriptor
+                }
+                _ => false,
+            },
+            Self::TypeDescriptor(descriptor) => match item {
+                CodeItem::Type(insn) => insn.descriptor == *descriptor,
+                CodeItem::MultiANewArray(insn) => insn.descriptor == *descriptor,
+                _ => false,
+            },
+            Self::LdcString(expected) => matches!(
+                item,
+                CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(value) if value == expected)
+            ),
+            Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
+            Self::FieldOwnerMatches(pattern) => match item {
+                CodeItem::Field(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.owner))
+                    .unwrap_or(false),
+                _ => false,
+            },
+            Self::MethodOwnerMatches(pattern) => match item {
+                CodeItem::Method(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.owner))
+                    .unwrap_or(false),
+                CodeItem::InterfaceMethod(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.owner))
+                    .unwrap_or(false),
+                _ => false,
+            },
+            Self::MethodNameMatches(pattern) => match item {
+                CodeItem::Method(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.name))
+                    .unwrap_or(false),
+                CodeItem::InterfaceMethod(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.name))
+                    .unwrap_or(false),
+                CodeItem::InvokeDynamic(insn) => fullmatch_regex(pattern)
+                    .map(|re| re.is_match(&insn.name))
+                    .unwrap_or(false),
+                _ => false,
+            },
+            Self::And(specs) => specs.iter().all(|spec| spec.matches(item)),
+            Self::Or(specs) => specs.iter().any(|spec| spec.matches(item)),
+            Self::Not(spec) => !spec.matches(item),
+        }
+    }
+
+    /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
+    pub fn compile(&self) -> CompiledInsnMatcher {
+        CompiledInsnMatcher::from_spec(self)
+    }
+}
+
+impl fmt::Display for InsnMatcherSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Any => write!(f, "any()"),
+            Self::Opcode(opcode) => write!(f, "insn_opcode(0x{opcode:02X})"),
+            Self::OpcodeAny(opcodes) => write!(f, "insn_opcode_any({opcodes:?})"),
+            Self::IsFieldAccess => write!(f, "insn_is_field_access()"),
+            Self::IsMethodCall => write!(f, "insn_is_method_call()"),
+            Self::IsReturn => write!(f, "insn_is_return()"),
+            Self::IsBranch => write!(f, "insn_is_branch()"),
+            Self::IsLabel => write!(f, "insn_is_label()"),
+            Self::IsLdc => write!(f, "insn_is_ldc()"),
+            Self::IsVar => write!(f, "insn_is_var()"),
+            Self::FieldOwner(owner) => write!(f, "insn_field_owner({owner:?})"),
+            Self::FieldNamed(name) => write!(f, "insn_field_named({name:?})"),
+            Self::FieldDescriptor(descriptor) => write!(f, "insn_field_descriptor({descriptor:?})"),
+            Self::Field {
+                owner,
+                name,
+                descriptor,
+            } => write!(f, "insn_field({owner:?}, {name:?}, {descriptor:?})"),
+            Self::MethodOwner(owner) => write!(f, "insn_method_owner({owner:?})"),
+            Self::MethodNamed(name) => write!(f, "insn_method_named({name:?})"),
+            Self::MethodDescriptor(descriptor) => {
+                write!(f, "insn_method_descriptor({descriptor:?})")
+            }
+            Self::Method {
+                owner,
+                name,
+                descriptor,
+            } => write!(f, "insn_method({owner:?}, {name:?}, {descriptor:?})"),
+            Self::TypeDescriptor(descriptor) => write!(f, "insn_type_descriptor({descriptor:?})"),
+            Self::LdcString(value) => write!(f, "insn_ldc_string({value:?})"),
+            Self::VarSlot(slot) => write!(f, "insn_var_slot({slot})"),
+            Self::FieldOwnerMatches(pattern) => write!(f, "insn_field_owner_matches({pattern:?})"),
+            Self::MethodOwnerMatches(pattern) => {
+                write!(f, "insn_method_owner_matches({pattern:?})")
+            }
+            Self::MethodNameMatches(pattern) => write!(f, "insn_method_name_matches({pattern:?})"),
+            Self::And(specs) => {
+                write!(f, "(")?;
+                for (i, spec) in specs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " & ")?;
+                    }
+                    write!(f, "{spec}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Or(specs) => {
+                write!(f, "(")?;
+                for (i, spec) in specs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{spec}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Not(spec) => write!(f, "~{spec}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Return-type extraction helper
 // ---------------------------------------------------------------------------
 
@@ -572,6 +852,206 @@ impl CompiledMethodMatcher {
             Self::And(matchers) => matchers.iter().all(|m| m.matches(method)),
             Self::Or(matchers) => matchers.iter().any(|m| m.matches(method)),
             Self::Not(matcher) => !matcher.matches(method),
+        }
+    }
+}
+
+/// A [`InsnMatcherSpec`] compiled for repeated evaluation.
+pub enum CompiledInsnMatcher {
+    Any,
+    Opcode(u8),
+    OpcodeAny(Vec<u8>),
+    IsFieldAccess,
+    IsMethodCall,
+    IsReturn,
+    IsBranch,
+    IsLabel,
+    IsLdc,
+    IsVar,
+    FieldOwner(String),
+    FieldNamed(String),
+    FieldDescriptor(String),
+    Field {
+        owner: String,
+        name: String,
+        descriptor: String,
+    },
+    MethodOwner(String),
+    MethodNamed(String),
+    MethodDescriptor(String),
+    Method {
+        owner: String,
+        name: String,
+        descriptor: String,
+    },
+    TypeDescriptor(String),
+    LdcString(String),
+    VarSlot(u16),
+    FieldOwnerMatches(Regex),
+    MethodOwnerMatches(Regex),
+    MethodNameMatches(Regex),
+    And(Vec<CompiledInsnMatcher>),
+    Or(Vec<CompiledInsnMatcher>),
+    Not(Box<CompiledInsnMatcher>),
+}
+
+impl CompiledInsnMatcher {
+    pub fn from_spec(spec: &InsnMatcherSpec) -> Self {
+        match spec {
+            InsnMatcherSpec::Any => Self::Any,
+            InsnMatcherSpec::Opcode(opcode) => Self::Opcode(*opcode),
+            InsnMatcherSpec::OpcodeAny(opcodes) => Self::OpcodeAny(opcodes.clone()),
+            InsnMatcherSpec::IsFieldAccess => Self::IsFieldAccess,
+            InsnMatcherSpec::IsMethodCall => Self::IsMethodCall,
+            InsnMatcherSpec::IsReturn => Self::IsReturn,
+            InsnMatcherSpec::IsBranch => Self::IsBranch,
+            InsnMatcherSpec::IsLabel => Self::IsLabel,
+            InsnMatcherSpec::IsLdc => Self::IsLdc,
+            InsnMatcherSpec::IsVar => Self::IsVar,
+            InsnMatcherSpec::FieldOwner(owner) => Self::FieldOwner(owner.clone()),
+            InsnMatcherSpec::FieldNamed(name) => Self::FieldNamed(name.clone()),
+            InsnMatcherSpec::FieldDescriptor(descriptor) => {
+                Self::FieldDescriptor(descriptor.clone())
+            }
+            InsnMatcherSpec::Field {
+                owner,
+                name,
+                descriptor,
+            } => Self::Field {
+                owner: owner.clone(),
+                name: name.clone(),
+                descriptor: descriptor.clone(),
+            },
+            InsnMatcherSpec::MethodOwner(owner) => Self::MethodOwner(owner.clone()),
+            InsnMatcherSpec::MethodNamed(name) => Self::MethodNamed(name.clone()),
+            InsnMatcherSpec::MethodDescriptor(descriptor) => {
+                Self::MethodDescriptor(descriptor.clone())
+            }
+            InsnMatcherSpec::Method {
+                owner,
+                name,
+                descriptor,
+            } => Self::Method {
+                owner: owner.clone(),
+                name: name.clone(),
+                descriptor: descriptor.clone(),
+            },
+            InsnMatcherSpec::TypeDescriptor(descriptor) => Self::TypeDescriptor(descriptor.clone()),
+            InsnMatcherSpec::LdcString(value) => Self::LdcString(value.clone()),
+            InsnMatcherSpec::VarSlot(slot) => Self::VarSlot(*slot),
+            InsnMatcherSpec::FieldOwnerMatches(pattern) => Self::FieldOwnerMatches(
+                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
+            ),
+            InsnMatcherSpec::MethodOwnerMatches(pattern) => Self::MethodOwnerMatches(
+                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
+            ),
+            InsnMatcherSpec::MethodNameMatches(pattern) => Self::MethodNameMatches(
+                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
+            ),
+            InsnMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
+            InsnMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
+            InsnMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
+        }
+    }
+
+    pub fn matches(&self, item: &CodeItem) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Opcode(opcode) => insn_matches_opcode(item, *opcode),
+            Self::OpcodeAny(opcodes) => opcodes
+                .iter()
+                .any(|opcode| insn_matches_opcode(item, *opcode)),
+            Self::IsFieldAccess => matches!(item, CodeItem::Field(_)),
+            Self::IsMethodCall => matches!(
+                item,
+                CodeItem::Method(_) | CodeItem::InterfaceMethod(_) | CodeItem::InvokeDynamic(_)
+            ),
+            Self::IsReturn => match item {
+                CodeItem::Raw(insn) => is_return_opcode(insn.opcode()),
+                _ => false,
+            },
+            Self::IsBranch => matches!(
+                item,
+                CodeItem::Branch(_) | CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_)
+            ),
+            Self::IsLabel => matches!(item, CodeItem::Label(_)),
+            Self::IsLdc => matches!(item, CodeItem::Ldc(_)),
+            Self::IsVar => matches!(item, CodeItem::Var(_)),
+            Self::FieldOwner(owner) => {
+                matches!(item, CodeItem::Field(insn) if insn.owner == *owner)
+            }
+            Self::FieldNamed(name) => matches!(item, CodeItem::Field(insn) if insn.name == *name),
+            Self::FieldDescriptor(descriptor) => {
+                matches!(item, CodeItem::Field(insn) if insn.descriptor == *descriptor)
+            }
+            Self::Field {
+                owner,
+                name,
+                descriptor,
+            } => matches!(
+                item,
+                CodeItem::Field(insn)
+                    if insn.owner == *owner
+                        && insn.name == *name
+                        && insn.descriptor == *descriptor
+            ),
+            Self::MethodOwner(owner) => match item {
+                CodeItem::Method(insn) => insn.owner == *owner,
+                CodeItem::InterfaceMethod(insn) => insn.owner == *owner,
+                _ => false,
+            },
+            Self::MethodNamed(name) => match item {
+                CodeItem::Method(insn) => insn.name == *name,
+                CodeItem::InterfaceMethod(insn) => insn.name == *name,
+                CodeItem::InvokeDynamic(insn) => insn.name == *name,
+                _ => false,
+            },
+            Self::MethodDescriptor(descriptor) => match item {
+                CodeItem::Method(insn) => insn.descriptor == *descriptor,
+                CodeItem::InterfaceMethod(insn) => insn.descriptor == *descriptor,
+                CodeItem::InvokeDynamic(insn) => insn.descriptor == *descriptor,
+                _ => false,
+            },
+            Self::Method {
+                owner,
+                name,
+                descriptor,
+            } => match item {
+                CodeItem::Method(insn) => {
+                    insn.owner == *owner && insn.name == *name && insn.descriptor == *descriptor
+                }
+                CodeItem::InterfaceMethod(insn) => {
+                    insn.owner == *owner && insn.name == *name && insn.descriptor == *descriptor
+                }
+                _ => false,
+            },
+            Self::TypeDescriptor(descriptor) => match item {
+                CodeItem::Type(insn) => insn.descriptor == *descriptor,
+                CodeItem::MultiANewArray(insn) => insn.descriptor == *descriptor,
+                _ => false,
+            },
+            Self::LdcString(expected) => matches!(
+                item,
+                CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(value) if value == expected)
+            ),
+            Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
+            Self::FieldOwnerMatches(regex) => {
+                matches!(item, CodeItem::Field(insn) if regex.is_match(&insn.owner))
+            }
+            Self::MethodOwnerMatches(regex) => match item {
+                CodeItem::Method(insn) => regex.is_match(&insn.owner),
+                CodeItem::InterfaceMethod(insn) => regex.is_match(&insn.owner),
+                _ => false,
+            },
+            Self::MethodNameMatches(regex) => match item {
+                CodeItem::Method(insn) => regex.is_match(&insn.name),
+                CodeItem::InterfaceMethod(insn) => regex.is_match(&insn.name),
+                CodeItem::InvokeDynamic(insn) => regex.is_match(&insn.name),
+                _ => false,
+            },
+            Self::And(matchers) => matchers.iter().all(|matcher| matcher.matches(item)),
+            Self::Or(matchers) => matchers.iter().any(|matcher| matcher.matches(item)),
+            Self::Not(matcher) => !matcher.matches(item),
         }
     }
 }

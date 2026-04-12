@@ -2,10 +2,9 @@
 
 from . import _rust
 from .archive import JarFile
+from .classfile import ClassReader, ClassWriter
+from .model import ClassModel
 
-ClassReader = _rust.ClassReader
-ClassWriter = _rust.ClassWriter
-ClassModel = _rust.ClassModel
 backend_info = _rust.backend_info
 
 __all__ = [

@@ -6,14 +6,290 @@
 use pyo3::prelude::*;
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::matcher_spec::{
-    ClassMatcherSpec, FieldMatcherSpec, MethodMatcherSpec,
+    ClassMatcherSpec, FieldMatcherSpec, InsnMatcherSpec, MethodMatcherSpec,
 };
 use pytecode_engine::transform::pipeline_spec::{
     CompiledPipeline, PipelineSpec, PipelineStep, TransformAction,
 };
-use pytecode_engine::transform::transform_spec::ClassTransformSpec;
+use pytecode_engine::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
 
-use crate::model::PyClassModel;
+use crate::model::{PyClassModel, extract_code_items};
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+fn validate_fullmatch_pattern(pattern: &str) -> PyResult<()> {
+    regex::Regex::new(&format!("^(?:{pattern})$")).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid regex pattern: {e}"))
+    })?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// PyInsnMatcher
+// ---------------------------------------------------------------------------
+
+/// A declarative instruction matcher that Rust evaluates without FFI per-match.
+#[pyclass(name = "InsnMatcher", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyInsnMatcher {
+    pub(crate) spec: InsnMatcherSpec,
+}
+
+#[pymethods]
+impl PyInsnMatcher {
+    #[staticmethod]
+    fn opcode(opcode: u8) -> Self {
+        Self {
+            spec: InsnMatcherSpec::Opcode(opcode),
+        }
+    }
+
+    #[staticmethod]
+    fn opcode_any(opcodes: Vec<u8>) -> Self {
+        Self {
+            spec: InsnMatcherSpec::OpcodeAny(opcodes),
+        }
+    }
+
+    #[staticmethod]
+    fn is_field_access() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsFieldAccess,
+        }
+    }
+
+    #[staticmethod]
+    fn is_method_call() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsMethodCall,
+        }
+    }
+
+    #[staticmethod]
+    fn is_return() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsReturn,
+        }
+    }
+
+    #[staticmethod]
+    fn is_branch() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsBranch,
+        }
+    }
+
+    #[staticmethod]
+    fn is_label() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsLabel,
+        }
+    }
+
+    #[staticmethod]
+    fn is_ldc() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsLdc,
+        }
+    }
+
+    #[staticmethod]
+    fn is_var() -> Self {
+        Self {
+            spec: InsnMatcherSpec::IsVar,
+        }
+    }
+
+    #[staticmethod]
+    fn field_owner(owner: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::FieldOwner(owner),
+        }
+    }
+
+    #[staticmethod]
+    fn field_named(name: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::FieldNamed(name),
+        }
+    }
+
+    #[staticmethod]
+    fn field_descriptor(descriptor: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::FieldDescriptor(descriptor),
+        }
+    }
+
+    #[staticmethod]
+    fn field(owner: String, name: String, descriptor: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::Field {
+                owner,
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn method_owner(owner: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::MethodOwner(owner),
+        }
+    }
+
+    #[staticmethod]
+    fn method_named(name: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::MethodNamed(name),
+        }
+    }
+
+    #[staticmethod]
+    fn method_descriptor(descriptor: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::MethodDescriptor(descriptor),
+        }
+    }
+
+    #[staticmethod]
+    fn method(owner: String, name: String, descriptor: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::Method {
+                owner,
+                name,
+                descriptor,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn type_descriptor(descriptor: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::TypeDescriptor(descriptor),
+        }
+    }
+
+    #[staticmethod]
+    fn ldc_string(value: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::LdcString(value),
+        }
+    }
+
+    #[staticmethod]
+    fn var_slot(slot: u16) -> Self {
+        Self {
+            spec: InsnMatcherSpec::VarSlot(slot),
+        }
+    }
+
+    #[staticmethod]
+    fn field_owner_matches(pattern: String) -> PyResult<Self> {
+        validate_fullmatch_pattern(&pattern)?;
+        Ok(Self {
+            spec: InsnMatcherSpec::FieldOwnerMatches(pattern),
+        })
+    }
+
+    #[staticmethod]
+    fn method_owner_matches(pattern: String) -> PyResult<Self> {
+        validate_fullmatch_pattern(&pattern)?;
+        Ok(Self {
+            spec: InsnMatcherSpec::MethodOwnerMatches(pattern),
+        })
+    }
+
+    #[staticmethod]
+    fn method_name_matches(pattern: String) -> PyResult<Self> {
+        validate_fullmatch_pattern(&pattern)?;
+        Ok(Self {
+            spec: InsnMatcherSpec::MethodNameMatches(pattern),
+        })
+    }
+
+    #[staticmethod]
+    fn any() -> Self {
+        Self {
+            spec: InsnMatcherSpec::Any,
+        }
+    }
+
+    fn __and__(&self, other: &PyInsnMatcher) -> Self {
+        match (&self.spec, &other.spec) {
+            (InsnMatcherSpec::And(left), InsnMatcherSpec::And(right)) => {
+                let mut specs = left.clone();
+                specs.extend(right.iter().cloned());
+                Self {
+                    spec: InsnMatcherSpec::And(specs),
+                }
+            }
+            (InsnMatcherSpec::And(left), _) => {
+                let mut specs = left.clone();
+                specs.push(other.spec.clone());
+                Self {
+                    spec: InsnMatcherSpec::And(specs),
+                }
+            }
+            (_, InsnMatcherSpec::And(right)) => {
+                let mut specs = vec![self.spec.clone()];
+                specs.extend(right.iter().cloned());
+                Self {
+                    spec: InsnMatcherSpec::And(specs),
+                }
+            }
+            _ => Self {
+                spec: InsnMatcherSpec::And(vec![self.spec.clone(), other.spec.clone()]),
+            },
+        }
+    }
+
+    fn __or__(&self, other: &PyInsnMatcher) -> Self {
+        match (&self.spec, &other.spec) {
+            (InsnMatcherSpec::Or(left), InsnMatcherSpec::Or(right)) => {
+                let mut specs = left.clone();
+                specs.extend(right.iter().cloned());
+                Self {
+                    spec: InsnMatcherSpec::Or(specs),
+                }
+            }
+            (InsnMatcherSpec::Or(left), _) => {
+                let mut specs = left.clone();
+                specs.push(other.spec.clone());
+                Self {
+                    spec: InsnMatcherSpec::Or(specs),
+                }
+            }
+            (_, InsnMatcherSpec::Or(right)) => {
+                let mut specs = vec![self.spec.clone()];
+                specs.extend(right.iter().cloned());
+                Self {
+                    spec: InsnMatcherSpec::Or(specs),
+                }
+            }
+            _ => Self {
+                spec: InsnMatcherSpec::Or(vec![self.spec.clone(), other.spec.clone()]),
+            },
+        }
+    }
+
+    fn __invert__(&self) -> Self {
+        Self {
+            spec: InsnMatcherSpec::Not(Box::new(self.spec.clone())),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("InsnMatcher({})", self.spec)
+    }
+
+    fn __str__(&self) -> String {
+        self.spec.to_string()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // PyClassMatcher
@@ -537,6 +813,158 @@ impl PyMethodMatcher {
 }
 
 // ---------------------------------------------------------------------------
+// PyCodeTransform — wraps CodeTransformSpec
+// ---------------------------------------------------------------------------
+
+/// A declarative code transform that Rust applies natively.
+#[pyclass(name = "CodeTransform", module = "pytecode._rust")]
+#[derive(Clone)]
+pub struct PyCodeTransform {
+    pub(crate) spec: CodeTransformSpec,
+}
+
+#[pymethods]
+impl PyCodeTransform {
+    #[staticmethod]
+    fn replace_insn(
+        py: Python<'_>,
+        matcher: &PyInsnMatcher,
+        replacement: Vec<PyObject>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            spec: CodeTransformSpec::ReplaceInsn {
+                matcher: matcher.spec.clone(),
+                replacement: extract_code_items(py, replacement)?,
+            },
+        })
+    }
+
+    #[staticmethod]
+    fn replace_sequence(
+        py: Python<'_>,
+        pattern: Vec<PyInsnMatcher>,
+        replacement: Vec<PyObject>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            spec: CodeTransformSpec::ReplaceSequence {
+                pattern: pattern.into_iter().map(|matcher| matcher.spec).collect(),
+                replacement: extract_code_items(py, replacement)?,
+            },
+        })
+    }
+
+    #[staticmethod]
+    fn remove_insn(matcher: &PyInsnMatcher) -> Self {
+        Self {
+            spec: CodeTransformSpec::RemoveInsn {
+                matcher: matcher.spec.clone(),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn remove_sequence(pattern: Vec<PyInsnMatcher>) -> Self {
+        Self {
+            spec: CodeTransformSpec::RemoveSequence {
+                pattern: pattern.into_iter().map(|matcher| matcher.spec).collect(),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn insert_before(
+        py: Python<'_>,
+        matcher: &PyInsnMatcher,
+        items: Vec<PyObject>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            spec: CodeTransformSpec::InsertBefore {
+                matcher: matcher.spec.clone(),
+                items: extract_code_items(py, items)?,
+            },
+        })
+    }
+
+    #[staticmethod]
+    fn insert_after(
+        py: Python<'_>,
+        matcher: &PyInsnMatcher,
+        items: Vec<PyObject>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            spec: CodeTransformSpec::InsertAfter {
+                matcher: matcher.spec.clone(),
+                items: extract_code_items(py, items)?,
+            },
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (from_owner, from_name, from_descriptor, to_owner, to_name, to_descriptor=None))]
+    fn redirect_method_call(
+        from_owner: String,
+        from_name: String,
+        from_descriptor: String,
+        to_owner: String,
+        to_name: String,
+        to_descriptor: Option<String>,
+    ) -> Self {
+        Self {
+            spec: CodeTransformSpec::RedirectMethodCall {
+                from_owner,
+                from_name,
+                from_descriptor,
+                to_owner,
+                to_name,
+                to_descriptor,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn redirect_field_access(
+        from_owner: String,
+        from_name: String,
+        to_owner: String,
+        to_name: String,
+    ) -> Self {
+        Self {
+            spec: CodeTransformSpec::RedirectFieldAccess {
+                from_owner,
+                from_name,
+                to_owner,
+                to_name,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn replace_string(from_value: String, to_value: String) -> Self {
+        Self {
+            spec: CodeTransformSpec::ReplaceString {
+                from: from_value,
+                to: to_value,
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn sequence(transforms: Vec<PyCodeTransform>) -> Self {
+        Self {
+            spec: CodeTransformSpec::Sequence(transforms.into_iter().map(|t| t.spec).collect()),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("CodeTransform({})", self.spec)
+    }
+
+    fn __str__(&self) -> String {
+        self.spec.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PyClassTransform — wraps ClassTransformSpec
 // ---------------------------------------------------------------------------
 
@@ -643,6 +1071,22 @@ impl PyClassTransform {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (transform, method_name=None, method_descriptor=None))]
+    fn code_transform(
+        transform: &PyCodeTransform,
+        method_name: Option<String>,
+        method_descriptor: Option<String>,
+    ) -> Self {
+        Self {
+            spec: ClassTransformSpec::CodeTransform {
+                method_name,
+                method_descriptor,
+                transform: transform.spec.clone(),
+            },
+        }
+    }
+
+    #[staticmethod]
     fn sequence(transforms: Vec<PyClassTransform>) -> Self {
         Self {
             spec: ClassTransformSpec::Sequence(transforms.into_iter().map(|t| t.spec).collect()),
@@ -678,6 +1122,7 @@ impl PyPipeline {
             PipelineStep::Class { action, .. }
             | PipelineStep::Field { action, .. }
             | PipelineStep::Method { action, .. } => matches!(action, TransformAction::Custom(_)),
+            PipelineStep::Code { .. } => false,
         })
     }
 }
@@ -820,6 +1265,23 @@ impl PyPipeline {
                         .expect("failed to take ClassModel back from Python");
                 });
             })),
+        });
+    }
+
+    /// Add a code-level step: apply transform to matching methods with code.
+    #[pyo3(signature = (method_matcher, transform, owner_matcher=None))]
+    fn on_code(
+        &mut self,
+        method_matcher: &PyMethodMatcher,
+        transform: &PyCodeTransform,
+        owner_matcher: Option<&PyClassMatcher>,
+    ) {
+        self.spec.steps.push(PipelineStep::Code {
+            owner_matcher: owner_matcher
+                .map(|m| m.spec.clone())
+                .unwrap_or(ClassMatcherSpec::Any),
+            method_matcher: method_matcher.spec.clone(),
+            action: transform.spec.clone(),
         });
     }
 

@@ -11,8 +11,16 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 
 from .. import _rust
+from ..classfile import ClassReader
+from ..model import ClassModel
 
-__all__ = ["JarFile", "JarInfo"]
+__all__ = [
+    "DebugInfoPolicy",
+    "FrameComputationMode",
+    "JarFile",
+    "JarInfo",
+    "normalize_debug_info_policy",
+]
 
 
 class DebugInfoPolicy(Enum):
@@ -22,9 +30,16 @@ class DebugInfoPolicy(Enum):
     STRIP = "strip"
 
 
+class FrameComputationMode(Enum):
+    """Policy controlling whether lowering preserves or recomputes stack map frames."""
+
+    PRESERVE = "preserve"
+    RECOMPUTE = "recompute"
+
+
 _RustRewriteTransform = _rust.Pipeline | _rust.CompiledPipeline
 _RustTransformInput = _RustRewriteTransform | _rust.ClassTransform
-_RustBoundTransform = Callable[[_rust.ClassModel], object | None]
+_RustBoundTransform = Callable[[ClassModel], object | None]
 
 
 @dataclass
@@ -253,18 +268,18 @@ class JarFile:
         self.infolist = [item.zipinfo for item in self.files.values()]
         return jar_info
 
-    def parse_classes(self) -> tuple[list[tuple[JarInfo, _rust.ClassReader]], list[JarInfo]]:
+    def parse_classes(self) -> tuple[list[tuple[JarInfo, ClassReader]], list[JarInfo]]:
         """Parse all ``.class`` entries into Rust-backed readers and separate them from other resources.
 
         Returns:
             A two-element tuple of (class entries, non-class entries).
             Each class entry is a ``(JarInfo, pytecode.ClassReader)`` pair.
         """
-        classes: list[tuple[JarInfo, _rust.ClassReader]] = []
+        classes: list[tuple[JarInfo, ClassReader]] = []
         other_files: list[JarInfo] = []
         for jar_info in self.files.values():
             if _is_class_filename(jar_info.filename):
-                classes.append((jar_info, _rust.ClassReader.from_bytes(jar_info.bytes)))
+                classes.append((jar_info, ClassReader.from_bytes(jar_info.bytes)))
             else:
                 other_files.append(jar_info)
         return classes, other_files
@@ -274,7 +289,7 @@ class JarFile:
         output_path: str | os.PathLike[str] | None = None,
         *,
         transform: _RustTransformInput | _RustBoundTransform | None = None,
-        recompute_frames: bool = False,
+        frame_mode: FrameComputationMode = FrameComputationMode.PRESERVE,
         resolver: _rust.MappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
         skip_debug: bool = False,
@@ -294,8 +309,7 @@ class JarFile:
                 is overwritten.
             transform: Optional Rust-backed transform or pipeline (or a bound
                 ``.apply`` method from a Rust pipeline object).
-            recompute_frames: Whether to recompute ``StackMapTable`` frames
-                when lowering classes.
+            frame_mode: Frame policy to use when lowering classes.
             resolver: Class hierarchy resolver used during frame computation.
             debug_info: Policy controlling how debug attributes are emitted.
             skip_debug: If ``True``, strip debug attributes during rewrite.
@@ -326,7 +340,7 @@ class JarFile:
                 list(self._entry_states.values()),
                 transform=rust_transform,
                 output_path=destination,
-                recompute_frames=recompute_frames,
+                frame_mode=frame_mode,
                 resolver=resolver,
                 debug_info=_effective_rust_debug_policy(debug_policy, skip_debug=skip_debug),
             )

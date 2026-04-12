@@ -1,6 +1,8 @@
 //! CLI helpers for compatibility checks, benchmark reporting, and archive smoke flows.
 
 use clap::{Parser, Subcommand};
+mod deobfuscate;
+mod jar_patcher;
 use pytecode_archive::{JarFile, RewriteOptions};
 use pytecode_engine::constants::MethodAccessFlags;
 use pytecode_engine::fixtures::{compatibility_manifest, default_benchmark_jar, repo_root};
@@ -20,6 +22,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use thiserror::Error;
 
+pub use deobfuscate::{
+    DeobfuscationAnalysisReport, DeobfuscationHotspot, DeobfuscationPackageStat,
+    DeobfuscationRewriteReport, DeobfuscationStringHint, analyze_deobfuscation,
+    rewrite_deobfuscation,
+};
+pub use jar_patcher::{JarPatchReport, JarPatchRuleReport, patch_jar};
+
 pub type CliResult<T> = std::result::Result<T, CliError>;
 
 #[derive(Debug, Error)]
@@ -32,6 +41,10 @@ pub enum CliError {
     Engine(#[from] pytecode_engine::EngineError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Regex(#[from] regex::Error),
+    #[error("invalid patch plan: {message}")]
+    InvalidPatchPlan { message: String },
     #[error("max_release must be between 8 and 25")]
     InvalidMaxRelease,
     #[error("iterations must be at least 1")]
@@ -76,6 +89,36 @@ enum Commands {
         output: PathBuf,
         #[arg(long, default_value = "HelloWorld")]
         class_name: String,
+    },
+    /// Rewrite one JAR with declarative JSON patch rules.
+    PatchJar {
+        #[arg(long)]
+        jar: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        rules: PathBuf,
+    },
+    /// Analyze or rewrite an obfuscated JAR with built-in heuristics.
+    Deobfuscate {
+        #[command(subcommand)]
+        command: DeobfuscateCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DeobfuscateCommand {
+    /// Report naming, package, compiler-control, and string-hint signals for a JAR.
+    Analyze {
+        #[arg(long)]
+        jar: PathBuf,
+    },
+    /// Apply safe bytecode cleanup passes and write a rewritten JAR.
+    Rewrite {
+        #[arg(long)]
+        jar: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -151,6 +194,20 @@ pub fn run_cli() -> CliResult<()> {
             let report = rewrite_smoke(&jar, &output, &class_name)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Commands::PatchJar { jar, output, rules } => {
+            let report = patch_jar(&jar, &output, &rules)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Commands::Deobfuscate { command } => match command {
+            DeobfuscateCommand::Analyze { jar } => {
+                let report = analyze_deobfuscation(&jar)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            DeobfuscateCommand::Rewrite { jar, output } => {
+                let report = rewrite_deobfuscation(&jar, &output)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+        },
     }
     Ok(())
 }
@@ -422,7 +479,7 @@ fn summarize_samples(samples: &[u128]) -> (u128, u128, u128, u128) {
     )
 }
 
-fn relative_to_repo(path: &Path) -> String {
+pub(crate) fn relative_to_repo(path: &Path) -> String {
     match path.strip_prefix(repo_root()) {
         Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
         Err(_) => path.to_string_lossy().replace('\\', "/"),

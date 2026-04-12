@@ -552,6 +552,7 @@ dependencies = [
  "clap",
  "pytecode-archive",
  "pytecode-engine",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

@@ -239,7 +239,7 @@ Compatibility expectations:
 5. preserve transform pipeline semantics,
 6. preserve verifier and hierarchy behavior,
 7. preserve JAR rewrite guarantees,
-8. preserve public option meanings such as `skip_debug`, `recompute_frames`, and debug-info policy handling.
+8. preserve public option meanings such as `skip_debug`, `frame_mode`, and debug-info policy handling.
 
 Areas where compatibility can be adapted:
 

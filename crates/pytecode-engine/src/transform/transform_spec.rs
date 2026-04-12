@@ -4,8 +4,239 @@
 //! and Rust applies without crossing the FFI boundary.
 
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
-use crate::model::ClassModel;
+use crate::model::{ClassModel, CodeItem, CodeModel, LdcValue};
+use crate::transform::matcher_spec::InsnMatcherSpec;
 use std::fmt;
+
+/// A declarative code-level transform that Rust applies natively.
+#[derive(Debug, Clone)]
+pub enum CodeTransformSpec {
+    /// Replace every matching instruction with the given replacement sequence.
+    ReplaceInsn {
+        matcher: InsnMatcherSpec,
+        replacement: Vec<CodeItem>,
+    },
+    /// Replace every matching instruction sequence with the given replacement sequence.
+    ReplaceSequence {
+        pattern: Vec<InsnMatcherSpec>,
+        replacement: Vec<CodeItem>,
+    },
+    /// Remove every matching instruction.
+    RemoveInsn { matcher: InsnMatcherSpec },
+    /// Remove every matching instruction sequence.
+    RemoveSequence { pattern: Vec<InsnMatcherSpec> },
+    /// Insert instructions before every matching instruction.
+    InsertBefore {
+        matcher: InsnMatcherSpec,
+        items: Vec<CodeItem>,
+    },
+    /// Insert instructions after every matching instruction.
+    InsertAfter {
+        matcher: InsnMatcherSpec,
+        items: Vec<CodeItem>,
+    },
+    /// Redirect matching method invocations to a new owner/name/descriptor.
+    RedirectMethodCall {
+        from_owner: String,
+        from_name: String,
+        from_descriptor: String,
+        to_owner: String,
+        to_name: String,
+        to_descriptor: Option<String>,
+    },
+    /// Redirect matching field accesses to a new owner/name.
+    RedirectFieldAccess {
+        from_owner: String,
+        from_name: String,
+        to_owner: String,
+        to_name: String,
+    },
+    /// Replace matching string constants.
+    ReplaceString { from: String, to: String },
+    /// Apply a sequence of code transforms in order.
+    Sequence(Vec<CodeTransformSpec>),
+}
+
+impl CodeTransformSpec {
+    fn compile_matcher(matcher: &InsnMatcherSpec) -> crate::transform::InsnMatcher {
+        let matcher = matcher.compile();
+        crate::transform::Matcher::of(move |item| matcher.matches(item), "compiled_insn_matcher")
+    }
+
+    fn compile_pattern(pattern: &[InsnMatcherSpec]) -> Vec<crate::transform::InsnMatcher> {
+        pattern.iter().map(Self::compile_matcher).collect()
+    }
+
+    /// Apply this transform to a code model, mutating it in place.
+    pub fn apply(&self, code: &mut CodeModel) {
+        match self {
+            Self::ReplaceInsn {
+                matcher,
+                replacement,
+            } => {
+                let matcher = Self::compile_matcher(matcher);
+                code.replace_insns(&matcher, replacement);
+            }
+            Self::ReplaceSequence {
+                pattern,
+                replacement,
+            } => {
+                let pattern = Self::compile_pattern(pattern);
+                code.replace_sequences(&pattern, replacement);
+            }
+            Self::RemoveInsn { matcher } => {
+                let matcher = Self::compile_matcher(matcher);
+                code.remove_insns(&matcher);
+            }
+            Self::RemoveSequence { pattern } => {
+                let pattern = Self::compile_pattern(pattern);
+                code.remove_sequences(&pattern);
+            }
+            Self::InsertBefore { matcher, items } => {
+                let matcher = Self::compile_matcher(matcher);
+                code.insert_before(&matcher, items);
+            }
+            Self::InsertAfter { matcher, items } => {
+                let matcher = Self::compile_matcher(matcher);
+                code.insert_after(&matcher, items);
+            }
+            Self::RedirectMethodCall {
+                from_owner,
+                from_name,
+                from_descriptor,
+                to_owner,
+                to_name,
+                to_descriptor,
+            } => {
+                for item in &mut code.instructions {
+                    match item {
+                        CodeItem::Method(insn)
+                            if insn.owner == *from_owner
+                                && insn.name == *from_name
+                                && insn.descriptor == *from_descriptor =>
+                        {
+                            insn.owner = to_owner.clone();
+                            insn.name = to_name.clone();
+                            if let Some(descriptor) = to_descriptor {
+                                insn.descriptor = descriptor.clone();
+                            }
+                        }
+                        CodeItem::InterfaceMethod(insn)
+                            if insn.owner == *from_owner
+                                && insn.name == *from_name
+                                && insn.descriptor == *from_descriptor =>
+                        {
+                            insn.owner = to_owner.clone();
+                            insn.name = to_name.clone();
+                            if let Some(descriptor) = to_descriptor {
+                                insn.descriptor = descriptor.clone();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Self::RedirectFieldAccess {
+                from_owner,
+                from_name,
+                to_owner,
+                to_name,
+            } => {
+                for item in &mut code.instructions {
+                    match item {
+                        CodeItem::Field(insn)
+                            if insn.owner == *from_owner && insn.name == *from_name =>
+                        {
+                            insn.owner = to_owner.clone();
+                            insn.name = to_name.clone();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Self::ReplaceString { from, to } => {
+                for item in &mut code.instructions {
+                    if let CodeItem::Ldc(insn) = item
+                        && let LdcValue::String(value) = &mut insn.value
+                        && value == from
+                    {
+                        *value = to.clone();
+                    }
+                }
+            }
+            Self::Sequence(specs) => {
+                for spec in specs {
+                    spec.apply(code);
+                }
+            }
+        }
+    }
+}
+
+impl fmt::Display for CodeTransformSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReplaceInsn {
+                matcher,
+                replacement,
+            } => {
+                write!(f, "replace_insn({matcher}, {} items)", replacement.len())
+            }
+            Self::ReplaceSequence {
+                pattern,
+                replacement,
+            } => {
+                write!(
+                    f,
+                    "replace_sequence({} matchers, {} items)",
+                    pattern.len(),
+                    replacement.len()
+                )
+            }
+            Self::RemoveInsn { matcher } => write!(f, "remove_insn({matcher})"),
+            Self::RemoveSequence { pattern } => {
+                write!(f, "remove_sequence({} matchers)", pattern.len())
+            }
+            Self::InsertBefore { matcher, items } => {
+                write!(f, "insert_before({matcher}, {} items)", items.len())
+            }
+            Self::InsertAfter { matcher, items } => {
+                write!(f, "insert_after({matcher}, {} items)", items.len())
+            }
+            Self::RedirectMethodCall {
+                from_owner,
+                from_name,
+                from_descriptor,
+                to_owner,
+                to_name,
+                to_descriptor,
+            } => write!(
+                f,
+                "redirect_method_call(({from_owner:?}, {from_name:?}, {from_descriptor:?}) -> ({to_owner:?}, {to_name:?}, {to_descriptor:?}))"
+            ),
+            Self::RedirectFieldAccess {
+                from_owner,
+                from_name,
+                to_owner,
+                to_name,
+            } => write!(
+                f,
+                "redirect_field_access(({from_owner:?}, {from_name:?}) -> ({to_owner:?}, {to_name:?}))"
+            ),
+            Self::ReplaceString { from, to } => write!(f, "replace_string({from:?}, {to:?})"),
+            Self::Sequence(specs) => {
+                write!(f, "sequence(")?;
+                for (i, spec) in specs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{spec}")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
 
 /// A declarative class-level transform that Rust applies natively.
 #[derive(Debug, Clone)]
@@ -42,6 +273,12 @@ pub enum ClassTransformSpec {
     SetMethodAccessFlags { name: String, flags: u16 },
     /// Set access flags on matching fields.
     SetFieldAccessFlags { name: String, flags: u16 },
+    /// Apply a code transform to methods matching name/descriptor filters.
+    CodeTransform {
+        method_name: Option<String>,
+        method_descriptor: Option<String>,
+        transform: CodeTransformSpec,
+    },
     /// Apply a sequence of transforms in order.
     Sequence(Vec<ClassTransformSpec>),
 }
@@ -111,6 +348,24 @@ impl ClassTransformSpec {
                     }
                 }
             }
+            Self::CodeTransform {
+                method_name,
+                method_descriptor,
+                transform,
+            } => {
+                for method in &mut model.methods {
+                    let matches_name = method_name.as_ref().is_none_or(|name| method.name == *name);
+                    let matches_descriptor = method_descriptor
+                        .as_ref()
+                        .is_none_or(|descriptor| method.descriptor == *descriptor);
+                    if matches_name
+                        && matches_descriptor
+                        && let Some(code) = method.code.as_mut()
+                    {
+                        transform.apply(code);
+                    }
+                }
+            }
             Self::Sequence(specs) => {
                 for spec in specs {
                     spec.apply(model);
@@ -144,6 +399,14 @@ impl fmt::Display for ClassTransformSpec {
             Self::SetFieldAccessFlags { name, flags } => {
                 write!(f, "set_field_access_flags({name:?}, 0x{flags:04X})")
             }
+            Self::CodeTransform {
+                method_name,
+                method_descriptor,
+                transform,
+            } => write!(
+                f,
+                "code_transform(method_name={method_name:?}, method_descriptor={method_descriptor:?}, {transform})"
+            ),
             Self::Sequence(specs) => {
                 write!(f, "sequence(")?;
                 for (i, spec) in specs.iter().enumerate() {

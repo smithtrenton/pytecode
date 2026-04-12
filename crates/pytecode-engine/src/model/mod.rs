@@ -24,6 +24,7 @@ use crate::raw::{
     LookupSwitchInsn as RawLookupSwitchInsn, MatchOffsetPair, MethodInfo, RawClassStub,
     TableSwitchInsn as RawTableSwitchInsn, UnknownAttribute, WideInstruction,
 };
+use crate::transform::InsnMatcher;
 use crate::{EngineError, EngineErrorKind, Result, parse_class, write_class};
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
@@ -144,6 +145,140 @@ impl CodeModel {
 
     pub fn nested_attribute_layout(&self) -> &[NestedCodeAttributeLayout] {
         &self.nested_attribute_layout
+    }
+
+    /// Find the indexes of all instructions matching `matcher`.
+    pub fn find_insns(&self, matcher: &InsnMatcher) -> Vec<usize> {
+        self.instructions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| matcher.matches(item).then_some(index))
+            .collect()
+    }
+
+    /// Find the first instruction matching `matcher` at or after `start`.
+    pub fn find_insn(&self, matcher: &InsnMatcher, start: usize) -> Option<usize> {
+        self.instructions
+            .iter()
+            .enumerate()
+            .skip(start)
+            .find_map(|(index, item)| matcher.matches(item).then_some(index))
+    }
+
+    /// Return whether any instruction matches `matcher`.
+    pub fn contains_insn(&self, matcher: &InsnMatcher) -> bool {
+        self.instructions.iter().any(|item| matcher.matches(item))
+    }
+
+    /// Count instructions matching `matcher`.
+    pub fn count_insns(&self, matcher: &InsnMatcher) -> usize {
+        self.instructions
+            .iter()
+            .filter(|item| matcher.matches(item))
+            .count()
+    }
+
+    /// Find all contiguous sequences whose items match `pattern`.
+    pub fn find_sequences(&self, pattern: &[InsnMatcher]) -> Vec<usize> {
+        if pattern.is_empty() || pattern.len() > self.instructions.len() {
+            return Vec::new();
+        }
+        self.instructions
+            .windows(pattern.len())
+            .enumerate()
+            .filter_map(|(index, window)| {
+                pattern
+                    .iter()
+                    .zip(window.iter())
+                    .all(|(matcher, item)| matcher.matches(item))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    fn find_non_overlapping_sequences(&self, pattern: &[InsnMatcher]) -> Vec<usize> {
+        if pattern.is_empty() || pattern.len() > self.instructions.len() {
+            return Vec::new();
+        }
+
+        let mut matches = Vec::new();
+        let mut index = 0;
+        while index + pattern.len() <= self.instructions.len() {
+            let window = &self.instructions[index..index + pattern.len()];
+            if pattern
+                .iter()
+                .zip(window.iter())
+                .all(|(matcher, item)| matcher.matches(item))
+            {
+                matches.push(index);
+                index += pattern.len();
+            } else {
+                index += 1;
+            }
+        }
+        matches
+    }
+
+    pub fn replace_insns(&mut self, matcher: &InsnMatcher, replacement: &[CodeItem]) -> usize {
+        let matches = self.find_insns(matcher);
+        for index in matches.iter().rev().copied() {
+            self.instructions
+                .splice(index..index + 1, replacement.iter().cloned());
+        }
+        matches.len()
+    }
+
+    pub fn remove_insns(&mut self, matcher: &InsnMatcher) -> usize {
+        let mut removed = 0_usize;
+        self.instructions.retain(|item| {
+            let keep = !matcher.matches(item);
+            if !keep {
+                removed += 1;
+            }
+            keep
+        });
+        removed
+    }
+
+    pub fn insert_before(&mut self, matcher: &InsnMatcher, items: &[CodeItem]) -> usize {
+        if items.is_empty() {
+            return 0;
+        }
+        let matches = self.find_insns(matcher);
+        for index in matches.iter().rev().copied() {
+            self.instructions
+                .splice(index..index, items.iter().cloned());
+        }
+        matches.len()
+    }
+
+    pub fn insert_after(&mut self, matcher: &InsnMatcher, items: &[CodeItem]) -> usize {
+        if items.is_empty() {
+            return 0;
+        }
+        let matches = self.find_insns(matcher);
+        for index in matches.iter().rev().copied() {
+            self.instructions
+                .splice(index + 1..index + 1, items.iter().cloned());
+        }
+        matches.len()
+    }
+
+    pub fn replace_sequences(
+        &mut self,
+        pattern: &[InsnMatcher],
+        replacement: &[CodeItem],
+    ) -> usize {
+        let matches = self.find_non_overlapping_sequences(pattern);
+        for index in matches.iter().rev().copied() {
+            self.instructions
+                .splice(index..index + pattern.len(), replacement.iter().cloned());
+        }
+        matches.len()
+    }
+
+    pub fn remove_sequences(&mut self, pattern: &[InsnMatcher]) -> usize {
+        self.replace_sequences(pattern, &[])
     }
 }
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pytest
 
 import pytecode
 import pytecode.analysis as analysis
+import pytecode.classfile as classfile_api
+import pytecode.model as model_api
 from pytecode.analysis.hierarchy import (
     MappingClassResolver as HierarchyMappingClassResolver,
 )
@@ -17,6 +18,7 @@ from pytecode.analysis.hierarchy import (
     iter_superclasses,
     iter_supertypes,
 )
+from pytecode.archive import FrameComputationMode
 from tests.helpers import compile_java_resource, compile_java_resource_classes
 
 rust = pytest.importorskip("pytecode._rust")
@@ -43,6 +45,21 @@ def test_analysis_package_rust_first_exports() -> None:
     assert analysis.Diagnostic is rust.Diagnostic
     assert callable(analysis.verify_classfile)
     assert callable(analysis.verify_classmodel)
+
+
+def test_semantic_modules_reexport_rust_types() -> None:
+    assert classfile_api.ArrayType.__module__ == "pytecode.classfile.bytecode"
+    assert classfile_api.ClassFile is rust.ClassFile
+    assert classfile_api.ClassReader is rust.ClassReader
+    assert classfile_api.ClassWriter is rust.ClassWriter
+    assert classfile_api.ExceptionInfo is rust.ExceptionInfo
+    assert classfile_api.InsnInfo is rust.InsnInfo
+    assert classfile_api.InsnInfoType.__module__ == "pytecode.classfile.bytecode"
+    assert classfile_api.MatchOffsetPair is rust.MatchOffsetPair
+    assert model_api.ClassModel is rust.ClassModel
+    assert model_api.CodeModel is rust.CodeModel
+    assert model_api.Label is rust.Label
+    assert model_api.RawInsn is rust.RawInsn
 
 
 def test_backend_info_surface() -> None:
@@ -106,6 +123,23 @@ def test_model_lowering_matches_individual_lowering(tmp_path: Path) -> None:
     assert all(
         pytecode.ClassReader.from_bytes(class_bytes).class_info.access_flags & 0x0010 for class_bytes in individual
     )
+
+
+def test_classmodel_option_helpers_accept_frame_mode_enum(tmp_path: Path) -> None:
+    class_paths = compile_java_resource_classes(tmp_path, "HierarchyFixture.java")
+    resolver = analysis.MappingClassResolver.from_bytes([path.read_bytes() for path in class_paths])
+    model = pytecode.ClassModel.from_bytes(class_paths[0].read_bytes())
+
+    rewritten = model.to_bytes_with_options(
+        frame_mode=FrameComputationMode.RECOMPUTE,
+        resolver=resolver,
+    )
+    lowered = model.to_classfile_with_options(
+        frame_mode=FrameComputationMode.RECOMPUTE,
+        resolver=resolver,
+    )
+
+    assert lowered.to_bytes() == rewritten
 
 
 def test_analysis_entrypoints_accept_rust_classfile(tmp_path: Path) -> None:
@@ -225,25 +259,32 @@ def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
     assert any(type(attr).__name__ == "PermittedSubclassesAttr" for attr in shape.attributes)
 
 
-@pytest.mark.parametrize(
-    "module_name",
-    [
-        "pytecode.classfile.reader",
-        "pytecode.classfile.writer",
-        "pytecode.classfile.info",
-        "pytecode.classfile.constant_pool",
-        "pytecode.classfile.descriptors",
-        "pytecode.edit.model",
-        "pytecode.edit.labels",
-        "pytecode.edit.operands",
-        "pytecode.edit.constant_pool_builder",
-        "pytecode.edit.debug_info",
-    ],
-)
-def test_legacy_modules_removed(module_name: str) -> None:
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module(module_name)
+def test_public_reader_surfaces_bytecode_enums_from_classfile_api(tmp_path: Path) -> None:
+    cfg = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "CfgFixture.java")).class_info
+    newarray = next(
+        insn
+        for method in cfg.methods
+        for attr in method.attributes
+        if type(attr).__name__ == "CodeAttr"
+        for insn in attr.code
+        if insn.atype is not None
+    )
 
+    assert isinstance(newarray, classfile_api.InsnInfo)
+    assert newarray.type is classfile_api.InsnInfoType.NEWARRAY
+    assert newarray.atype is classfile_api.ArrayType.INT
+
+
+def test_public_reader_surfaces_exception_table_entries_from_classfile_api(tmp_path: Path) -> None:
+    example = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "TryCatchExample.java")).class_info
+    code_attr = next(
+        attr
+        for method in example.methods
+        for attr in method.attributes
+        if type(attr).__name__ == "CodeAttr" and attr.exception_table
+    )
+
+    assert isinstance(code_attr.exception_table[0], classfile_api.ExceptionInfo)
 
 # --- Error-case tests ---
 

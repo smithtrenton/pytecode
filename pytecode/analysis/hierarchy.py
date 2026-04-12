@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
 from .. import _rust
+from ..classfile import ClassFile
 from ..classfile.constants import ClassAccessFlag, MethodAccessFlag
+from ..model import ClassModel
 
 JAVA_LANG_OBJECT = "java/lang/Object"
 
@@ -60,7 +62,7 @@ class ResolvedClass:
     def from_classfile(cls, classfile: object) -> ResolvedClass:
         """Build a resolved hierarchy snapshot from a Rust-backed classfile."""
 
-        if not isinstance(classfile, _rust.ClassFile):
+        if not isinstance(classfile, ClassFile):
             raise TypeError("ResolvedClass.from_classfile expects a Rust ClassFile")
         return _resolved_class_from_rust(_rust.rust_resolved_classfile(bytes(classfile.to_bytes())))
 
@@ -68,7 +70,7 @@ class ResolvedClass:
     def from_model(cls, model: object) -> ResolvedClass:
         """Build a resolved hierarchy snapshot from a Rust-backed class model."""
 
-        if not isinstance(model, _rust.ClassModel):
+        if not isinstance(model, ClassModel):
             raise TypeError("ResolvedClass.from_model expects a ClassModel")
         return _resolved_class_from_rust(_rust.rust_resolved_classmodel(model))
 

@@ -91,7 +91,7 @@ fn wrap_method_access_flags(
 fn wrap_array_type(py: Python<'_>, atype: raw::ArrayType) -> PyResult<Py<PyAny>> {
     python_enum(
         py,
-        "pytecode.classfile.instructions",
+        "pytecode.classfile",
         "ArrayType",
         i64::from(atype as u8),
     )
@@ -752,7 +752,7 @@ fn instruction_type_value(instruction: &raw::Instruction) -> i64 {
 fn wrap_instruction_type(py: Python<'_>, instruction: &raw::Instruction) -> PyResult<Py<PyAny>> {
     python_enum(
         py,
-        "pytecode.classfile.instructions",
+        "pytecode.classfile",
         "InsnInfoType",
         instruction_type_value(instruction),
     )
@@ -2411,9 +2411,11 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyClassFile>()?;
     module.add_class::<PyClassReader>()?;
     module.add_class::<PyClassWriter>()?;
+    module.add_class::<transforms::PyInsnMatcher>()?;
     module.add_class::<transforms::PyClassMatcher>()?;
     module.add_class::<transforms::PyFieldMatcher>()?;
     module.add_class::<transforms::PyMethodMatcher>()?;
+    module.add_class::<transforms::PyCodeTransform>()?;
     module.add_class::<transforms::PyClassTransform>()?;
     module.add_class::<transforms::PyPipeline>()?;
     module.add_class::<transforms::PyCompiledPipeline>()?;

@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import pytest
 
+import pytecode.model as model_api
 from pytecode._rust import ClassTransform, Pipeline
 from pytecode.transforms import (
+    CodeTransform,
+    InsnMatcher,
     PipelineBuilder,
     add_access_flags,
     add_interface,
@@ -42,6 +45,8 @@ def test_transform_api_exports_builder_and_helpers() -> None:
     assert callable(class_named)
     assert callable(method_named)
     assert callable(add_access_flags)
+    assert callable(InsnMatcher)
+    assert callable(CodeTransform)
     assert callable(rename_class)
 
 
@@ -133,6 +138,29 @@ class TestTransformFactories:
         t = rename_class("Foo")
         assert "ClassTransform" in repr(t)
 
+    def test_code_transform_factories(self) -> None:
+        matcher = InsnMatcher.opcode(0x00)
+        replacement = [model_api.RawInsn(0x57)]
+        t = CodeTransform.sequence(
+            [
+                CodeTransform.replace_insn(matcher, replacement),
+                CodeTransform.remove_sequence([InsnMatcher.opcode(0x2A), InsnMatcher.opcode(0xB7)]),
+                CodeTransform.insert_before(matcher, replacement),
+                CodeTransform.insert_after(matcher, replacement),
+            ]
+        )
+        assert isinstance(t, CodeTransform)
+        assert "sequence" in str(t)
+
+    def test_class_code_transform_factory(self) -> None:
+        t = ClassTransform.code_transform(
+            CodeTransform.remove_insn(InsnMatcher.is_label()),
+            method_name="main",
+            method_descriptor="([Ljava/lang/String;)V",
+        )
+        assert isinstance(t, ClassTransform)
+        assert "code_transform" in str(t)
+
 
 # ---------------------------------------------------------------------------
 # Pipeline builder tests
@@ -215,6 +243,18 @@ class TestPipelineBuilder:
         )
         assert len(p) == 3
 
+    def test_code_step(self) -> None:
+        p = (
+            PipelineBuilder()
+            .on_code(
+                method_named("main"),
+                CodeTransform.remove_insn(InsnMatcher.is_label()),
+                owner_matcher=class_named("Example"),
+            )
+            .build()
+        )
+        assert len(p) == 1
+
 
 # ---------------------------------------------------------------------------
 # Combined matcher + transform composition tests
@@ -285,6 +325,166 @@ def multi_class_bytes() -> list[bytes]:
         return [z.read(n) for n in names]
 
 
+def _matcher_for_item(item: object) -> InsnMatcher | None:
+    item_type = str(getattr(item, "kind", ""))
+    if item_type in {"raw", "byte", "short"}:
+        return InsnMatcher.opcode(int(getattr(item, "opcode")))
+    if item_type == "newarray":
+        return InsnMatcher.opcode(0xBC)
+    if item_type == "field":
+        return InsnMatcher.field(
+            str(getattr(item, "owner")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+        )
+    if item_type == "method":
+        return InsnMatcher.method(
+            str(getattr(item, "owner")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+        )
+    if item_type == "interface_method":
+        return (
+            InsnMatcher.method_owner(str(getattr(item, "owner")))
+            & InsnMatcher.method_named(str(getattr(item, "name")))
+            & InsnMatcher.method_descriptor(str(getattr(item, "descriptor")))
+        )
+    if item_type == "type":
+        return InsnMatcher.opcode(int(getattr(item, "opcode"))) & InsnMatcher.type_descriptor(
+            str(getattr(item, "descriptor"))
+        )
+    if item_type == "var":
+        return InsnMatcher.opcode(int(getattr(item, "opcode"))) & InsnMatcher.var_slot(int(getattr(item, "slot")))
+    if item_type == "iinc":
+        return InsnMatcher.opcode(0x84) & InsnMatcher.var_slot(int(getattr(item, "slot")))
+    if item_type == "ldc":
+        value_type = getattr(item, "value_type", None)
+        if value_type == "string":
+            return InsnMatcher.ldc_string(str(getattr(item, "value")))
+        return InsnMatcher.is_ldc()
+    if item_type == "label":
+        return InsnMatcher.is_label()
+    if item_type == "branch":
+        return InsnMatcher.is_branch() & InsnMatcher.opcode(int(getattr(item, "opcode")))
+    if item_type == "multianewarray":
+        return InsnMatcher.opcode(0xC5) & InsnMatcher.type_descriptor(str(getattr(item, "descriptor")))
+    if item_type == "invokedynamic":
+        return InsnMatcher.opcode(0xBA)
+    return None
+
+
+def _clone_item(item: object) -> object:
+    kind = str(getattr(item, "kind", ""))
+    if kind == "label":
+        return item
+    if kind == "raw":
+        return model_api.RawInsn(int(getattr(item, "opcode")))
+    if kind == "byte":
+        return model_api.ByteInsn(int(getattr(item, "opcode")), int(getattr(item, "value")))
+    if kind == "short":
+        return model_api.ShortInsn(int(getattr(item, "opcode")), int(getattr(item, "value")))
+    if kind == "newarray":
+        return model_api.NewArrayInsn(int(getattr(item, "atype")))
+    if kind == "field":
+        return model_api.FieldInsn(
+            int(getattr(item, "opcode")),
+            str(getattr(item, "owner")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+        )
+    if kind == "method":
+        return model_api.MethodInsn(
+            int(getattr(item, "opcode")),
+            str(getattr(item, "owner")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+            bool(getattr(item, "is_interface")),
+        )
+    if kind == "interface_method":
+        return model_api.InterfaceMethodInsn(
+            str(getattr(item, "owner")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+        )
+    if kind == "type":
+        return model_api.TypeInsn(int(getattr(item, "opcode")), str(getattr(item, "descriptor")))
+    if kind == "var":
+        return model_api.VarInsn(int(getattr(item, "opcode")), int(getattr(item, "slot")))
+    if kind == "iinc":
+        return model_api.IIncInsn(int(getattr(item, "slot")), int(getattr(item, "value")))
+    if kind == "ldc":
+        value_type = str(getattr(item, "value_type"))
+        value = getattr(item, "value")
+        if value_type == "method_handle":
+            return model_api.LdcInsn.method_handle(
+                int(getattr(value, "reference_kind")),
+                str(getattr(value, "owner")),
+                str(getattr(value, "name")),
+                str(getattr(value, "descriptor")),
+                bool(getattr(value, "is_interface")),
+            )
+        if value_type == "dynamic":
+            return model_api.LdcInsn.dynamic(
+                int(getattr(value, "bootstrap_method_attr_index")),
+                str(getattr(value, "name")),
+                str(getattr(value, "descriptor")),
+            )
+        if value_type == "int":
+            return model_api.LdcInsn.int(int(value))
+        if value_type == "float_bits":
+            return model_api.LdcInsn.float_bits(int(value))
+        if value_type == "long":
+            return model_api.LdcInsn.long(int(value))
+        if value_type == "double_bits":
+            return model_api.LdcInsn.double_bits(int(value))
+        if value_type == "string":
+            return model_api.LdcInsn.string(str(value))
+        if value_type == "class":
+            return model_api.LdcInsn.class_value(str(value))
+        if value_type == "method_type":
+            return model_api.LdcInsn.method_type(str(value))
+        raise TypeError(f"unsupported ldc value_type {value_type!r}")
+    if kind == "invokedynamic":
+        return model_api.InvokeDynamicInsn(
+            int(getattr(item, "bootstrap_method_attr_index")),
+            str(getattr(item, "name")),
+            str(getattr(item, "descriptor")),
+        )
+    if kind == "multianewarray":
+        return model_api.MultiANewArrayInsn(
+            str(getattr(item, "descriptor")),
+            int(getattr(item, "dimensions")),
+        )
+    if kind == "branch":
+        return model_api.BranchInsn(int(getattr(item, "opcode")), getattr(item, "target"))
+    if kind == "lookupswitch":
+        return model_api.LookupSwitchInsn(getattr(item, "default_target"), list(getattr(item, "pairs")))
+    if kind == "tableswitch":
+        return model_api.TableSwitchInsn(
+            getattr(item, "default_target"),
+            int(getattr(item, "low")),
+            int(getattr(item, "high")),
+            list(getattr(item, "targets")),
+        )
+    raise TypeError(f"unsupported instruction item {type(item)!r}")
+
+
+def _find_unique_sequence(code: object) -> tuple[int, list[InsnMatcher], list[object]]:
+    raw_items = code.instructions.to_list()
+    assert all(not isinstance(item, dict) for item in raw_items)
+    for window_size in (2, 3):
+        for start in range(len(raw_items) - window_size):
+            window = raw_items[start : start + window_size]
+            matchers = [_matcher_for_item(item) for item in window]
+            if any(matcher is None for matcher in matchers):
+                continue
+            typed_matchers = [matcher for matcher in matchers if matcher is not None]
+            if code.find_sequences(typed_matchers) == [start]:
+                replacement = [_clone_item(raw_items[start + window_size])]
+                return start, typed_matchers, replacement
+    raise AssertionError("fixture did not contain a uniquely matchable instruction sequence")
+
+
 class TestPipelineApply:
     """End-to-end pipeline application on real ClassModel objects."""
 
@@ -323,6 +523,67 @@ class TestPipelineApply:
         p.build().apply(m)
 
         assert m.access_flags == (orig_flags | 0x0010)
+
+    def test_apply_sequence_replace_via_on_code(self, class_bytes: bytes) -> None:
+        from pytecode._rust import ClassModel
+
+        model = ClassModel.from_bytes(class_bytes)
+        method = next(
+            method
+            for method in model.methods
+            if method.code is not None and len(method.code.instructions) >= 4
+        )
+        code = method.code
+        assert code is not None
+        start, pattern, replacement = _find_unique_sequence(code)
+        original_len = len(code.instructions)
+
+        (
+            PipelineBuilder()
+            .on_code(
+                method_named(method.name),
+                CodeTransform.replace_sequence(pattern, replacement),
+                owner_matcher=class_named(model.name),
+            )
+            .build()
+            .apply(model)
+        )
+
+        updated_code = next(m for m in model.methods if m.name == method.name).code
+        assert updated_code is not None
+        assert len(updated_code.instructions) == original_len - len(pattern) + len(replacement)
+        assert start not in updated_code.find_sequences(pattern)
+
+    def test_apply_class_code_transform_export(self, class_bytes: bytes) -> None:
+        from pytecode._rust import ClassModel
+
+        model = ClassModel.from_bytes(class_bytes)
+        method = next(
+            method
+            for method in model.methods
+            if method.code is not None and len(method.code.instructions) >= 4
+        )
+        code = method.code
+        assert code is not None
+        _, pattern, _ = _find_unique_sequence(code)
+
+        (
+            PipelineBuilder()
+            .on_classes(
+                class_named(model.name),
+                ClassTransform.code_transform(
+                    CodeTransform.remove_sequence(pattern),
+                    method_name=method.name,
+                    method_descriptor=method.descriptor,
+                ),
+            )
+            .build()
+            .apply(model)
+        )
+
+        updated_code = next(m for m in model.methods if m.name == method.name).code
+        assert updated_code is not None
+        assert not updated_code.find_sequences(pattern)
 
     def test_apply_set_super_class(self, class_bytes: bytes) -> None:
         from pytecode._rust import ClassModel

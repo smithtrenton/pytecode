@@ -9,7 +9,7 @@ use crate::transform::matcher_spec::{
     ClassMatcherSpec, CompiledClassMatcher, CompiledFieldMatcher, CompiledMethodMatcher,
     FieldMatcherSpec, MethodMatcherSpec,
 };
-use crate::transform::transform_spec::ClassTransformSpec;
+use crate::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
 use std::fmt;
 
 /// The action to perform when a step's matcher matches.
@@ -50,6 +50,12 @@ pub enum PipelineStep {
         method_matcher: MethodMatcherSpec,
         action: TransformAction,
     },
+    /// Apply a code-level transform to matching methods with code.
+    Code {
+        owner_matcher: ClassMatcherSpec,
+        method_matcher: MethodMatcherSpec,
+        action: CodeTransformSpec,
+    },
 }
 
 impl fmt::Display for PipelineStep {
@@ -78,6 +84,16 @@ impl fmt::Display for PipelineStep {
                     "on_methods({method_matcher}, owner={owner_matcher}, {action:?})"
                 )
             }
+            Self::Code {
+                owner_matcher,
+                method_matcher,
+                action,
+            } => {
+                write!(
+                    f,
+                    "on_code({method_matcher}, owner={owner_matcher}, {action})"
+                )
+            }
         }
     }
 }
@@ -104,6 +120,11 @@ enum CompiledStep {
         owner_matcher: CompiledClassMatcher,
         method_matcher: CompiledMethodMatcher,
         action: TransformAction,
+    },
+    Code {
+        owner_matcher: CompiledClassMatcher,
+        method_matcher: CompiledMethodMatcher,
+        action: CodeTransformSpec,
     },
 }
 
@@ -154,6 +175,21 @@ impl PipelineSpec {
         self
     }
 
+    /// Add a code-level step.
+    pub fn on_code(
+        mut self,
+        method_matcher: MethodMatcherSpec,
+        owner_matcher: ClassMatcherSpec,
+        action: CodeTransformSpec,
+    ) -> Self {
+        self.steps.push(PipelineStep::Code {
+            owner_matcher,
+            method_matcher,
+            action,
+        });
+        self
+    }
+
     /// Compile the pipeline for efficient repeated evaluation.
     pub fn compile(&self) -> CompiledPipeline {
         let steps = self
@@ -178,6 +214,15 @@ impl PipelineSpec {
                     method_matcher,
                     action,
                 } => CompiledStep::Method {
+                    owner_matcher: CompiledClassMatcher::from_spec(owner_matcher),
+                    method_matcher: CompiledMethodMatcher::from_spec(method_matcher),
+                    action: action.clone(),
+                },
+                PipelineStep::Code {
+                    owner_matcher,
+                    method_matcher,
+                    action,
+                } => CompiledStep::Code {
                     owner_matcher: CompiledClassMatcher::from_spec(owner_matcher),
                     method_matcher: CompiledMethodMatcher::from_spec(method_matcher),
                     action: action.clone(),
@@ -243,6 +288,23 @@ impl CompiledPipeline {
                     let has_match = model.methods.iter().any(|m| method_matcher.matches(m));
                     if has_match {
                         Self::apply_action(action, model);
+                    }
+                }
+                CompiledStep::Code {
+                    owner_matcher,
+                    method_matcher,
+                    action,
+                } => {
+                    if !owner_matcher.matches(model) {
+                        continue;
+                    }
+                    for method in &mut model.methods {
+                        if !method_matcher.matches(method) {
+                            continue;
+                        }
+                        if let Some(code) = method.code.as_mut() {
+                            action.apply(code);
+                        }
                     }
                 }
             }
