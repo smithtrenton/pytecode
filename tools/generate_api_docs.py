@@ -20,11 +20,15 @@ OUTPUT_DIR = REPO_ROOT / "docs" / "api"
 PUBLIC_MODULES: list[str] = [
     "pytecode",
     "pytecode.analysis",
-    "pytecode.classfile.constants",
     "pytecode.analysis.hierarchy",
-    "pytecode.archive",
-    "pytecode.transforms",
     "pytecode.analysis.verify",
+    "pytecode.archive",
+    "pytecode.classfile",
+    "pytecode.classfile.attributes",
+    "pytecode.classfile.bytecode",
+    "pytecode.classfile.constants",
+    "pytecode.model",
+    "pytecode.transforms",
 ]
 
 

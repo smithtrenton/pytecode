@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 import pytecode
 import pytecode.archive as jar_module
+import pytecode.classfile.attributes as attr_api
 from pytecode.archive import FrameComputationMode, JarFile, JarInfo
 from pytecode.classfile.constants import ClassAccessFlag
 from pytecode.transforms import PipelineBuilder, add_access_flags, class_named
@@ -516,23 +517,81 @@ def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path
     rewritten = JarFile(out_path)
     class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
     assert not any(
-        isinstance(attr, (rust.SourceFileAttr, rust.SourceDebugExtensionAttr)) for attr in class_info.attributes
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
     )
     for method in class_info.methods:
-        code_attr = next((attr for attr in method.attributes if isinstance(attr, rust.CodeAttr)), None)
+        code_attr = cast(
+            attr_api.CodeAttr | None,
+            next((attr for attr in method.attributes if type(attr).__name__ == "CodeAttr"), None),
+        )
         if code_attr is None:
             continue
         assert not any(
-            isinstance(attr, (rust.LineNumberTableAttr, rust.LocalVariableTableAttr, rust.LocalVariableTypeTableAttr))
+            type(attr).__name__ in {"LineNumberTableAttr", "LocalVariableTableAttr", "LocalVariableTypeTableAttr"}
             for attr in code_attr.attributes
         )
 
 
-def test_rewrite_rejects_plain_python_transform(tmp_path: Path) -> None:
+def test_rewrite_accepts_plain_python_transform(tmp_path: Path) -> None:
     jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
     jar = JarFile(jar_path)
-    with pytest.raises(TypeError, match="requires a ClassTransform"):
-        jar.rewrite(transform=lambda model: None)
+    out_path = tmp_path / "rewritten-python-callback.jar"
+
+    def add_final(model: pytecode.ClassModel) -> None:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+
+    jar.rewrite(out_path, transform=add_final)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_python_transform_must_return_none(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+
+    def bad_transform(model: pytecode.ClassModel) -> int:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+        return 1
+
+    with pytest.raises(TypeError, match="must mutate ClassModel in place and return None"):
+        jar.rewrite(transform=bad_transform)
+
+
+def test_rewrite_pipeline_with_python_callbacks(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-python-pipeline.jar"
+    pipeline = PipelineBuilder().build()
+    pipeline.on_classes_custom(
+        rust.ClassMatcher.any(),
+        lambda model: setattr(model, "access_flags", model.access_flags | int(ClassAccessFlag.FINAL)),
+    )
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_python_transform_supports_skip_debug(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-python-skip-debug.jar"
+
+    def add_final(model: pytecode.ClassModel) -> None:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+
+    jar.rewrite(out_path, transform=add_final, skip_debug=True)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+    assert not any(
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
+    )
 
 
 def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_path: Path):
@@ -581,7 +640,7 @@ def test_rewrite_supports_skip_debug_with_rust_pipeline_transform(tmp_path: Path
     class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
     assert ClassAccessFlag.FINAL in class_info.access_flags
     assert not any(
-        isinstance(attr, (rust.SourceFileAttr, rust.SourceDebugExtensionAttr)) for attr in class_info.attributes
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
     )
 
 
@@ -645,7 +704,7 @@ def test_rewrite_is_atomic_when_transform_fails(tmp_path: Path):
 
     pipeline = PipelineBuilder().on_classes_custom(rust.ClassMatcher.any(), explode).build()
 
-    with pytest.raises(NotImplementedError, match="does not support Python callback pipeline steps"):
+    with pytest.raises(RuntimeError, match="boom"):
         jar.rewrite(transform=pipeline)
 
     assert jar_path.read_bytes() == original_bytes

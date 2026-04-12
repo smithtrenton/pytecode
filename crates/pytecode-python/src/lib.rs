@@ -2356,23 +2356,6 @@ impl PyClassWriter {
     }
 }
 
-#[pyfunction]
-fn backend_info() -> (&'static str, &'static str, Vec<&'static str>) {
-    (
-        "pytecode._rust",
-        env!("CARGO_PKG_VERSION"),
-        vec![
-            "ClassFile",
-            "ClassReader",
-            "ClassWriter",
-            "FieldInfo",
-            "MethodInfo",
-            "InsnInfo",
-            "CodeAttr",
-        ],
-    )
-}
-
 #[pymodule]
 fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
@@ -2419,7 +2402,6 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<transforms::PyClassTransform>()?;
     module.add_class::<transforms::PyPipeline>()?;
     module.add_class::<transforms::PyCompiledPipeline>()?;
-    module.add_function(wrap_pyfunction!(backend_info, module)?)?;
     model::register(py, module)?;
     analysis::register(py, module)?;
     archive::register(py, module)?;
@@ -2439,7 +2421,6 @@ fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
             "FieldrefInfo",
             "MethodrefInfo",
             "InterfaceMethodrefInfo",
-            "backend_info",
         ],
     )?;
     Ok(())

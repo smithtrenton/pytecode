@@ -48,7 +48,7 @@ The original roadmap is complete. This file now serves as a compact record of th
 
 These are not active roadmap items, but they remain plausible future directions if concrete use cases appear:
 
-- an opt-in javac-compatible constant-pool ordering mode for from-scratch generation
+- an opt-in javac-style constant-pool ordering mode for from-scratch generation
 - higher-level instruction pattern matching layered on top of the current matcher DSL
 - an optional visitor or streaming API if real throughput or memory-pressure workloads justify a second traversal model
 

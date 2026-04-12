@@ -1117,13 +1117,34 @@ pub struct PyPipeline {
 }
 
 impl PyPipeline {
-    pub(crate) fn has_python_callbacks(&self) -> bool {
+    pub(crate) fn contains_python_callbacks(&self) -> bool {
         self.spec.steps.iter().any(|step| match step {
             PipelineStep::Class { action, .. }
             | PipelineStep::Field { action, .. }
             | PipelineStep::Method { action, .. } => matches!(action, TransformAction::Custom(_)),
             PipelineStep::Code { .. } => false,
         })
+    }
+
+    fn take_callback_error(&self) -> Option<PyErr> {
+        self.callback_error.lock().unwrap().take()
+    }
+
+    pub(crate) fn apply_to_engine_model(&self, model: &mut ClassModel) -> PyResult<()> {
+        let compiled = self.spec.compile();
+        compiled.apply(model);
+        if let Some(err) = self.take_callback_error() {
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn compile_internal(&self) -> PyCompiledPipeline {
+        PyCompiledPipeline {
+            inner: self.spec.compile(),
+            contains_python_callbacks: self.contains_python_callbacks(),
+            callback_error: self.callback_error.clone(),
+        }
     }
 }
 
@@ -1290,40 +1311,26 @@ impl PyPipeline {
     /// For repeated single-model calls in a loop, prefer [`PyPipeline::compile`] to avoid
     /// re-compiling regex matchers on every invocation.
     fn apply(&self, model: &mut PyClassModel) -> PyResult<()> {
-        let compiled = self.spec.compile();
-        model.with_class_model_mut(|inner| {
-            compiled.apply(inner);
-            Ok(())
-        })?;
-        if let Some(err) = self.callback_error.lock().unwrap().take() {
-            return Err(err);
-        }
-        Ok(())
+        model.with_class_model_mut(|inner| self.apply_to_engine_model(inner))
     }
 
     /// Apply pipeline to many models (mutates in-place).
     fn apply_all(&self, _py: Python<'_>, models: &Bound<'_, pyo3::types::PyList>) -> PyResult<()> {
-        let compiled = self.spec.compile();
         for item in models.iter() {
             let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
-            model.with_class_model_mut(|inner| {
-                compiled.apply(inner);
-                Ok(())
-            })?;
-            if let Some(err) = self.callback_error.lock().unwrap().take() {
-                return Err(err);
-            }
+            model.with_class_model_mut(|inner| self.apply_to_engine_model(inner))?;
         }
         Ok(())
     }
 
+    /// Report whether this pipeline contains custom Python callback steps.
+    fn has_python_callbacks(&self) -> bool {
+        self.contains_python_callbacks()
+    }
+
     /// Compile the pipeline for repeated application (pre-compiles regexes).
     fn compile(&self) -> PyCompiledPipeline {
-        PyCompiledPipeline {
-            inner: self.spec.compile(),
-            contains_python_callbacks: self.has_python_callbacks(),
-            callback_error: self.callback_error.clone(),
-        }
+        self.compile_internal()
     }
 
     /// Return the number of steps in this pipeline.
@@ -1349,31 +1356,37 @@ pub struct PyCompiledPipeline {
     callback_error: std::sync::Arc<std::sync::Mutex<Option<pyo3::PyErr>>>,
 }
 
+impl PyCompiledPipeline {
+    fn take_callback_error(&self) -> Option<PyErr> {
+        self.callback_error.lock().unwrap().take()
+    }
+
+    pub(crate) fn apply_to_engine_model(&self, model: &mut ClassModel) -> PyResult<()> {
+        self.inner.apply(model);
+        if let Some(err) = self.take_callback_error() {
+            return Err(err);
+        }
+        Ok(())
+    }
+}
+
 #[pymethods]
 impl PyCompiledPipeline {
     /// Apply compiled pipeline to a single model (mutates in-place).
     fn apply(&self, model: &mut PyClassModel) -> PyResult<()> {
-        model.with_class_model_mut(|inner| {
-            self.inner.apply(inner);
-            Ok(())
-        })?;
-        if let Some(err) = self.callback_error.lock().unwrap().take() {
-            return Err(err);
-        }
-        Ok(())
+        model.with_class_model_mut(|inner| self.apply_to_engine_model(inner))
+    }
+
+    /// Report whether this compiled pipeline contains custom Python callback steps.
+    fn has_python_callbacks(&self) -> bool {
+        self.contains_python_callbacks
     }
 
     /// Apply compiled pipeline to many models (mutates in-place).
     fn apply_all(&self, _py: Python<'_>, models: &Bound<'_, pyo3::types::PyList>) -> PyResult<()> {
         for item in models.iter() {
             let mut model: PyRefMut<'_, PyClassModel> = item.extract()?;
-            model.with_class_model_mut(|inner| {
-                self.inner.apply(inner);
-                Ok(())
-            })?;
-            if let Some(err) = self.callback_error.lock().unwrap().take() {
-                return Err(err);
-            }
+            model.with_class_model_mut(|inner| self.apply_to_engine_model(inner))?;
         }
         Ok(())
     }

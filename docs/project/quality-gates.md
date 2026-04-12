@@ -48,4 +48,4 @@ To keep scope focused, the project is not trying to become:
 
 ## Summary
 
-`pytecode` already meets the original quality bar for a Python bytecode manipulation toolkit: deterministic classfile emission, a mutable symbolic editing model, transform composition, hierarchy-aware analysis, structured validation diagnostics, optional JAR rewriting, JVM-backed CFG differential checks, multi-release validation tiers, and generated API reference coverage.
+`pytecode` maintains a release-quality bar for a Rust-backed JVM bytecode toolkit with a Python API: deterministic classfile emission, a mutable symbolic editing model, transform composition, hierarchy-aware analysis, structured validation diagnostics, optional JAR rewriting, JVM-backed CFG differential checks, multi-release validation tiers, and generated API reference coverage.

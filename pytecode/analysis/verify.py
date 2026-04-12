@@ -1,4 +1,4 @@
-"""Rust-first verification entry points for classfiles and class models."""
+"""Verification helpers for raw classfiles and mutable class models."""
 
 from __future__ import annotations
 
@@ -24,7 +24,12 @@ def _classfile_bytes(value: object) -> bytes:
 
 
 def verify_classfile(value: object, *, fail_fast: bool = False) -> list[Diagnostic]:
-    """Verify classfile bytes or a Rust-backed classfile through the Rust verifier."""
+    """Run the Rust verifier on classfile bytes or a Rust-backed classfile.
+
+    ``value`` may be raw bytes, a :class:`pytecode.classfile.ClassFile`, or any
+    object exposing a ``class_info`` attribute such as
+    :class:`pytecode.classfile.ClassReader`.
+    """
 
     return _rust.rust_verify_classfile(_classfile_bytes(value), fail_fast=fail_fast)
 
@@ -35,7 +40,11 @@ def verify_classmodel(
     *,
     fail_fast: bool = False,
 ) -> list[Diagnostic]:
-    """Verify a Rust-backed class model through the Rust verifier."""
+    """Run the Rust verifier on a mutable :class:`pytecode.model.ClassModel`.
+
+    Pass ``resolver`` when verification needs hierarchy information, such as
+    frame or override-sensitive checks.
+    """
 
     if not isinstance(value, ClassModel):
         raise TypeError("verify_classmodel expects a ClassModel")

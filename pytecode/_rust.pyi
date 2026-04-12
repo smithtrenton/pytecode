@@ -1,11 +1,181 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Literal, TypedDict
 
 from .archive import FrameComputationMode
 from .classfile.bytecode import ArrayType, InsnInfoType
+from .classfile.constants import (
+    ClassAccessFlag,
+    FieldAccessFlag,
+    MethodAccessFlag,
+    MethodParameterAccessFlag,
+    ModuleAccessFlag,
+    ModuleExportsAccessFlag,
+    ModuleOpensAccessFlag,
+    ModuleRequiresAccessFlag,
+    NestedClassAccessFlag,
+    TargetType,
+    TypePathKind,
+    VerificationType,
+)
+
+class _RustResolvedMethodData(TypedDict):
+    name: str
+    descriptor: str
+    access_flags: int
+
+class _RustResolvedClassData(TypedDict):
+    name: str
+    super_name: str | None
+    interfaces: list[str]
+    access_flags: int
+    methods: list[_RustResolvedMethodData]
+
+class _RustInheritedMethodData(TypedDict):
+    owner: str
+    name: str
+    descriptor: str
+    access_flags: int
+
+class LegacyLabelCodeItem(TypedDict):
+    type: Literal["label"]
+    label: Label
+
+class LegacyRawCodeItem(TypedDict):
+    type: Literal["raw"]
+    opcode: int
+
+class LegacyByteCodeItem(TypedDict):
+    type: Literal["byte"]
+    opcode: int
+    value: int
+
+class LegacyShortCodeItem(TypedDict):
+    type: Literal["short"]
+    opcode: int
+    value: int
+
+class LegacyNewArrayCodeItem(TypedDict):
+    type: Literal["newarray"]
+    atype: int
+
+class LegacyFieldCodeItem(TypedDict):
+    type: Literal["field"]
+    opcode: int
+    owner: str
+    name: str
+    descriptor: str
+
+class LegacyMethodCodeItem(TypedDict):
+    type: Literal["method"]
+    opcode: int
+    owner: str
+    name: str
+    descriptor: str
+    is_interface: bool
+
+class LegacyInterfaceMethodCodeItem(TypedDict):
+    type: Literal["interface_method"]
+    owner: str
+    name: str
+    descriptor: str
+
+class LegacyTypeCodeItem(TypedDict):
+    type: Literal["type"]
+    opcode: int
+    descriptor: str
+
+class LegacyVarCodeItem(TypedDict):
+    type: Literal["var"]
+    opcode: int
+    slot: int
+
+class LegacyIIncCodeItem(TypedDict):
+    type: Literal["iinc"]
+    slot: int
+    value: int
+
+class LegacyLdcIntCodeItem(TypedDict):
+    type: Literal["ldc"]
+    value_type: Literal["int", "float", "long", "double"]
+    value: int
+
+class LegacyLdcStringCodeItem(TypedDict):
+    type: Literal["ldc"]
+    value_type: Literal["string", "class", "method_type"]
+    value: str
+
+class LegacyLdcMethodHandleCodeItem(TypedDict):
+    type: Literal["ldc"]
+    value_type: Literal["method_handle"]
+    reference_kind: int
+    owner: str
+    name: str
+    descriptor: str
+    is_interface: bool
+
+class LegacyLdcDynamicCodeItem(TypedDict):
+    type: Literal["ldc"]
+    value_type: Literal["dynamic"]
+    bootstrap_method_attr_index: int
+    name: str
+    descriptor: str
+
+class LegacyInvokeDynamicCodeItem(TypedDict):
+    type: Literal["invokedynamic"]
+    bootstrap_method_attr_index: int
+    name: str
+    descriptor: str
+
+class LegacyMultiANewArrayCodeItem(TypedDict):
+    type: Literal["multianewarray"]
+    descriptor: str
+    dimensions: int
+
+class LegacyBranchCodeItem(TypedDict):
+    type: Literal["branch"]
+    opcode: int
+    target: Label
+
+class LegacyLookupSwitchCodeItem(TypedDict):
+    type: Literal["lookupswitch"]
+    default_target: Label
+    pairs: list[tuple[int, Label]]
+
+class LegacyTableSwitchCodeItem(TypedDict):
+    type: Literal["tableswitch"]
+    default_target: Label
+    low: int
+    high: int
+    targets: list[Label]
+
+type LegacyCodeItem = (
+    LegacyLabelCodeItem
+    | LegacyRawCodeItem
+    | LegacyByteCodeItem
+    | LegacyShortCodeItem
+    | LegacyNewArrayCodeItem
+    | LegacyFieldCodeItem
+    | LegacyMethodCodeItem
+    | LegacyInterfaceMethodCodeItem
+    | LegacyTypeCodeItem
+    | LegacyVarCodeItem
+    | LegacyIIncCodeItem
+    | LegacyLdcIntCodeItem
+    | LegacyLdcStringCodeItem
+    | LegacyLdcMethodHandleCodeItem
+    | LegacyLdcDynamicCodeItem
+    | LegacyInvokeDynamicCodeItem
+    | LegacyMultiANewArrayCodeItem
+    | LegacyBranchCodeItem
+    | LegacyLookupSwitchCodeItem
+    | LegacyTableSwitchCodeItem
+)
+
+type ClassModelCallback = Callable[[ClassModel], object | None]
+type ArchiveTransform = ClassTransform | Pipeline | CompiledPipeline | ClassModelCallback
 
 # =============================================================================
 # Exception
@@ -329,7 +499,17 @@ class CodeAttr:
     @property
     def attributes_count(self) -> int: ...
     @property
-    def attributes(self) -> list[Any]: ...
+    def attributes(
+        self,
+    ) -> list[
+        StackMapTableAttr
+        | LineNumberTableAttr
+        | LocalVariableTableAttr
+        | LocalVariableTypeTableAttr
+        | RuntimeVisibleTypeAnnotationsAttr
+        | RuntimeInvisibleTypeAnnotationsAttr
+        | UnimplementedAttr
+    ]: ...
 
 class UnimplementedAttr:
     @property
@@ -347,7 +527,7 @@ class UnimplementedAttr:
 
 class FieldInfo:
     @property
-    def access_flags(self) -> Any: ...
+    def access_flags(self) -> FieldAccessFlag: ...
     @property
     def name_index(self) -> int: ...
     @property
@@ -355,11 +535,45 @@ class FieldInfo:
     @property
     def attributes_count(self) -> int: ...
     @property
-    def attributes(self) -> list[Any]: ...
+    def attributes(
+        self,
+    ) -> list[
+        ConstantValueAttr
+        | SignatureAttr
+        | SourceFileAttr
+        | SourceDebugExtensionAttr
+        | ExceptionsAttr
+        | CodeAttr
+        | UnimplementedAttr
+        | StackMapTableAttr
+        | InnerClassesAttr
+        | EnclosingMethodAttr
+        | SyntheticAttr
+        | DeprecatedAttr
+        | LineNumberTableAttr
+        | LocalVariableTableAttr
+        | LocalVariableTypeTableAttr
+        | RuntimeVisibleAnnotationsAttr
+        | RuntimeInvisibleAnnotationsAttr
+        | RuntimeVisibleParameterAnnotationsAttr
+        | RuntimeInvisibleParameterAnnotationsAttr
+        | RuntimeVisibleTypeAnnotationsAttr
+        | RuntimeInvisibleTypeAnnotationsAttr
+        | AnnotationDefaultAttr
+        | BootstrapMethodsAttr
+        | MethodParametersAttr
+        | ModuleAttr
+        | ModulePackagesAttr
+        | ModuleMainClassAttr
+        | NestHostAttr
+        | NestMembersAttr
+        | RecordAttr
+        | PermittedSubclassesAttr
+    ]: ...
 
 class MethodInfo:
     @property
-    def access_flags(self) -> Any: ...
+    def access_flags(self) -> MethodAccessFlag: ...
     @property
     def name_index(self) -> int: ...
     @property
@@ -367,7 +581,41 @@ class MethodInfo:
     @property
     def attributes_count(self) -> int: ...
     @property
-    def attributes(self) -> list[Any]: ...
+    def attributes(
+        self,
+    ) -> list[
+        ConstantValueAttr
+        | SignatureAttr
+        | SourceFileAttr
+        | SourceDebugExtensionAttr
+        | ExceptionsAttr
+        | CodeAttr
+        | UnimplementedAttr
+        | StackMapTableAttr
+        | InnerClassesAttr
+        | EnclosingMethodAttr
+        | SyntheticAttr
+        | DeprecatedAttr
+        | LineNumberTableAttr
+        | LocalVariableTableAttr
+        | LocalVariableTypeTableAttr
+        | RuntimeVisibleAnnotationsAttr
+        | RuntimeInvisibleAnnotationsAttr
+        | RuntimeVisibleParameterAnnotationsAttr
+        | RuntimeInvisibleParameterAnnotationsAttr
+        | RuntimeVisibleTypeAnnotationsAttr
+        | RuntimeInvisibleTypeAnnotationsAttr
+        | AnnotationDefaultAttr
+        | BootstrapMethodsAttr
+        | MethodParametersAttr
+        | ModuleAttr
+        | ModulePackagesAttr
+        | ModuleMainClassAttr
+        | NestHostAttr
+        | NestMembersAttr
+        | RecordAttr
+        | PermittedSubclassesAttr
+    ]: ...
 
 class ClassFile:
     @property
@@ -379,9 +627,9 @@ class ClassFile:
     @property
     def constant_pool_count(self) -> int: ...
     @property
-    def constant_pool(self) -> list[Any | None]: ...
+    def constant_pool(self) -> list[ConstantPoolEntry | None]: ...
     @property
-    def access_flags(self) -> Any: ...
+    def access_flags(self) -> ClassAccessFlag: ...
     @property
     def this_class(self) -> int: ...
     @property
@@ -409,21 +657,67 @@ class ClassFile:
     @property
     def attribute_count(self) -> int: ...
     @property
-    def attributes(self) -> list[Any]: ...
+    def attributes(
+        self,
+    ) -> list[
+        ConstantValueAttr
+        | SignatureAttr
+        | SourceFileAttr
+        | SourceDebugExtensionAttr
+        | ExceptionsAttr
+        | CodeAttr
+        | UnimplementedAttr
+        | StackMapTableAttr
+        | InnerClassesAttr
+        | EnclosingMethodAttr
+        | SyntheticAttr
+        | DeprecatedAttr
+        | LineNumberTableAttr
+        | LocalVariableTableAttr
+        | LocalVariableTypeTableAttr
+        | RuntimeVisibleAnnotationsAttr
+        | RuntimeInvisibleAnnotationsAttr
+        | RuntimeVisibleParameterAnnotationsAttr
+        | RuntimeInvisibleParameterAnnotationsAttr
+        | RuntimeVisibleTypeAnnotationsAttr
+        | RuntimeInvisibleTypeAnnotationsAttr
+        | AnnotationDefaultAttr
+        | BootstrapMethodsAttr
+        | MethodParametersAttr
+        | ModuleAttr
+        | ModulePackagesAttr
+        | ModuleMainClassAttr
+        | NestHostAttr
+        | NestMembersAttr
+        | RecordAttr
+        | PermittedSubclassesAttr
+    ]: ...
     def to_bytes(self) -> bytes: ...
 
 class ClassReader:
+    """Parse raw classfile bytes into a read-only :class:`ClassFile` view."""
+
     def __init__(self, bytes_or_bytearray: bytes) -> None: ...
     @classmethod
-    def from_bytes(cls, bytes_or_bytearray: bytes) -> ClassReader: ...
+    def from_bytes(cls, bytes_or_bytearray: bytes) -> ClassReader:
+        """Create a reader from in-memory classfile bytes."""
+        ...
     @classmethod
-    def from_file(cls, path: str | Path) -> ClassReader: ...
+    def from_file(cls, path: str | Path) -> ClassReader:
+        """Read a classfile from disk and return a new reader."""
+        ...
     @property
-    def class_info(self) -> ClassFile: ...
+    def class_info(self) -> ClassFile:
+        """Parsed raw classfile structure exposed by this reader."""
+        ...
 
 class ClassWriter:
+    """Serialize raw :class:`ClassFile` objects back to bytes."""
+
     @staticmethod
-    def write(classfile: ClassFile) -> bytes: ...
+    def write(classfile: ClassFile) -> bytes:
+        """Encode a raw classfile object into JVM classfile bytes."""
+        ...
 
 # =============================================================================
 # Model Layer
@@ -729,10 +1023,10 @@ class StringListView:
     def to_list(self) -> list[str]: ...
 
 class AttributeListView:
-    def __getitem__(self, index: int) -> Any: ...
+    def __getitem__(self, index: int) -> RawAttribute: ...
     def __len__(self) -> int: ...
-    def __iter__(self) -> Iterator[Any]: ...
-    def to_list(self) -> list[Any]: ...
+    def __iter__(self) -> Iterator[RawAttribute]: ...
+    def to_list(self) -> list[RawAttribute]: ...
 
 class CodeListView:
     def __getitem__(self, index: int) -> CodeListItem: ...
@@ -765,7 +1059,7 @@ class CodeModel:
     def find_insn(self, matcher: InsnMatcher, start: int = 0) -> int | None: ...
     def contains_insn(self, matcher: InsnMatcher) -> bool: ...
     def count_insns(self, matcher: InsnMatcher) -> int: ...
-    def find_sequences(self, matchers: list[InsnMatcher]) -> list[int]: ...
+    def find_sequences(self, matchers: Sequence[InsnMatcher]) -> list[int]: ...
 
 class InsnMatcher:
     @staticmethod
@@ -895,7 +1189,7 @@ class ConstantPoolBuilder:
     def resolve_class_name(self, index: int) -> str: ...
     def count(self) -> int: ...
     def len(self) -> int: ...
-    def raw_constant_pool(self) -> list[Any | None]: ...
+    def raw_constant_pool(self) -> list[ConstantPoolEntry | None]: ...
     def checkpoint(self) -> int: ...
     def rollback(self, checkpoint: int) -> None: ...
     def find_integer(self, value: int) -> int | None: ...
@@ -917,63 +1211,99 @@ class MappingClassResolver:
     def from_bytes(class_bytes_list: list[bytes]) -> MappingClassResolver: ...
     @staticmethod
     def from_models(models: list[ClassModel]) -> MappingClassResolver: ...
-    def resolve_class(self, name: str) -> Any | None: ...
+    def resolve_class(self, name: str) -> _RustResolvedClassData | None: ...
 
 class ClassModel:
+    """Mutable symbolic view of a class for structural edits and lowering."""
+
     @staticmethod
-    def from_bytes(data: bytes) -> ClassModel: ...
-    def to_bytes(self) -> bytes: ...
-    def to_classfile(self) -> ClassFile: ...
+    def from_bytes(data: bytes) -> ClassModel:
+        """Parse classfile bytes into an editable class model."""
+        ...
+    def to_bytes(self) -> bytes:
+        """Lower the current model to classfile bytes with default options."""
+        ...
+    def to_classfile(self) -> ClassFile:
+        """Lower the current model to a raw :class:`ClassFile` object."""
+        ...
     def to_bytes_with_options(
         self,
         frame_mode: FrameComputationMode | None = None,
         resolver: MappingClassResolver | None = None,
         debug_info: str = "preserve",
-    ) -> bytes: ...
+    ) -> bytes:
+        """Lower the model to bytes with explicit frame and debug-info options."""
+        ...
     def to_classfile_with_options(
         self,
         frame_mode: FrameComputationMode | None = None,
         resolver: MappingClassResolver | None = None,
         debug_info: str = "preserve",
-    ) -> ClassFile: ...
+    ) -> ClassFile:
+        """Lower the model to a raw classfile object with explicit lowering options."""
+        ...
     @property
-    def entry_name(self) -> str: ...
+    def entry_name(self) -> str:
+        """Original archive entry name associated with this class model."""
+        ...
     @property
-    def original_byte_len(self) -> int: ...
+    def original_byte_len(self) -> int:
+        """Size in bytes of the classfile this model was originally parsed from."""
+        ...
     @property
-    def version(self) -> tuple[int, int]: ...
+    def version(self) -> tuple[int, int]:
+        """Classfile version as ``(major, minor)``."""
+        ...
     @version.setter
     def version(self, value: tuple[int, int]) -> None: ...
     @property
-    def access_flags(self) -> int: ...
+    def access_flags(self) -> int:
+        """Raw JVM access-flag bitset for the class declaration."""
+        ...
     @access_flags.setter
     def access_flags(self, value: int) -> None: ...
     @property
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """Internal JVM name of the class, such as ``pkg/Example``."""
+        ...
     @name.setter
     def name(self, value: str) -> None: ...
     @property
-    def super_name(self) -> str | None: ...
+    def super_name(self) -> str | None:
+        """Internal JVM name of the direct superclass, or ``None`` for ``java/lang/Object``."""
+        ...
     @super_name.setter
     def super_name(self, value: str | None) -> None: ...
     @property
-    def interfaces(self) -> StringListView: ...
+    def interfaces(self) -> StringListView:
+        """Live view of declared interface names in internal JVM format."""
+        ...
     @interfaces.setter
     def interfaces(self, value: list[str]) -> None: ...
     @property
-    def fields(self) -> FieldListView: ...
+    def fields(self) -> FieldListView:
+        """Live view of the class's field models."""
+        ...
     @fields.setter
     def fields(self, value: list[FieldModel]) -> None: ...
     @property
-    def methods(self) -> MethodListView: ...
+    def methods(self) -> MethodListView:
+        """Live view of the class's method models."""
+        ...
     @methods.setter
     def methods(self, value: list[MethodModel]) -> None: ...
     @property
-    def attributes(self) -> AttributeListView: ...
+    def attributes(self) -> AttributeListView:
+        """Live view of raw class-level attributes."""
+        ...
     @property
-    def constant_pool(self) -> ConstantPoolBuilder: ...
+    def constant_pool(self) -> ConstantPoolBuilder:
+        """Mutable constant-pool builder used when lowering edited models."""
+        ...
     @property
-    def debug_info_state(self) -> str: ...
+    def debug_info_state(self) -> str:
+        """Debug-info freshness marker, typically ``fresh`` or ``stale``."""
+        ...
 
 class ClassMatcher:
     @staticmethod
@@ -1064,20 +1394,20 @@ class MethodMatcher:
 
 class CodeTransform:
     @staticmethod
-    def replace_insn(matcher: InsnMatcher, replacement: list[CodeItem | dict[str, object]]) -> CodeTransform: ...
+    def replace_insn(matcher: InsnMatcher, replacement: Sequence[CodeItem | LegacyCodeItem]) -> CodeTransform: ...
     @staticmethod
     def replace_sequence(
-        pattern: list[InsnMatcher],
-        replacement: list[CodeItem | dict[str, object]],
+        pattern: Sequence[InsnMatcher],
+        replacement: Sequence[CodeItem | LegacyCodeItem],
     ) -> CodeTransform: ...
     @staticmethod
     def remove_insn(matcher: InsnMatcher) -> CodeTransform: ...
     @staticmethod
-    def remove_sequence(pattern: list[InsnMatcher]) -> CodeTransform: ...
+    def remove_sequence(pattern: Sequence[InsnMatcher]) -> CodeTransform: ...
     @staticmethod
-    def insert_before(matcher: InsnMatcher, items: list[CodeItem | dict[str, object]]) -> CodeTransform: ...
+    def insert_before(matcher: InsnMatcher, items: Sequence[CodeItem | LegacyCodeItem]) -> CodeTransform: ...
     @staticmethod
-    def insert_after(matcher: InsnMatcher, items: list[CodeItem | dict[str, object]]) -> CodeTransform: ...
+    def insert_after(matcher: InsnMatcher, items: Sequence[CodeItem | LegacyCodeItem]) -> CodeTransform: ...
     @staticmethod
     def redirect_method_call(
         from_owner: str,
@@ -1138,6 +1468,7 @@ class ClassTransform:
 class CompiledPipeline:
     def apply(self, model: ClassModel) -> None: ...
     def apply_all(self, models: list[ClassModel]) -> None: ...
+    def has_python_callbacks(self) -> bool: ...
 
 class Pipeline:
     def __init__(self) -> None: ...
@@ -1175,6 +1506,7 @@ class Pipeline:
     ) -> None: ...
     def apply(self, model: ClassModel) -> None: ...
     def apply_all(self, models: list[ClassModel]) -> None: ...
+    def has_python_callbacks(self) -> bool: ...
     def compile(self) -> CompiledPipeline: ...
     def __len__(self) -> int: ...
 
@@ -1217,7 +1549,7 @@ class _ArchiveEntryState:
 def read_archive_state(source_path: str | Path) -> list[_ArchiveEntryState]: ...
 def rewrite_archive_with_rust_transform(
     source_path: str | Path,
-    transform: ClassTransform | Pipeline | CompiledPipeline,
+    transform: ArchiveTransform,
     output_path: str | Path | None = None,
     frame_mode: FrameComputationMode | None = None,
     resolver: MappingClassResolver | None = None,
@@ -1226,7 +1558,7 @@ def rewrite_archive_with_rust_transform(
 def rewrite_archive_state(
     source_path: str | Path,
     entries: list[_ArchiveEntryState],
-    transform: ClassTransform | Pipeline | CompiledPipeline | None = None,
+    transform: ArchiveTransform | None = None,
     output_path: str | Path | None = None,
     frame_mode: FrameComputationMode | None = None,
     resolver: MappingClassResolver | None = None,
@@ -1260,20 +1592,20 @@ class Diagnostic:
     def code_index(self) -> int | None: ...
 
 def rust_verify_classfile(data: bytes, *, fail_fast: bool = False) -> list[Diagnostic]: ...
-def rust_resolved_classfile(data: bytes) -> Any: ...
-def rust_resolved_classmodel(model: ClassModel) -> Any: ...
+def rust_resolved_classfile(data: bytes) -> _RustResolvedClassData: ...
+def rust_resolved_classmodel(model: ClassModel) -> _RustResolvedClassData: ...
 def rust_iter_superclasses(
     resolver: MappingClassResolver,
     class_name: str,
     *,
     include_self: bool = False,
-) -> list[Any]: ...
+) -> list[_RustResolvedClassData]: ...
 def rust_iter_supertypes(
     resolver: MappingClassResolver,
     class_name: str,
     *,
     include_self: bool = False,
-) -> list[Any]: ...
+) -> list[_RustResolvedClassData]: ...
 def rust_is_subtype(resolver: MappingClassResolver, class_name: str, super_name: str) -> bool: ...
 def rust_common_superclass(resolver: MappingClassResolver, left: str, right: str) -> str: ...
 def rust_find_overridden_methods(
@@ -1282,7 +1614,7 @@ def rust_find_overridden_methods(
     method_name: str,
     method_descriptor: str,
     access_flags: int,
-) -> list[Any]: ...
+) -> list[_RustInheritedMethodData]: ...
 def rust_lower_classmodels(
     models: list[ClassModel],
     frame_mode: FrameComputationMode | None = None,
@@ -1308,43 +1640,55 @@ def rust_verify_classmodel(
 
 class TopVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class IntegerVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class FloatVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class DoubleVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class LongVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class NullVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class UninitializedThisVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
 
 class ObjectVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
     @property
     def cpool_index(self) -> int: ...
 
 class UninitializedVariableInfo:
     @property
-    def tag(self) -> Any: ...
+    def tag(self) -> VerificationType: ...
     @property
     def offset(self) -> int: ...
+
+type VerificationTypeInfo = (
+    TopVariableInfo
+    | IntegerVariableInfo
+    | FloatVariableInfo
+    | DoubleVariableInfo
+    | LongVariableInfo
+    | NullVariableInfo
+    | UninitializedThisVariableInfo
+    | ObjectVariableInfo
+    | UninitializedVariableInfo
+)
 
 # =============================================================================
 # Attribute Wrapper Types — Stack Map Frame Info
@@ -1358,7 +1702,7 @@ class SameLocals1StackItemFrameInfo:
     @property
     def frame_type(self) -> int: ...
     @property
-    def stack(self) -> Any: ...
+    def stack(self) -> VerificationTypeInfo: ...
 
 class SameLocals1StackItemFrameExtendedInfo:
     @property
@@ -1366,7 +1710,7 @@ class SameLocals1StackItemFrameExtendedInfo:
     @property
     def offset_delta(self) -> int: ...
     @property
-    def stack(self) -> Any: ...
+    def stack(self) -> VerificationTypeInfo: ...
 
 class ChopFrameInfo:
     @property
@@ -1386,7 +1730,7 @@ class AppendFrameInfo:
     @property
     def offset_delta(self) -> int: ...
     @property
-    def locals(self) -> list[Any]: ...
+    def locals(self) -> list[VerificationTypeInfo]: ...
 
 class FullFrameInfo:
     @property
@@ -1396,11 +1740,21 @@ class FullFrameInfo:
     @property
     def number_of_locals(self) -> int: ...
     @property
-    def locals(self) -> list[Any]: ...
+    def locals(self) -> list[VerificationTypeInfo]: ...
     @property
     def number_of_stack_items(self) -> int: ...
     @property
-    def stack(self) -> list[Any]: ...
+    def stack(self) -> list[VerificationTypeInfo]: ...
+
+type StackMapFrameInfo = (
+    SameFrameInfo
+    | SameLocals1StackItemFrameInfo
+    | SameLocals1StackItemFrameExtendedInfo
+    | ChopFrameInfo
+    | SameFrameExtendedInfo
+    | AppendFrameInfo
+    | FullFrameInfo
+)
 
 # =============================================================================
 # Attribute Wrapper Types — Simple Entry Types
@@ -1444,7 +1798,7 @@ class InnerClassInfo:
     @property
     def inner_name_index(self) -> int: ...
     @property
-    def inner_class_access_flags(self) -> Any: ...
+    def inner_class_access_flags(self) -> NestedClassAccessFlag: ...
 
 # =============================================================================
 # Attribute Wrapper Types — Annotation Sub-types
@@ -1468,19 +1822,19 @@ class ArrayValueInfo:
     @property
     def num_values(self) -> int: ...
     @property
-    def values(self) -> list[Any]: ...
+    def values(self) -> list[ElementValueInfo]: ...
 
 class ElementValueInfo:
     @property
     def tag(self) -> str: ...
     @property
-    def value(self) -> Any: ...
+    def value(self) -> ElementValueData: ...
 
 class ElementValuePairInfo:
     @property
     def element_name_index(self) -> int: ...
     @property
-    def element_value(self) -> Any: ...
+    def element_value(self) -> ElementValueInfo: ...
 
 class AnnotationInfo:
     @property
@@ -1488,13 +1842,15 @@ class AnnotationInfo:
     @property
     def num_element_value_pairs(self) -> int: ...
     @property
-    def element_value_pairs(self) -> list[Any]: ...
+    def element_value_pairs(self) -> list[ElementValuePairInfo]: ...
 
 class ParameterAnnotationInfo:
     @property
     def num_annotations(self) -> int: ...
     @property
-    def annotations(self) -> list[Any]: ...
+    def annotations(self) -> list[AnnotationInfo]: ...
+
+type ElementValueData = ConstValueInfo | EnumConstantValueInfo | ClassInfoValueInfo | AnnotationInfo | ArrayValueInfo
 
 # =============================================================================
 # Attribute Wrapper Types — Type Annotation Sub-types
@@ -1536,7 +1892,7 @@ class LocalvarTargetInfo:
     @property
     def table_length(self) -> int: ...
     @property
-    def table(self) -> list[Any]: ...
+    def table(self) -> list[TableInfo]: ...
 
 class CatchTargetInfo:
     @property
@@ -1554,7 +1910,7 @@ class TypeArgumentTargetInfo:
 
 class PathInfo:
     @property
-    def type_path_kind(self) -> Any: ...
+    def type_path_kind(self) -> TypePathKind: ...
     @property
     def type_argument_index(self) -> int: ...
 
@@ -1562,21 +1918,34 @@ class TypePathInfo:
     @property
     def path_length(self) -> int: ...
     @property
-    def path(self) -> list[Any]: ...
+    def path(self) -> list[PathInfo]: ...
 
 class TypeAnnotationInfo:
     @property
-    def target_type(self) -> Any: ...
+    def target_type(self) -> TargetType: ...
     @property
-    def target_info(self) -> Any: ...
+    def target_info(self) -> TypeAnnotationTargetInfo: ...
     @property
-    def target_path(self) -> Any: ...
+    def target_path(self) -> TypePathInfo: ...
     @property
     def type_index(self) -> int: ...
     @property
     def num_element_value_pairs(self) -> int: ...
     @property
-    def element_value_pairs(self) -> list[Any]: ...
+    def element_value_pairs(self) -> list[ElementValuePairInfo]: ...
+
+type TypeAnnotationTargetInfo = (
+    TypeParameterTargetInfo
+    | SupertypeTargetInfo
+    | TypeParameterBoundTargetInfo
+    | EmptyTargetInfo
+    | FormalParameterTargetInfo
+    | ThrowsTargetInfo
+    | LocalvarTargetInfo
+    | CatchTargetInfo
+    | OffsetTargetInfo
+    | TypeArgumentTargetInfo
+)
 
 # =============================================================================
 # Attribute Wrapper Types — Bootstrap, Method Parameter, Module Sub-types
@@ -1594,13 +1963,13 @@ class MethodParameterInfo:
     @property
     def name_index(self) -> int: ...
     @property
-    def access_flags(self) -> Any: ...
+    def access_flags(self) -> MethodParameterAccessFlag: ...
 
 class RequiresInfo:
     @property
     def requires_index(self) -> int: ...
     @property
-    def requires_flag(self) -> Any: ...
+    def requires_flag(self) -> ModuleRequiresAccessFlag: ...
     @property
     def requires_version_index(self) -> int: ...
 
@@ -1608,7 +1977,7 @@ class ExportInfo:
     @property
     def exports_index(self) -> int: ...
     @property
-    def exports_flags(self) -> Any: ...
+    def exports_flags(self) -> ModuleExportsAccessFlag: ...
     @property
     def exports_to_count(self) -> int: ...
     @property
@@ -1618,7 +1987,7 @@ class OpensInfo:
     @property
     def opens_index(self) -> int: ...
     @property
-    def opens_flags(self) -> Any: ...
+    def opens_flags(self) -> ModuleOpensAccessFlag: ...
     @property
     def opens_to_count(self) -> int: ...
     @property
@@ -1640,7 +2009,7 @@ class RecordComponentInfo:
     @property
     def attributes_count(self) -> int: ...
     @property
-    def attributes(self) -> list[Any]: ...
+    def attributes(self) -> list[RecordComponentAttribute]: ...
 
 # =============================================================================
 # Attribute Wrapper Types — Top-Level Attribute Classes
@@ -1654,7 +2023,7 @@ class StackMapTableAttr:
     @property
     def number_of_entries(self) -> int: ...
     @property
-    def entries(self) -> list[Any]: ...
+    def entries(self) -> list[StackMapFrameInfo]: ...
 
 class InnerClassesAttr:
     @property
@@ -1664,7 +2033,7 @@ class InnerClassesAttr:
     @property
     def number_of_classes(self) -> int: ...
     @property
-    def classes(self) -> list[Any]: ...
+    def classes(self) -> list[InnerClassInfo]: ...
 
 class EnclosingMethodAttr:
     @property
@@ -1696,7 +2065,7 @@ class LineNumberTableAttr:
     @property
     def line_number_table_length(self) -> int: ...
     @property
-    def line_number_table(self) -> list[Any]: ...
+    def line_number_table(self) -> list[LineNumberInfo]: ...
 
 class LocalVariableTableAttr:
     @property
@@ -1706,7 +2075,7 @@ class LocalVariableTableAttr:
     @property
     def local_variable_table_length(self) -> int: ...
     @property
-    def local_variable_table(self) -> list[Any]: ...
+    def local_variable_table(self) -> list[LocalVariableInfo]: ...
 
 class LocalVariableTypeTableAttr:
     @property
@@ -1716,7 +2085,7 @@ class LocalVariableTypeTableAttr:
     @property
     def local_variable_type_table_length(self) -> int: ...
     @property
-    def local_variable_type_table(self) -> list[Any]: ...
+    def local_variable_type_table(self) -> list[LocalVariableTypeInfo]: ...
 
 class RuntimeVisibleAnnotationsAttr:
     @property
@@ -1726,7 +2095,7 @@ class RuntimeVisibleAnnotationsAttr:
     @property
     def num_annotations(self) -> int: ...
     @property
-    def annotations(self) -> list[Any]: ...
+    def annotations(self) -> list[AnnotationInfo]: ...
 
 class RuntimeInvisibleAnnotationsAttr:
     @property
@@ -1736,7 +2105,7 @@ class RuntimeInvisibleAnnotationsAttr:
     @property
     def num_annotations(self) -> int: ...
     @property
-    def annotations(self) -> list[Any]: ...
+    def annotations(self) -> list[AnnotationInfo]: ...
 
 class RuntimeVisibleParameterAnnotationsAttr:
     @property
@@ -1746,7 +2115,7 @@ class RuntimeVisibleParameterAnnotationsAttr:
     @property
     def num_parameters(self) -> int: ...
     @property
-    def parameter_annotations(self) -> list[Any]: ...
+    def parameter_annotations(self) -> list[ParameterAnnotationInfo]: ...
 
 class RuntimeInvisibleParameterAnnotationsAttr:
     @property
@@ -1756,7 +2125,7 @@ class RuntimeInvisibleParameterAnnotationsAttr:
     @property
     def num_parameters(self) -> int: ...
     @property
-    def parameter_annotations(self) -> list[Any]: ...
+    def parameter_annotations(self) -> list[ParameterAnnotationInfo]: ...
 
 class RuntimeVisibleTypeAnnotationsAttr:
     @property
@@ -1766,7 +2135,7 @@ class RuntimeVisibleTypeAnnotationsAttr:
     @property
     def num_annotations(self) -> int: ...
     @property
-    def annotations(self) -> list[Any]: ...
+    def annotations(self) -> list[TypeAnnotationInfo]: ...
 
 class RuntimeInvisibleTypeAnnotationsAttr:
     @property
@@ -1776,7 +2145,7 @@ class RuntimeInvisibleTypeAnnotationsAttr:
     @property
     def num_annotations(self) -> int: ...
     @property
-    def annotations(self) -> list[Any]: ...
+    def annotations(self) -> list[TypeAnnotationInfo]: ...
 
 class AnnotationDefaultAttr:
     @property
@@ -1784,7 +2153,7 @@ class AnnotationDefaultAttr:
     @property
     def attribute_length(self) -> int: ...
     @property
-    def default_value(self) -> Any: ...
+    def default_value(self) -> ElementValueInfo: ...
 
 class BootstrapMethodsAttr:
     @property
@@ -1794,7 +2163,7 @@ class BootstrapMethodsAttr:
     @property
     def num_bootstrap_methods(self) -> int: ...
     @property
-    def bootstrap_methods(self) -> list[Any]: ...
+    def bootstrap_methods(self) -> list[BootstrapMethodInfo]: ...
 
 class MethodParametersAttr:
     @property
@@ -1804,7 +2173,7 @@ class MethodParametersAttr:
     @property
     def parameters_count(self) -> int: ...
     @property
-    def parameters(self) -> list[Any]: ...
+    def parameters(self) -> list[MethodParameterInfo]: ...
 
 class ModuleAttr:
     @property
@@ -1814,21 +2183,21 @@ class ModuleAttr:
     @property
     def module_name_index(self) -> int: ...
     @property
-    def module_flags(self) -> Any: ...
+    def module_flags(self) -> ModuleAccessFlag: ...
     @property
     def module_version_index(self) -> int: ...
     @property
     def requires_count(self) -> int: ...
     @property
-    def requires(self) -> list[Any]: ...
+    def requires(self) -> list[RequiresInfo]: ...
     @property
     def exports_count(self) -> int: ...
     @property
-    def exports(self) -> list[Any]: ...
+    def exports(self) -> list[ExportInfo]: ...
     @property
     def opens_count(self) -> int: ...
     @property
-    def opens(self) -> list[Any]: ...
+    def opens(self) -> list[OpensInfo]: ...
     @property
     def uses_count(self) -> int: ...
     @property
@@ -1836,7 +2205,7 @@ class ModuleAttr:
     @property
     def provides_count(self) -> int: ...
     @property
-    def provides(self) -> list[Any]: ...
+    def provides(self) -> list[ProvidesInfo]: ...
 
 class ModulePackagesAttr:
     @property
@@ -1882,7 +2251,80 @@ class RecordAttr:
     @property
     def components_count(self) -> int: ...
     @property
-    def components(self) -> list[Any]: ...
+    def components(self) -> list[RecordComponentInfo]: ...
+
+type ConstantPoolEntry = (
+    Utf8Info
+    | IntegerInfo
+    | FloatInfo
+    | LongInfo
+    | DoubleInfo
+    | ClassInfo
+    | StringInfo
+    | FieldrefInfo
+    | MethodrefInfo
+    | InterfaceMethodrefInfo
+    | NameAndTypeInfo
+    | MethodHandleInfo
+    | MethodTypeInfo
+    | DynamicInfo
+    | InvokeDynamicInfo
+    | ModuleInfo
+    | PackageInfo
+)
+
+type RawAttribute = (
+    ConstantValueAttr
+    | SignatureAttr
+    | SourceFileAttr
+    | SourceDebugExtensionAttr
+    | ExceptionsAttr
+    | CodeAttr
+    | UnimplementedAttr
+    | StackMapTableAttr
+    | InnerClassesAttr
+    | EnclosingMethodAttr
+    | SyntheticAttr
+    | DeprecatedAttr
+    | LineNumberTableAttr
+    | LocalVariableTableAttr
+    | LocalVariableTypeTableAttr
+    | RuntimeVisibleAnnotationsAttr
+    | RuntimeInvisibleAnnotationsAttr
+    | RuntimeVisibleParameterAnnotationsAttr
+    | RuntimeInvisibleParameterAnnotationsAttr
+    | RuntimeVisibleTypeAnnotationsAttr
+    | RuntimeInvisibleTypeAnnotationsAttr
+    | AnnotationDefaultAttr
+    | BootstrapMethodsAttr
+    | MethodParametersAttr
+    | ModuleAttr
+    | ModulePackagesAttr
+    | ModuleMainClassAttr
+    | NestHostAttr
+    | NestMembersAttr
+    | RecordAttr
+    | PermittedSubclassesAttr
+)
+
+type CodeNestedAttribute = (
+    StackMapTableAttr
+    | LineNumberTableAttr
+    | LocalVariableTableAttr
+    | LocalVariableTypeTableAttr
+    | RuntimeVisibleTypeAnnotationsAttr
+    | RuntimeInvisibleTypeAnnotationsAttr
+    | UnimplementedAttr
+)
+
+type RecordComponentAttribute = (
+    SignatureAttr
+    | RuntimeVisibleAnnotationsAttr
+    | RuntimeInvisibleAnnotationsAttr
+    | RuntimeVisibleTypeAnnotationsAttr
+    | RuntimeInvisibleTypeAnnotationsAttr
+    | UnimplementedAttr
+)
 
 class PermittedSubclassesAttr:
     @property
@@ -1893,9 +2335,3 @@ class PermittedSubclassesAttr:
     def number_of_classes(self) -> int: ...
     @property
     def classes(self) -> list[int]: ...
-
-# =============================================================================
-# Module-Level Functions
-# =============================================================================
-
-def backend_info() -> tuple[str, str, list[str]]: ...

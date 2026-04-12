@@ -99,7 +99,7 @@ Soot also represents exception destinations as `ExceptionDest` collections and `
 
 ### 1. Keep the fast rule-focused tests
 
-Retain the current hand-built `CodeModel` tests for pure-Python validation of specific invariants like leader creation, fall-through suppression after unconditional branches or returns, and frame merge failures.[^2][^10] These are still the fastest way to pin intended semantics when you change `build_cfg()` or `simulate()`.[^2][^10]
+Retain the current hand-built `CodeModel` tests for direct validation of specific invariants like leader creation, fall-through suppression after unconditional branches or returns, and frame merge failures.[^2][^10] These are still the fastest way to pin intended semantics when you change `build_cfg()` or `simulate()`.[^2][^10]
 
 ### 2. Add a JVM differential oracle based on ASM
 
@@ -150,7 +150,7 @@ The current fixture corpus is already broad enough to start. I would upgrade the
 - `tryCatchSingle` / `tryCatchMultiple` -> exact handler target and catch types
 - `tryCatchFinally` / `nestedTryCatch` -> exact multiple-handler coverage and nesting behavior[^3][^4]
 
-These should remain pure-Python and assert the intended semantics directly.
+These should remain direct `CodeModel` tests and assert the intended semantics directly.
 
 ### Phase B: add an ASM oracle helper
 
@@ -187,7 +187,7 @@ Even with the existing broad fixture, I would add or isolate these as dedicated 
 - synchronized blocks and compiler-generated `finally` shapes
 - multi-catch compiled output
 - large `tableswitch` / `lookupswitch`
-- legacy `JSR` / `RET`, likely in a separate non-blocking suite because they are now supported primarily as a compatibility path for older classfiles rather than as a modern code-generation target.[^14]
+- `JSR` / `RET`, likely in a separate non-blocking suite because they target older classfile versions and should not dominate the main CFG corpus.[^14]
 
 ## Final recommendation
 

@@ -1,6 +1,7 @@
-"""Declarative transform pipeline.
+"""Fluent builder for composing matcher-driven rewrite pipelines.
 
-Build pipelines from matchers and transforms::
+Use :class:`PipelineBuilder` when you want a readable, chainable way to combine
+class, field, method, and code rewrite steps::
 
     from pytecode.transforms.matchers import class_named
     from pytecode.transforms.class_transforms import rename_class
@@ -30,7 +31,7 @@ from pytecode._rust import (
 
 
 class PipelineBuilder:
-    """Fluent builder for a transform pipeline."""
+    """Chainable builder for a Rust-evaluated transform pipeline."""
 
     def __init__(self) -> None:
         self._pipeline = Pipeline()
@@ -40,7 +41,7 @@ class PipelineBuilder:
         matcher: ClassMatcher,
         transform: ClassTransform,
     ) -> PipelineBuilder:
-        """Add a class-level step."""
+        """Apply ``transform`` to each class matched by ``matcher``."""
         self._pipeline.on_classes(matcher, transform)
         return self
 
@@ -51,7 +52,7 @@ class PipelineBuilder:
         *,
         owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
-        """Add a field-level step (optional class-level guard)."""
+        """Apply ``transform`` when a field matches, optionally gated by ``owner_matcher``."""
         self._pipeline.on_fields(field_matcher, transform, owner_matcher)
         return self
 
@@ -62,7 +63,7 @@ class PipelineBuilder:
         *,
         owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
-        """Add a method-level step (optional class-level guard)."""
+        """Apply ``transform`` when a method matches, optionally gated by ``owner_matcher``."""
         self._pipeline.on_methods(method_matcher, transform, owner_matcher)
         return self
 
@@ -73,7 +74,7 @@ class PipelineBuilder:
         *,
         owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
-        """Add a code-level step for methods whose bodies should be rewritten."""
+        """Rewrite matching method bodies with ``transform``."""
         self._pipeline.on_code(method_matcher, transform, owner_matcher)
         return self
 
@@ -144,19 +145,19 @@ class PipelineBuilder:
         return self
 
     def build(self) -> Pipeline:
-        """Return the constructed pipeline."""
+        """Return the configured :class:`Pipeline` instance."""
         return self._pipeline
 
     def apply(self, model: ClassModel) -> None:
-        """Apply pipeline to a single ClassModel (mutates in-place)."""
+        """Apply the current pipeline to one class model in place."""
         self._pipeline.apply(model)
 
     def apply_all(self, models: list[ClassModel]) -> None:
-        """Apply pipeline to many ClassModel objects (mutates in-place)."""
+        """Apply the current pipeline to many class models in place."""
         self._pipeline.apply_all(models)
 
     def compile(self) -> CompiledPipeline:
-        """Compile for hot-path repeated use (pre-compiles regexes)."""
+        """Pre-compile regex-backed matchers for repeated hot-path use."""
         return self._pipeline.compile()
 
     def __len__(self) -> int:

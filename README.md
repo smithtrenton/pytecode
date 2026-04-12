@@ -27,6 +27,10 @@ Or with `uv`:
 uv add pytecode
 ```
 
+Published releases ship prebuilt wheels for Windows, macOS, and Linux.
+If a matching wheel is unavailable, `pip`/`uv` falls back to a source build,
+which requires a working Rust toolchain.
+
 `pytecode` requires Python `3.14+`.
 
 ## Quick start
@@ -99,7 +103,9 @@ JarFile("input.jar").rewrite(
 
 For code-shape changes, pass `frame_mode=FrameComputationMode.RECOMPUTE`. To strip debug metadata during rewrite, pass `skip_debug=True`.
 
-`JarFile.rewrite()` now routes archive rewriting through the Rust archive layer for supported cases, including in-memory archive edits and Rust-backed transforms. Pipelines that contain Python callback steps are rejected instead of falling back to a Python archive rewrite path.
+`JarFile.rewrite()` uses the Rust archive layer for in-memory archive edits and
+Rust-native transforms. Python-callable transforms are also supported through
+the same public API when a workflow needs `ClassModel`-level mutation.
 
 ## Public surface
 
@@ -114,30 +120,20 @@ Canonical semantic modules:
 - `pytecode.classfile` for raw Rust-backed classfile reading and writing.
 - `pytecode.model` for editable class models, typed code items, labels, and code metadata wrappers.
 
-### Rust-first API map
-
-| Removed entry point | Current replacement |
-| --- | --- |
-| `pytecode.classfile.reader.ClassReader(...)` | `pytecode.ClassReader.from_bytes(...)` |
-| `pytecode.classfile.writer.ClassWriter.write(...)` | `pytecode.ClassWriter.write(...)` |
-| `pytecode.edit.model.ClassModel.from_bytes(...)` | `pytecode.ClassModel.from_bytes(...)` |
-| `pytecode.analysis.verify.verify_classfile(...)` | `pytecode.analysis.verify.verify_classfile(...)` |
-| `pytecode.analysis.verify.verify_classmodel(...)` | `pytecode.analysis.verify.verify_classmodel(...)` |
-| `pytecode.analysis.hierarchy.MappingClassResolver` | `pytecode.analysis.MappingClassResolver` |
-| Legacy Python matcher / transform DSL | `pytecode.transforms.PipelineBuilder` plus `pytecode.transforms` helpers |
-
 Supported submodules:
 
 - `pytecode.transforms` for Rust-backed class, field, and method transforms.
 - `pytecode.analysis` for Rust-backed verification entry points.
 - `pytecode.analysis.verify` for structural validation and diagnostics.
 - `pytecode.analysis.hierarchy` for type and override resolution helpers.
-- `pytecode.classfile.descriptors` for JVM descriptors and generic signatures.
+- `pytecode.classfile.attributes` for typed raw attribute dataclasses.
+- `pytecode.classfile.bytecode` for opcode and array-type enums.
 - `pytecode.classfile.constants` for access flags, opcodes, and verifier constants.
+- `pytecode.model` for editable class, field, method, and code models.
 
 ## Documentation
 
-- Development docs overview: [docs/OVERVIEW.md](https://github.com/smithtrenton/pytecode/blob/master/docs/OVERVIEW.md)
+- Development docs overview: [docs/OVERVIEW.md](docs/OVERVIEW.md)
 - Hosted API reference: <https://smithtrenton.github.io/pytecode/>
 
 ## Development
@@ -163,10 +159,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Rust workspace smoke and comparison commands:
+Workspace smoke and comparison commands:
 
 ```powershell
-cargo run -p pytecode-cli -- compat-manifest --max-release 25
 cargo run --release -p pytecode-cli -- bench-smoke --iterations 5
 uv run python tools\benchmark_jar_pipeline.py crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5
 uv run python tools\compare_rust_python_benchmarks.py --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5 --output output\benchmarks\rust-vs-python-byte-buddy.json
@@ -305,38 +300,25 @@ Example grouped rewrite that patches one instruction and brackets another with i
 
 Use `patch-jar` when you already know the exact bytecode rewrite you want and want a declarative rule file. Use `deobfuscate` when you want a product-shaped inspection/cleanup pass over an obfuscated jar, especially `injected-client`.
 
-If you want the same workflow from the Python side, `examples\deobfuscate.py` reimplements the deobfuscation analyze/rewrite flow on top of `pytecode.JarFile`, `ClassModel`, and Rust-backed Python transforms instead of shelling out to the Rust CLI. The Python rewrite path stays intentionally conservative today: it only strips `nop` instructions from straight-line methods, while the richer control-flow cleanup still lives in the Rust CLI implementation.
+If you want the same workflow from the Python side, `examples\deobfuscate.py`
+provides the same analyze/rewrite flow on top of `pytecode.JarFile`,
+`ClassModel`, and Rust-backed Python transforms.
 
 Rust-owned fixtures now live under `crates\pytecode-engine\fixtures\`. Rust crate tests only read those copied fixture sources and do not invoke Python. The Rust harness lazily compiles `crates\pytecode-engine\fixtures\java\*.java` into `target\pytecode-rust-javac\...` and only reruns `javac` when the source bytes, required `--release`, or `javac` identity changes.
 
 `bench-smoke` now reports isolated-stage timing samples with median+spread summaries instead of only one accumulated elapsed total. `tools\benchmark_jar_pipeline.py` mirrors that isolated-stage reporting for the wrapper-inclusive Python path, and `tools\compare_rust_python_benchmarks.py` frames the result as native Rust timings versus Python wrapper overhead on the same jar.
 
-Small Rust examples now live under `crates\pytecode-engine\examples\finalize_main.rs` and `crates\pytecode-archive\examples\rewrite_jar.rs` to show direct transform and archive rewrite workflows without going through the CLI.
+Small Rust examples live under
+`crates\pytecode-engine\examples\finalize_main.rs` and
+`crates\pytecode-archive\examples\rewrite_jar.rs` to show direct transform and
+archive rewrite workflows without going through the CLI.
 
-The recommended long-term Rust workspace shape is intentionally small:
+Workspace layout:
 
-- `pytecode-engine` for the main classfile/edit/analysis/transform engine,
-- `pytecode-archive` for JAR handling,
-- `pytecode-cli` for compatibility and benchmark tooling,
-- `pytecode-python` for PyO3 bindings and wheel packaging.
-
-That keeps the important seams while avoiding unnecessary crate churn during the early implementation phases.
-
-Current Rust implementation status:
-
-- phases 0, 1, 2, 3, 4, 5, 6, and 7 are complete,
-- `pytecode-engine` now has the raw classfile parse/write core plus a real symbolic model, hierarchy/CFG/verification analysis surface, constant-pool builder, symbolic operands, labels, debug-info handling, raw <-> symbolic lift/lower, and a Rust transform layer with `Pipeline`, `pipeline!`, lifted field/method/code helpers, and matcher composition,
-- `pytecode-archive` now provides in-memory JAR state with add/remove operations plus safe rewrite-to-disk that can pass classes through unchanged or re-lower them through transforms and Phase 4 frame recomputation,
-- `pytecode-cli` now has rewrite smoke coverage plus isolated benchmark reporting with median+spread summaries instead of only cumulative elapsed totals,
-- release-ready Cargo metadata, release automation, and crate-level examples now make the Rust workspace much closer to a standalone deliverable,
-- the Rust verifier now enforces strict Java SE 25 classfile version rules, chapter-4 structure/access/attribute checks, bootstrap-linked `MethodHandle` / `Dynamic` / `InvokeDynamic` validation, and generic-signature syntax checks for `Signature` and `LocalVariableTypeTable`,
-- legacy `jsr` / `jsr_w` / `ret` bytecode is now supported through CFG/frame recomputation and symbolic lift/lower; recomputed lowering preserves those methods on pre-50 classfile versions without emitting invalid `StackMapTable` state,
-- benchmark `model-lift` and `model-lower` stages now exercise the real symbolic pipeline, and focused Rust tests cover exact roundtrip fidelity, debug-info strip/stale behavior, interface-backed method references, conditional branch widening, switch-layout edits, hierarchy queries, CFG construction, structured verifier diagnostics, bootstrap/signature validation, legacy subroutine handling, transform pipeline behavior, archive rewrite behavior, and end-to-end `StackMapTable` recomputation for edited methods,
-- phase 6 added benchmark-report tooling, examples, public-surface polish, and packaging polish on top of the completed lowering and analysis stack,
-- phase 7 added `pytecode-python`, `maturin`-built source/platform distributions, a Rust-backed `pytecode._rust` extension module, and compatibility bridges so `ClassModel.from_classfile`, `ResolvedClass.from_classfile`, `verify_classfile`, and `ClassWriter.write` all accept Rust-backed classfiles,
-- the default `ClassReader` parse path now always goes through the Rust extension,
-- `ClassModel.from_bytes()` now single-parses through Rust, preserves original bytes for byte-exact clean roundtrips, and routes the normal code-mutation serialization path back through Rust,
-- the canonical top-level Python surface is now Rust-owned objects (`ClassModel`, Rust-backed verification, and Rust-backed resolver types); the older Python-owned model/edit APIs have been removed.
+- `pytecode-engine` for classfile parsing, editing, transforms, analysis, and validation
+- `pytecode-archive` for JAR handling
+- `pytecode-cli` for CLI workflows and benchmarks
+- `pytecode-python` for PyO3 bindings and wheel packaging
 
 Generate local API reference HTML with:
 
@@ -350,7 +332,7 @@ Build source and wheel distributions locally:
 uv build
 ```
 
-`uv build` now produces a mixed Python/Rust wheel (for example `pytecode-0.0.3-cp311-abi3-win_amd64.whl`) instead of a pure-Python `py3-none-any` wheel.
+`uv build` produces both an sdist and a platform wheel for the current machine.
 
 Profile isolated JAR-processing stages without `run.py`'s output overhead:
 
@@ -373,7 +355,14 @@ The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_ca
 
 ## Release automation
 
-PyPI releases are published from GitHub Actions by pushing an immutable `v<version>` tag that matches `project.version` in `pyproject.toml`. The same workflow can also be started manually for an existing tag by supplying a `tag` input. In both cases, the workflow checks out the tagged commit, reruns validation, builds both `sdist` and the `maturin`-backed extension wheel with `uv build`, publishes from the protected `pypi` environment via PyPI Trusted Publishing, and then creates or updates a GitHub Release for the same tag with the built distributions attached.
+PyPI releases are published from GitHub Actions by pushing an immutable
+`v<version>` tag that matches `project.version` in `pyproject.toml`. The same
+workflow can also be started manually for an existing tag by supplying a `tag`
+input. In both cases, the workflow checks out the tagged commit, reruns
+validation, builds the source distribution plus platform wheels, publishes from
+the protected `pypi` environment via PyPI Trusted Publishing, and then creates
+or updates a GitHub Release for the same tag with the built distributions
+attached.
 
 Release procedure:
 

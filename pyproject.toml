@@ -16,7 +16,10 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
-  "Operating System :: OS Independent",
+  "Programming Language :: Rust",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
 ]
 dependencies = []
 

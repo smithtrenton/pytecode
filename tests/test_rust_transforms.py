@@ -35,6 +35,45 @@ from pytecode.transforms import (
 )
 from pytecode.transforms.matchers import class_name_matches, field_named, has_code
 
+CodeItem = (
+    model_api.Label
+    | model_api.RawInsn
+    | model_api.ByteInsn
+    | model_api.ShortInsn
+    | model_api.NewArrayInsn
+    | model_api.FieldInsn
+    | model_api.MethodInsn
+    | model_api.InterfaceMethodInsn
+    | model_api.TypeInsn
+    | model_api.VarInsn
+    | model_api.IIncInsn
+    | model_api.LdcInsn
+    | model_api.InvokeDynamicInsn
+    | model_api.MultiANewArrayInsn
+    | model_api.BranchInsn
+    | model_api.LookupSwitchInsn
+    | model_api.TableSwitchInsn
+)
+CODE_ITEM_TYPES = (
+    model_api.Label,
+    model_api.RawInsn,
+    model_api.ByteInsn,
+    model_api.ShortInsn,
+    model_api.NewArrayInsn,
+    model_api.FieldInsn,
+    model_api.MethodInsn,
+    model_api.InterfaceMethodInsn,
+    model_api.TypeInsn,
+    model_api.VarInsn,
+    model_api.IIncInsn,
+    model_api.LdcInsn,
+    model_api.InvokeDynamicInsn,
+    model_api.MultiANewArrayInsn,
+    model_api.BranchInsn,
+    model_api.LookupSwitchInsn,
+    model_api.TableSwitchInsn,
+)
+
 # ---------------------------------------------------------------------------
 # Transform factory tests
 # ---------------------------------------------------------------------------
@@ -373,10 +412,10 @@ def _matcher_for_item(item: object) -> InsnMatcher | None:
     return None
 
 
-def _clone_item(item: object) -> object:
+def _clone_item(item: object) -> CodeItem:
     kind = str(getattr(item, "kind", ""))
     if kind == "label":
-        return item
+        return _as_code_item(item)
     if kind == "raw":
         return model_api.RawInsn(int(getattr(item, "opcode")))
     if kind == "byte":
@@ -469,9 +508,14 @@ def _clone_item(item: object) -> object:
     raise TypeError(f"unsupported instruction item {type(item)!r}")
 
 
-def _find_unique_sequence(code: object) -> tuple[int, list[InsnMatcher], list[object]]:
-    raw_items = code.instructions.to_list()
-    assert all(not isinstance(item, dict) for item in raw_items)
+def _as_code_item(item: object) -> CodeItem:
+    if isinstance(item, CODE_ITEM_TYPES):
+        return item
+    raise TypeError(f"unsupported code item {type(item)!r}")
+
+
+def _find_unique_sequence(code: model_api.CodeModel) -> tuple[int, list[InsnMatcher], list[CodeItem]]:
+    raw_items = [_as_code_item(item) for item in code.instructions.to_list()]
     for window_size in (2, 3):
         for start in range(len(raw_items) - window_size):
             window = raw_items[start : start + window_size]
@@ -529,9 +573,7 @@ class TestPipelineApply:
 
         model = ClassModel.from_bytes(class_bytes)
         method = next(
-            method
-            for method in model.methods
-            if method.code is not None and len(method.code.instructions) >= 4
+            method for method in model.methods if method.code is not None and len(method.code.instructions) >= 4
         )
         code = method.code
         assert code is not None
@@ -559,9 +601,7 @@ class TestPipelineApply:
 
         model = ClassModel.from_bytes(class_bytes)
         method = next(
-            method
-            for method in model.methods
-            if method.code is not None and len(method.code.instructions) >= 4
+            method for method in model.methods if method.code is not None and len(method.code.instructions) >= 4
         )
         code = method.code
         assert code is not None

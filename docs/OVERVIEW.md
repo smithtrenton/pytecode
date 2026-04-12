@@ -1,8 +1,8 @@
 # Documentation overview
 
 This directory contains the maintained project documentation for `pytecode`.
-
-The original implementation roadmap is complete, so the docs are organized around the current shipped surface, architecture reference, and the design rationale behind the major subsystems.
+The docs here describe the current Rust-backed package surface, architecture,
+validation model, and operational guidance.
 
 ## Start here
 
@@ -18,6 +18,7 @@ The original implementation roadmap is complete, so the docs are organized aroun
 |------|----------|
 | Current runtime shape, public entry points, module responsibilities, data flow, and test coverage | [architecture/current-architecture.md](architecture/current-architecture.md) |
 | Intended layered architecture and extension boundaries | [architecture/target-architecture.md](architecture/target-architecture.md) |
+| Benchmarking guidance and reproduction commands | [benchmarks.md](benchmarks.md) |
 | Release-quality expectations and required validation checks | [project/quality-gates.md](project/quality-gates.md) |
 | Roadmap status and delivered milestone summary | [project/roadmap.md](project/roadmap.md) |
 | Rust JVMS 25 audit, remediation status, and scoped conformance notes | [project/rust-jvms-25-audit.md](project/rust-jvms-25-audit.md) |
@@ -26,8 +27,7 @@ The original implementation roadmap is complete, so the docs are organized aroun
 
 | Topic | Location |
 |------|----------|
-| Current public surface, behavioral contracts, and cross-language reimplementation guidance | [design/pytecode-design.md](design/pytecode-design.md) |
-| Rust-first reimplementation architecture, phased roadmap, and Python-backend strategy | [design/pytecode-rust-design.md](design/pytecode-rust-design.md) |
+| Current public surface and design contracts | [design/pytecode-design.md](design/pytecode-design.md) |
 | Editing-model evaluation, alternatives considered, and extension strategy | [design/editing-model.md](design/editing-model.md) |
 | Bytecode validation framework, tier breakdown, and external-tool strategy | [design/validation-framework.md](design/validation-framework.md) |
 | CFG oracle research and the reasoning behind the ASM-based differential suite | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
@@ -41,8 +41,6 @@ The core user-facing entry points are:
 - `pytecode.ClassModel` for mutable symbolic editing.
 - `pytecode.JarFile` for archive reads, mutation, and safe rewrite-to-disk.
 
-Supporting submodules provide transforms, labels, operands, analysis, hierarchy resolution, validation, descriptors, debug-info policies, and deterministic constant-pool management.
-
-## Notes on historical docs
-
-Some design documents intentionally preserve the reasoning used to choose the current architecture. When those docs refer to phases, issues, or alternatives, treat them as historical rationale rather than an active backlog.
+Supporting submodules provide transforms, analysis, hierarchy resolution,
+validation, debug-info policies, and raw classfile helpers through
+`pytecode.classfile` and `pytecode.model`.

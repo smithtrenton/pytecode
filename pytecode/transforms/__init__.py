@@ -1,6 +1,9 @@
-"""Declarative transform helpers for pytecode.
+"""Declarative matching and rewrite helpers for class editing pipelines.
 
-Matchers, transforms, and pipeline builder for class manipulation::
+This module collects the ergonomic Python-facing factories that sit on top of
+the Rust transform engine. Use it when you want to build matcher-driven
+rewrites without talking to the lower-level ``pytecode._rust`` classes
+directly::
 
     from pytecode.transforms import PipelineBuilder, class_named, rename_class
 

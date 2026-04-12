@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import pytecode
 import pytecode.analysis as analysis
 import pytecode.classfile as classfile_api
+import pytecode.classfile.attributes as attr_api
 import pytecode.model as model_api
 from pytecode.analysis.hierarchy import (
     MappingClassResolver as HierarchyMappingClassResolver,
@@ -24,10 +26,27 @@ from tests.helpers import compile_java_resource, compile_java_resource_classes
 rust = pytest.importorskip("pytecode._rust")
 
 
+def _iter_code_attrs(class_info: classfile_api.ClassFile) -> list[attr_api.CodeAttr]:
+    code_attrs: list[attr_api.CodeAttr] = []
+    for method in class_info.methods:
+        for attr in method.attributes:
+            if type(attr).__name__ == "CodeAttr":
+                code_attrs.append(cast(attr_api.CodeAttr, attr))
+    return code_attrs
+
+
+def _first_code_attr(class_info: classfile_api.ClassFile) -> attr_api.CodeAttr:
+    code_attrs = _iter_code_attrs(class_info)
+    if code_attrs:
+        return code_attrs[0]
+    raise AssertionError("expected CodeAttr")
+
+
 def test_top_level_rust_first_exports() -> None:
     assert pytecode.ClassReader is rust.ClassReader
     assert pytecode.ClassWriter is rust.ClassWriter
     assert pytecode.ClassModel is rust.ClassModel
+    assert not hasattr(pytecode, "backend_info")
     assert not hasattr(pytecode, "MappingClassResolver")
     assert not hasattr(pytecode, "Diagnostic")
     assert not hasattr(pytecode, "verify_classfile")
@@ -60,14 +79,6 @@ def test_semantic_modules_reexport_rust_types() -> None:
     assert model_api.CodeModel is rust.CodeModel
     assert model_api.Label is rust.Label
     assert model_api.RawInsn is rust.RawInsn
-
-
-def test_backend_info_surface() -> None:
-    module_name, version, exports = rust.backend_info()
-    assert module_name == "pytecode._rust"
-    assert version
-    assert "ClassReader" in exports
-    assert "ClassWriter" in exports
 
 
 def test_class_reader_roundtrip_smoke(tmp_path: Path) -> None:
@@ -240,9 +251,7 @@ def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
     )
 
     hello = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "HelloWorld.java")).class_info
-    code_attr = next(
-        attr for method in hello.methods for attr in method.attributes if type(attr).__name__ == "CodeAttr"
-    )
+    code_attr = _first_code_attr(hello)
     assert any(type(attr).__name__ == "LineNumberTableAttr" for attr in code_attr.attributes)
 
     lambda_showcase = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "LambdaShowcase.java")).class_info
@@ -261,14 +270,7 @@ def test_public_reader_surfaces_typed_rust_attributes(tmp_path: Path) -> None:
 
 def test_public_reader_surfaces_bytecode_enums_from_classfile_api(tmp_path: Path) -> None:
     cfg = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "CfgFixture.java")).class_info
-    newarray = next(
-        insn
-        for method in cfg.methods
-        for attr in method.attributes
-        if type(attr).__name__ == "CodeAttr"
-        for insn in attr.code
-        if insn.atype is not None
-    )
+    newarray = next(insn for code_attr in _iter_code_attrs(cfg) for insn in code_attr.code if insn.atype is not None)
 
     assert isinstance(newarray, classfile_api.InsnInfo)
     assert newarray.type is classfile_api.InsnInfoType.NEWARRAY
@@ -277,14 +279,10 @@ def test_public_reader_surfaces_bytecode_enums_from_classfile_api(tmp_path: Path
 
 def test_public_reader_surfaces_exception_table_entries_from_classfile_api(tmp_path: Path) -> None:
     example = pytecode.ClassReader.from_file(compile_java_resource(tmp_path, "TryCatchExample.java")).class_info
-    code_attr = next(
-        attr
-        for method in example.methods
-        for attr in method.attributes
-        if type(attr).__name__ == "CodeAttr" and attr.exception_table
-    )
+    code_attr = next(code_attr for code_attr in _iter_code_attrs(example) if code_attr.exception_table)
 
     assert isinstance(code_attr.exception_table[0], classfile_api.ExceptionInfo)
+
 
 # --- Error-case tests ---
 

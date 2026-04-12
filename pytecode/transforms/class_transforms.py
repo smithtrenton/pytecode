@@ -1,7 +1,8 @@
-"""Declarative class transform factories.
+"""Factory helpers for matcher-driven class transforms.
 
-Factory functions that return ``ClassTransform`` instances applied
-natively by the Rust engine::
+Each helper returns a Rust-native :class:`ClassTransform` that can be plugged
+into :class:`pytecode.transforms.PipelineBuilder` or used directly with the
+lower-level transform APIs::
 
     from pytecode.transforms.class_transforms import rename_class, remove_method
 
@@ -15,70 +16,70 @@ from pytecode._rust import ClassTransform
 
 
 def rename_class(name: str) -> ClassTransform:
-    """Rename the class to *name* (internal JVM format)."""
+    """Rename the owning class to the internal JVM name ``name``."""
     return ClassTransform.rename_class(name)
 
 
 def set_access_flags(flags: int) -> ClassTransform:
-    """Set class access flags to *flags*."""
+    """Replace the class access-flag bitset with ``flags``."""
     return ClassTransform.set_access_flags(flags)
 
 
 def add_access_flags(flags: int) -> ClassTransform:
-    """Add *flags* to class access flags (bitwise OR)."""
+    """Set the bits in ``flags`` on the class access-flag bitset."""
     return ClassTransform.add_access_flags(flags)
 
 
 def remove_access_flags(flags: int) -> ClassTransform:
-    """Remove *flags* from class access flags (bitwise AND NOT)."""
+    """Clear the bits in ``flags`` from the class access-flag bitset."""
     return ClassTransform.remove_access_flags(flags)
 
 
 def set_super_class(name: str) -> ClassTransform:
-    """Set super class to *name* (internal JVM format)."""
+    """Change the direct superclass to the internal JVM name ``name``."""
     return ClassTransform.set_super_class(name)
 
 
 def add_interface(name: str) -> ClassTransform:
-    """Add *name* to the class's interface list."""
+    """Append the interface ``name`` if it is not already present."""
     return ClassTransform.add_interface(name)
 
 
 def remove_interface(name: str) -> ClassTransform:
-    """Remove *name* from the class's interface list."""
+    """Remove the interface ``name`` from the declared interface list."""
     return ClassTransform.remove_interface(name)
 
 
 def remove_method(name: str, descriptor: str | None = None) -> ClassTransform:
-    """Remove method by *name*, optionally filtered by *descriptor*."""
+    """Remove methods named ``name``, optionally restricted to ``descriptor``."""
     return ClassTransform.remove_method(name, descriptor)
 
 
 def remove_field(name: str, descriptor: str | None = None) -> ClassTransform:
-    """Remove field by *name*, optionally filtered by *descriptor*."""
+    """Remove fields named ``name``, optionally restricted to ``descriptor``."""
     return ClassTransform.remove_field(name, descriptor)
 
 
 def rename_method(from_name: str, to_name: str) -> ClassTransform:
-    """Rename all methods named *from_name* to *to_name*."""
+    """Rename every method whose current name is ``from_name`` to ``to_name``."""
     return ClassTransform.rename_method(from_name, to_name)
 
 
 def rename_field(from_name: str, to_name: str) -> ClassTransform:
-    """Rename all fields named *from_name* to *to_name*."""
+    """Rename every field whose current name is ``from_name`` to ``to_name``."""
     return ClassTransform.rename_field(from_name, to_name)
 
 
 def set_method_access_flags(name: str, flags: int) -> ClassTransform:
-    """Set access flags of method *name* to *flags*."""
+    """Replace the access flags of methods named ``name`` with ``flags``."""
     return ClassTransform.set_method_access_flags(name, flags)
 
 
 def set_field_access_flags(name: str, flags: int) -> ClassTransform:
-    """Set access flags of field *name* to *flags*."""
+    """Replace the access flags of fields named ``name`` with ``flags``."""
     return ClassTransform.set_field_access_flags(name, flags)
 
 
 def sequence(*transforms: ClassTransform) -> ClassTransform:
-    """Apply multiple transforms in order."""
+    """Compose multiple class transforms and apply them in the given order."""
     return ClassTransform.sequence(list(transforms))

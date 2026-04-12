@@ -80,7 +80,7 @@ Tier 1 is now implemented in `tests/test_class_writer.py`: the suite covers byte
 
 Verify that emitted output satisfies JVM spec format checking (§4.8) and static constraints (§4.9.1).
 
-**Internal verifier** (`pytecode.analysis.verify`): `verify_classfile()` and `verify_classmodel()` perform pure-Python spec checks without external tools. Key checks include:
+**Internal verifier** (`pytecode.analysis.verify`): `verify_classfile()` and `verify_classmodel()` perform spec checks through the Rust-backed validation layer without external tools. Key checks include:
 
 - Magic number, version bounds, access-flag mutual exclusions
 - Constant-pool well-formedness: all index references point to valid entries of the correct type
@@ -115,7 +115,7 @@ Compare emitted output against javac's output at a semantic level, identifying d
 | Float 0.0, 1.0, 2.0 | `fconst_0/1/2` | `ldc` |
 | Double 0.0, 1.0 | `dconst_0/1` | `ldc2_w` |
 
-The lowering code in `pytecode/edit/labels.py` already handles VarInsn normalization and LDC size selection. This tier verifies completeness.
+The lowering pipeline already handles VarInsn normalization and LDC size selection. This tier verifies completeness.
 
 **Semantic diff severities**: Differences are categorized as `error` (wrong content), `warning` (valid but non-idiomatic), or `info` (CP ordering difference). The goal is zero errors; warnings indicate optimization opportunities.
 
@@ -131,11 +131,11 @@ The definitive validity test: can the JVM actually load and use the class? This 
 
 ## Constant pool ordering strategy
 
-CP ordering is one of the most nuanced aspects of javac compatibility. The framework uses two modes:
+CP ordering is one of the most nuanced aspects of deterministic emission. The framework uses two modes:
 
 **Mode 1 — Preserve-on-roundtrip (default)**: When reading an existing class file and writing it back, preserve the original CP ordering. New entries are appended at the end. This is what `ConstantPoolBuilder.from_pool()` already supports. This mode is essential for bytecode transformation pipelines (ProGuard, R8, ByteBuddy all follow this pattern).
 
-**Mode 2 — javac-compatible ordering (not currently implemented)**: A later compatibility mode could generate a class file from scratch using an ordering that matches javac's allocation pattern:
+**Mode 2 — javac-style ordering (not currently implemented)**: A later mode could generate a class file from scratch using an ordering that matches javac's allocation pattern:
 
 1. This-class name Utf8 → `CONSTANT_Class` for `this_class`
 2. Super-class name Utf8 → `CONSTANT_Class` for `super_class`

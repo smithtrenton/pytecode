@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
 
-from .. import _rust
-from ..classfile import ClassReader
-from ..model import ClassModel
+from . import _rust
+from .classfile import ClassReader
+from .model import ClassModel
 
 __all__ = [
     "DebugInfoPolicy",
@@ -37,9 +37,9 @@ class FrameComputationMode(Enum):
     RECOMPUTE = "recompute"
 
 
-_RustRewriteTransform = _rust.Pipeline | _rust.CompiledPipeline
-_RustTransformInput = _RustRewriteTransform | _rust.ClassTransform
-_RustBoundTransform = Callable[[ClassModel], object | None]
+_RewriteTransform = (
+    _rust.ClassTransform | _rust.Pipeline | _rust.CompiledPipeline | Callable[[ClassModel], object | None]
+)
 
 
 @dataclass
@@ -97,21 +97,8 @@ def _is_class_filename(filename: str) -> bool:
     return not filename.endswith(os.sep) and filename.endswith(".class")
 
 
-def _normalize_rust_transform(
-    transform: _RustTransformInput | _RustBoundTransform | None,
-) -> _RustRewriteTransform | None:
-    if transform is None:
-        return None
-    if isinstance(transform, (_rust.Pipeline, _rust.CompiledPipeline)):
-        return transform
-    if isinstance(transform, _rust.ClassTransform):
-        pipeline = _rust.Pipeline()
-        pipeline.on_classes(_rust.ClassMatcher.any(), transform)
-        return pipeline
-    owner = getattr(transform, "__self__", None)
-    if isinstance(owner, (_rust.Pipeline, _rust.CompiledPipeline)):
-        return owner
-    return None
+def _is_supported_transform(transform: object) -> bool:
+    return isinstance(transform, (_rust.ClassTransform, _rust.Pipeline, _rust.CompiledPipeline)) or callable(transform)
 
 
 def _effective_rust_debug_policy(debug_policy: DebugInfoPolicy, *, skip_debug: bool) -> str:
@@ -288,7 +275,7 @@ class JarFile:
         self,
         output_path: str | os.PathLike[str] | None = None,
         *,
-        transform: _RustTransformInput | _RustBoundTransform | None = None,
+        transform: _RewriteTransform | None = None,
         frame_mode: FrameComputationMode = FrameComputationMode.PRESERVE,
         resolver: _rust.MappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
@@ -296,9 +283,10 @@ class JarFile:
     ) -> Path:
         """Write the current archive state back to disk.
 
-        By default the archive is rewritten in place through the native Rust
-        archive layer. Unsupported Python callback pipeline steps are rejected
-        instead of falling back to a Python rewrite implementation.
+        The rewrite always flows through the native Rust archive layer. Supported
+        transforms include Rust-backed transform/pipeline objects, their bound
+        ``.apply`` methods, and plain Python callables that mutate ``ClassModel``
+        in place.
 
         Signed-JAR artifacts under ``META-INF`` are preserved as ordinary
         resources and are **not** re-signed; if class bytes change the
@@ -307,8 +295,9 @@ class JarFile:
         Args:
             output_path: Destination path.  When ``None`` the original file
                 is overwritten.
-            transform: Optional Rust-backed transform or pipeline (or a bound
-                ``.apply`` method from a Rust pipeline object).
+            transform: Optional Rust-backed transform or pipeline, a bound
+                ``.apply`` method from a Rust pipeline object, or a plain
+                Python callable that mutates ``ClassModel`` in place.
             frame_mode: Frame policy to use when lowering classes.
             resolver: Class hierarchy resolver used during frame computation.
             debug_info: Policy controlling how debug attributes are emitted.
@@ -319,14 +308,15 @@ class JarFile:
 
         Raises:
             TypeError: If *transform* is not a supported Rust-backed transform
-                or if *resolver* is not a Rust mapping resolver.
+                or callable, if a Python transform returns a non-``None``
+                value, or if *resolver* is not a Rust mapping resolver.
         """
 
         debug_policy = normalize_debug_info_policy(debug_info)
-        rust_transform = _normalize_rust_transform(transform)
-        if transform is not None and rust_transform is None:
+        if transform is not None and not _is_supported_transform(transform):
             raise TypeError(
-                "JarFile.rewrite() requires a ClassTransform, Pipeline, CompiledPipeline, or bound Rust .apply method"
+                "JarFile.rewrite() requires a callable transform, ClassTransform, "
+                "Pipeline, CompiledPipeline, or bound .apply method"
             )
         destination = Path(self.filename if output_path is None else output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -334,15 +324,16 @@ class JarFile:
         original_infolist = self.infolist.copy()
         original_files = self.files.copy()
         original_entry_states = self._entry_states.copy()
+        effective_debug_info = _effective_rust_debug_policy(debug_policy, skip_debug=skip_debug)
         try:
             _rust.rewrite_archive_state(
                 self.filename,
                 list(self._entry_states.values()),
-                transform=rust_transform,
+                transform=transform,
                 output_path=destination,
                 frame_mode=frame_mode,
                 resolver=resolver,
-                debug_info=_effective_rust_debug_policy(debug_policy, skip_debug=skip_debug),
+                debug_info=effective_debug_info,
             )
             new_infolist, new_files, new_entry_states = _read_archive_state(destination)
             self.filename = os.fspath(destination)

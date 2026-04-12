@@ -1442,7 +1442,7 @@ pub(crate) fn extract_code_item(item: &Bound<'_, PyAny>) -> PyResult<CodeItem> {
         return Ok(CodeItem::TableSwitch(insn.inner.clone()));
     }
     if let Ok(dict) = item.downcast::<PyDict>() {
-        return extract_code_item_dict(&dict);
+        return extract_code_item_dict(dict);
     }
     Err(code_item_value_error(
         "code items must be typed instruction objects or legacy dicts produced by CodeModel.instructions",

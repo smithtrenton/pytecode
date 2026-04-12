@@ -1,4 +1,13 @@
-"""Rust-first analysis surface for pytecode."""
+"""Public analysis helpers for verification and hierarchy queries.
+
+This package groups the read-only analysis features that sit alongside class
+editing:
+
+- ``verify_classfile`` and ``verify_classmodel`` for structural verification
+- ``MappingClassResolver`` and hierarchy helpers for type-resolution queries
+- lightweight dataclasses such as ``ResolvedClass`` and ``InheritedMethod`` for
+  Python-friendly results
+"""
 
 from __future__ import annotations
 

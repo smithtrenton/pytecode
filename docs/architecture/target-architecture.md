@@ -71,7 +71,7 @@ Explicit validation is now implemented in `pytecode.analysis.verify`, and the br
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|
-| 1 — Binary Roundtrip | Serialization bugs, offset miscalculation, endianness | Fast (pure Python) | None |
+| 1 — Binary Roundtrip | Serialization bugs, offset miscalculation, endianness | Fast | None |
 | 2 — Structural Verification | Spec violations, illegal attributes, invalid CP refs | Medium (subprocess) | javap; optionally AsmTools |
 | 3 — Semantic Comparison | Non-idiomatic output, CP ordering drift, wide-instruction overuse | Slow (subprocess) | javac + javap |
 | 4 — JVM Loading & Execution | StackMapTable errors, verifier failures, type-safety | Slowest (JVM launch) | java + test harness |

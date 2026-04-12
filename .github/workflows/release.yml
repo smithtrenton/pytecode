@@ -100,8 +100,43 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace
 
-  build:
-    name: Build distributions
+  build-wheels:
+    name: Build wheel (${{ matrix.os }})
+    needs: [prepare, validate]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.release_ref }}
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-python: true
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Validate release tag
+        run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-wheel-${{ matrix.os }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: Build sdist
     needs: [prepare, validate]
     runs-on: ubuntu-latest
     permissions:
@@ -122,18 +157,18 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Validate release tag
         run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
-      - name: Build distributions
-        run: uv build
-      - name: Upload distributions
+      - name: Build source distribution
+        run: uv build --sdist
+      - name: Upload sdist
         uses: actions/upload-artifact@v7
         with:
-          name: python-package-distributions
-          path: dist/
+          name: python-package-sdist
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -145,8 +180,9 @@ jobs:
       - name: Download distributions
         uses: actions/download-artifact@v8
         with:
-          name: python-package-distributions
+          pattern: python-package-*
           path: dist/
+          merge-multiple: true
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -162,8 +198,9 @@ jobs:
       - name: Download distributions
         uses: actions/download-artifact@v8
         with:
-          name: python-package-distributions
+          pattern: python-package-*
           path: dist/
+          merge-multiple: true
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

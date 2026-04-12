@@ -1,17 +1,25 @@
-use pyo3::exceptions::{PyNotImplementedError, PyOSError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule};
 use pyo3::wrap_pyfunction;
 use pytecode_archive::{ArchiveError, JarEntryMetadata, JarFile, JarInfo, RewriteOptions};
+use pytecode_engine::error::{EngineError, EngineErrorKind};
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::ApplyClassTransform;
 use pytecode_engine::transform::pipeline_spec::CompiledPipeline;
 use pytecode_engine::transform::transform_spec::ClassTransformSpec;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use zip::{CompressionMethod, DateTime, System};
 
-use crate::model::{PyMappingClassResolver, parse_debug_info_policy, parse_frame_computation_mode};
+use crate::model::{
+    PyClassModel, PyMappingClassResolver, parse_debug_info_policy, parse_frame_computation_mode,
+};
 use crate::transforms::{PyClassTransform, PyCompiledPipeline, PyPipeline};
+
+const CALLBACK_ABORT_REASON: &str = "__pytecode_archive_python_callback_failed__";
+const PYTHON_TRANSFORM_RETURN_ERROR: &str =
+    "JarFile.rewrite() Python transforms must mutate ClassModel in place and return None";
 
 fn archive_error_to_py(error: ArchiveError) -> PyErr {
     match error {
@@ -224,6 +232,193 @@ impl ApplyClassTransform for ClassTransformArchiveTransform<'_> {
     }
 }
 
+struct CallbackCompiledPipelineArchiveTransform<'a> {
+    inner: &'a PyCompiledPipeline,
+    callback_error: Arc<Mutex<Option<PyErr>>>,
+}
+
+impl ApplyClassTransform for CallbackCompiledPipelineArchiveTransform<'_> {
+    fn apply(&mut self, model: &mut ClassModel) -> pytecode_engine::Result<()> {
+        match self.inner.apply_to_engine_model(model) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                store_callback_error(&self.callback_error, err);
+                Err(callback_abort_error())
+            }
+        }
+    }
+}
+
+struct PythonCallableArchiveTransform {
+    callback: Py<PyAny>,
+    callback_error: Arc<Mutex<Option<PyErr>>>,
+}
+
+impl ApplyClassTransform for PythonCallableArchiveTransform {
+    fn apply(&mut self, model: &mut ClassModel) -> pytecode_engine::Result<()> {
+        let callback_result = Python::with_gil(|py| -> PyResult<bool> {
+            let mut py_model = PyClassModel::from_model(std::mem::take(model));
+            let call_result = (|| -> PyResult<bool> {
+                let cell = Py::new(py, py_model.clone())?;
+                Ok(self.callback.call1(py, (&cell,))?.is_none(py))
+            })();
+            let restore_result = py_model.take_inner();
+
+            match (call_result, restore_result) {
+                (Ok(is_none), Ok(inner)) => {
+                    *model = inner;
+                    Ok(is_none)
+                }
+                (Err(err), Ok(inner)) => {
+                    *model = inner;
+                    Err(err)
+                }
+                (Ok(_), Err(err)) | (Err(_), Err(err)) => Err(err),
+            }
+        });
+
+        match callback_result {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                store_callback_error(
+                    &self.callback_error,
+                    PyTypeError::new_err(PYTHON_TRANSFORM_RETURN_ERROR),
+                );
+                Err(callback_abort_error())
+            }
+            Err(err) => {
+                store_callback_error(&self.callback_error, err);
+                Err(callback_abort_error())
+            }
+        }
+    }
+}
+
+fn callback_abort_error() -> EngineError {
+    EngineError::new(
+        0,
+        EngineErrorKind::InvalidModelState {
+            reason: CALLBACK_ABORT_REASON.to_owned(),
+        },
+    )
+}
+
+fn store_callback_error(slot: &Arc<Mutex<Option<PyErr>>>, err: PyErr) {
+    let mut guard = slot.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(err);
+    }
+}
+
+fn take_callback_error(slot: &Arc<Mutex<Option<PyErr>>>) -> Option<PyErr> {
+    slot.lock().unwrap().take()
+}
+
+fn is_callback_abort(error: &ArchiveError) -> bool {
+    matches!(
+        error,
+        ArchiveError::Engine(EngineError {
+            offset: 0,
+            kind: EngineErrorKind::InvalidModelState { reason },
+        }) if reason == CALLBACK_ABORT_REASON
+    )
+}
+
+fn rewrite_with_callback_transform(
+    jar: &mut JarFile,
+    transform: &mut dyn ApplyClassTransform,
+    output_path: Option<PathBuf>,
+    options: RewriteOptions<'_>,
+    callback_error: &Arc<Mutex<Option<PyErr>>>,
+) -> PyResult<PathBuf> {
+    match jar.rewrite(output_path.as_deref(), Some(transform), options) {
+        Ok(path) => {
+            if let Some(err) = take_callback_error(callback_error) {
+                return Err(err);
+            }
+            Ok(path)
+        }
+        Err(error) => {
+            if is_callback_abort(&error)
+                && let Some(err) = take_callback_error(callback_error)
+            {
+                return Err(err);
+            }
+            Err(archive_error_to_py(error))
+        }
+    }
+}
+
+fn rewrite_with_pipeline(
+    jar: &mut JarFile,
+    pipeline: PyRef<'_, PyPipeline>,
+    output_path: Option<PathBuf>,
+    options: RewriteOptions<'_>,
+) -> PyResult<PathBuf> {
+    if pipeline.contains_python_callbacks() {
+        let compiled = pipeline.compile_internal();
+        let callback_error = Arc::new(Mutex::new(None));
+        let mut wrapped = CallbackCompiledPipelineArchiveTransform {
+            inner: &compiled,
+            callback_error: callback_error.clone(),
+        };
+        return rewrite_with_callback_transform(
+            jar,
+            &mut wrapped,
+            output_path,
+            options,
+            &callback_error,
+        );
+    }
+
+    let compiled = pipeline.spec.compile();
+    let mut wrapped = CompiledPipelineArchiveTransform { inner: &compiled };
+    jar.rewrite(output_path.as_deref(), Some(&mut wrapped), options)
+        .map_err(archive_error_to_py)
+}
+
+fn rewrite_with_compiled_pipeline(
+    jar: &mut JarFile,
+    pipeline: PyRef<'_, PyCompiledPipeline>,
+    output_path: Option<PathBuf>,
+    options: RewriteOptions<'_>,
+) -> PyResult<PathBuf> {
+    if pipeline.contains_python_callbacks {
+        let callback_error = Arc::new(Mutex::new(None));
+        let mut wrapped = CallbackCompiledPipelineArchiveTransform {
+            inner: &pipeline,
+            callback_error: callback_error.clone(),
+        };
+        return rewrite_with_callback_transform(
+            jar,
+            &mut wrapped,
+            output_path,
+            options,
+            &callback_error,
+        );
+    }
+
+    let mut wrapped = CompiledPipelineArchiveTransform {
+        inner: &pipeline.inner,
+    };
+    jar.rewrite(output_path.as_deref(), Some(&mut wrapped), options)
+        .map_err(archive_error_to_py)
+}
+
+fn rewrite_with_python_callable(
+    jar: &mut JarFile,
+    transform: &Bound<'_, PyAny>,
+    output_path: Option<PathBuf>,
+    options: RewriteOptions<'_>,
+) -> PyResult<PathBuf> {
+    let callback_error = Arc::new(Mutex::new(None));
+    let mut wrapped = PythonCallableArchiveTransform {
+        callback: transform.clone().unbind(),
+        callback_error: callback_error.clone(),
+    };
+    rewrite_with_callback_transform(jar, &mut wrapped, output_path, options, &callback_error)
+}
+
 fn rewrite_options<'a>(
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&'a PyMappingClassResolver>,
@@ -245,31 +440,23 @@ fn rewrite_with_transform(
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
 ) -> PyResult<PathBuf> {
-    if let Ok(pipeline) = transform.extract::<PyRef<'_, PyPipeline>>() {
-        if pipeline.has_python_callbacks() {
-            return Err(PyNotImplementedError::new_err(
-                "Rust archive rewrite does not support Python callback pipeline steps",
-            ));
+    if let Ok(owner) = transform.getattr("__self__")
+        && !owner.is_none()
+    {
+        if let Ok(pipeline) = owner.extract::<PyRef<'_, PyPipeline>>() {
+            return rewrite_with_pipeline(jar, pipeline, output_path, options);
         }
-        let compiled = pipeline.spec.compile();
-        let mut wrapped = CompiledPipelineArchiveTransform { inner: &compiled };
-        return jar
-            .rewrite(output_path.as_deref(), Some(&mut wrapped), options)
-            .map_err(archive_error_to_py);
+        if let Ok(pipeline) = owner.extract::<PyRef<'_, PyCompiledPipeline>>() {
+            return rewrite_with_compiled_pipeline(jar, pipeline, output_path, options);
+        }
+    }
+
+    if let Ok(pipeline) = transform.extract::<PyRef<'_, PyPipeline>>() {
+        return rewrite_with_pipeline(jar, pipeline, output_path, options);
     }
 
     if let Ok(pipeline) = transform.extract::<PyRef<'_, PyCompiledPipeline>>() {
-        if pipeline.contains_python_callbacks {
-            return Err(PyNotImplementedError::new_err(
-                "Rust archive rewrite does not support Python callback pipeline steps",
-            ));
-        }
-        let mut wrapped = CompiledPipelineArchiveTransform {
-            inner: &pipeline.inner,
-        };
-        return jar
-            .rewrite(output_path.as_deref(), Some(&mut wrapped), options)
-            .map_err(archive_error_to_py);
+        return rewrite_with_compiled_pipeline(jar, pipeline, output_path, options);
     }
 
     if let Ok(transform) = transform.extract::<PyRef<'_, PyClassTransform>>() {
@@ -281,8 +468,12 @@ fn rewrite_with_transform(
             .map_err(archive_error_to_py);
     }
 
-    Err(PyValueError::new_err(
-        "rewrite_archive_with_rust_transform() expected a ClassTransform, Pipeline, or CompiledPipeline",
+    if transform.is_callable() {
+        return rewrite_with_python_callable(jar, transform, output_path, options);
+    }
+
+    Err(PyTypeError::new_err(
+        "rewrite_archive_with_rust_transform() expected a callable, ClassTransform, Pipeline, CompiledPipeline, or bound .apply method",
     ))
 }
 
