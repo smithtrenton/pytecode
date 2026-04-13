@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.9.4,<2.0.0"]
+requires = ["maturin>=1.13.1,<2.0.0"]
 build-backend = "maturin"
 
 [project]
@@ -34,11 +34,11 @@ Changelog = "https://github.com/smithtrenton/pytecode/releases"
 
 [project.optional-dependencies]
 dev = [
-  "basedpyright>=1.38.3,<2.0.0",
-  "maturin>=1.9.4,<2.0.0",
+  "basedpyright>=1.39.0,<2.0.0",
+  "maturin>=1.13.1,<2.0.0",
   "pdoc>=16.0.0,<17.0.0",
-  "pytest>=9.0.2,<10.0.0",
-  "ruff>=0.15.7,<0.16.0",
+  "pytest>=9.0.3,<10.0.0",
+  "ruff>=0.15.10,<0.16.0",
 ]
 
 [tool.maturin]

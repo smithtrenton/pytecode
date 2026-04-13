@@ -1130,7 +1130,10 @@ impl PyPipeline {
     }
 
     fn take_callback_error(&self) -> Option<PyErr> {
-        self.callback_error.lock().unwrap().take()
+        self.callback_error
+            .lock()
+            .expect("callback error mutex poisoned")
+            .take()
     }
 
     pub(crate) fn apply_to_engine_model(&self, model: &mut ClassModel) -> PyResult<()> {
@@ -1184,7 +1187,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        *error_slot.lock().unwrap() = Some(e);
+                        *error_slot.lock().expect("callback error mutex poisoned") = Some(e);
                     }
                     // Move back out — zero-copy
                     *model = cell
@@ -1233,7 +1236,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        *error_slot.lock().unwrap() = Some(e);
+                        *error_slot.lock().expect("callback error mutex poisoned") = Some(e);
                     }
                     *model = cell
                         .borrow_mut(py)
@@ -1281,7 +1284,7 @@ impl PyPipeline {
                     let py_model = PyClassModel::from_model(std::mem::take(model));
                     let cell = Py::new(py, py_model).expect("failed to create PyClassModel");
                     if let Err(e) = cb.call1(py, (&cell,)) {
-                        *error_slot.lock().unwrap() = Some(e);
+                        *error_slot.lock().expect("callback error mutex poisoned") = Some(e);
                     }
                     *model = cell
                         .borrow_mut(py)
@@ -1361,7 +1364,10 @@ pub struct PyCompiledPipeline {
 
 impl PyCompiledPipeline {
     fn take_callback_error(&self) -> Option<PyErr> {
-        self.callback_error.lock().unwrap().take()
+        self.callback_error
+            .lock()
+            .expect("callback error mutex poisoned")
+            .take()
     }
 
     pub(crate) fn apply_to_engine_model(&self, model: &mut ClassModel) -> PyResult<()> {

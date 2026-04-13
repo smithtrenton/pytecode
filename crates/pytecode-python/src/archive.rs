@@ -304,14 +304,14 @@ fn callback_abort_error() -> EngineError {
 }
 
 fn store_callback_error(slot: &Arc<Mutex<Option<PyErr>>>, err: PyErr) {
-    let mut guard = slot.lock().unwrap();
+    let mut guard = slot.lock().expect("callback error mutex poisoned");
     if guard.is_none() {
         *guard = Some(err);
     }
 }
 
 fn take_callback_error(slot: &Arc<Mutex<Option<PyErr>>>) -> Option<PyErr> {
-    slot.lock().unwrap().take()
+    slot.lock().expect("callback error mutex poisoned").take()
 }
 
 fn is_callback_abort(error: &ArchiveError) -> bool {

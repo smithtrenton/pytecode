@@ -1,5 +1,12 @@
 # Best way to validate `pytecode`'s new CFG feature
 
+> **Note:** This document is historical design background and oracle-selection
+> rationale. The APIs discussed below (`build_cfg()`, `simulate()`,
+> `ControlFlowGraph`, `BasicBlock`, `SimulationResult`, `FrameState`) were
+> researched but **never shipped** as public Python API. Control-flow analysis
+> exists only as internal Rust machinery used for frame computation. Do not
+> rely on this document as a description of the current public API surface.
+
 This document records research for a possible ASM-based CFG differential suite.
 The current repository does not ship that suite as part of the default test
 flow, so keep this file as historical design background and oracle-selection

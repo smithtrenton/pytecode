@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -30,8 +29,8 @@ def _iter_code_attrs(class_info: classfile_api.ClassFile) -> list[attr_api.CodeA
     code_attrs: list[attr_api.CodeAttr] = []
     for method in class_info.methods:
         for attr in method.attributes:
-            if type(attr).__name__ == "CodeAttr":
-                code_attrs.append(cast(attr_api.CodeAttr, attr))
+            if isinstance(attr, rust.CodeAttr):
+                code_attrs.append(attr)  # type: ignore[arg-type]
     return code_attrs
 
 
@@ -310,3 +309,183 @@ def test_classmodel_rejects_invalid_bytes() -> None:
 def test_verify_classfile_rejects_wrong_type() -> None:
     with pytest.raises(TypeError):
         analysis.verify_classfile(12345)  # type: ignore[arg-type]
+
+
+# --- Zero-coverage API tests ---
+
+
+def test_constant_pool_builder_add_and_find() -> None:
+    cpb = model_api.ConstantPoolBuilder()
+    assert cpb.count() == 1  # index 0 is reserved
+
+    utf8_idx = cpb.add_utf8("hello")
+    assert utf8_idx >= 1
+    assert cpb.resolve_utf8(utf8_idx) == "hello"
+
+    class_idx = cpb.add_class("java/lang/Object")
+    assert class_idx >= 1
+    assert cpb.resolve_class_name(class_idx) == "java/lang/Object"
+
+    str_idx = cpb.add_string("world")
+    assert str_idx >= 1
+    assert cpb.find_string("world") == str_idx
+    assert cpb.find_string("nonexistent") is None
+
+    int_idx = cpb.add_integer(42)
+    assert cpb.find_integer(42) == int_idx
+    assert cpb.find_integer(99) is None
+
+    fr_idx = cpb.add_field_ref("Owner", "field", "I")
+    assert fr_idx >= 1
+    assert cpb.find_fieldref("Owner", "field", "I") == fr_idx
+
+    mr_idx = cpb.add_method_ref("Owner", "method", "()V")
+    assert mr_idx >= 1
+    assert cpb.find_methodref("Owner", "method", "()V") == mr_idx
+
+    imr_idx = cpb.add_interface_method_ref("Owner", "ifaceMethod", "()V")
+    assert imr_idx >= 1
+    assert cpb.find_interface_methodref("Owner", "ifaceMethod", "()V") == imr_idx
+
+    assert cpb.count() > 1
+
+
+def test_constant_pool_builder_checkpoint_and_rollback() -> None:
+    cpb = model_api.ConstantPoolBuilder()
+    cpb.add_utf8("keep")
+    checkpoint = cpb.checkpoint()
+
+    cpb.add_utf8("discard")
+    assert cpb.count() > checkpoint
+
+    cpb.rollback(checkpoint)
+    assert cpb.count() == checkpoint
+
+
+def test_constant_pool_builder_dedup() -> None:
+    cpb = model_api.ConstantPoolBuilder()
+    idx1 = cpb.add_string("duplicate")
+    idx2 = cpb.add_string("duplicate")
+    assert idx1 == idx2
+
+
+def test_label_construction_and_properties() -> None:
+    label = model_api.Label()
+    assert label.kind is not None
+
+    named = model_api.Label.named("my_label")
+    assert named.name == "my_label"
+
+    anon = model_api.Label()
+    assert anon.name is None
+
+
+def test_label_equality_and_hash() -> None:
+    a = model_api.Label.named("x")
+    b = model_api.Label.named("x")
+    # Labels use identity-based equality; two separate instances are not equal
+    assert a == a
+    assert a != b
+    assert hash(a) == hash(a)
+
+    c = model_api.Label.named("y")
+    assert a != c
+
+
+def test_line_number_entry_construction() -> None:
+    label = model_api.Label.named("start")
+    entry = model_api.LineNumberEntry(label, 42)
+    assert entry.label == label
+    assert entry.line_number == 42
+
+
+def test_local_variable_entry_construction() -> None:
+    start = model_api.Label.named("start")
+    end = model_api.Label.named("end")
+    entry = model_api.LocalVariableEntry(start, end, "x", "I", 0)
+    assert entry.start == start
+    assert entry.end == end
+    assert entry.name == "x"
+    assert entry.descriptor == "I"
+    assert entry.index == 0
+
+
+def test_local_variable_type_entry_construction() -> None:
+    start = model_api.Label.named("start")
+    end = model_api.Label.named("end")
+    entry = model_api.LocalVariableTypeEntry(start, end, "items", "Ljava/util/List<Ljava/lang/String;>;", 1)
+    assert entry.start == start
+    assert entry.end == end
+    assert entry.name == "items"
+    assert entry.signature == "Ljava/util/List<Ljava/lang/String;>;"
+    assert entry.index == 1
+
+
+def test_method_handle_value_construction() -> None:
+    mh = model_api.MethodHandleValue(
+        reference_kind=6,
+        owner="java/lang/System",
+        name="out",
+        descriptor="Ljava/io/PrintStream;",
+        is_interface=False,
+    )
+    assert mh.reference_kind == 6
+    assert mh.owner == "java/lang/System"
+    assert mh.name == "out"
+    assert mh.descriptor == "Ljava/io/PrintStream;"
+    assert mh.is_interface is False
+
+
+def test_dynamic_value_construction() -> None:
+    dv = model_api.DynamicValue(
+        bootstrap_method_attr_index=0,
+        name="myDynamic",
+        descriptor="Ljava/lang/Object;",
+    )
+    assert dv.bootstrap_method_attr_index == 0
+    assert dv.name == "myDynamic"
+    assert dv.descriptor == "Ljava/lang/Object;"
+
+
+def test_exception_handler_from_parsed_model(tmp_path: Path) -> None:
+    hello_world_class = compile_java_resource(tmp_path, "TryCatchExample.java")
+    model = pytecode.ClassModel.from_bytes(hello_world_class.read_bytes())
+    handlers = [
+        handler for method in model.methods if method.code is not None for handler in method.code.exception_handlers
+    ]
+    assert len(handlers) > 0
+    eh = handlers[0]
+    assert eh.start is not None  # type: ignore[reportUnknownMemberType]
+    assert eh.end is not None  # type: ignore[reportUnknownMemberType]
+    assert eh.handler is not None  # type: ignore[reportUnknownMemberType]
+
+
+# --- Hierarchy cycle detection ---
+
+
+def test_hierarchy_cycle_raises_error(tmp_path: Path) -> None:
+    """Verify that a circular class hierarchy triggers an error on traversal."""
+    hello = compile_java_resource(tmp_path, "HelloWorld.java")
+    hello_bytes = hello.read_bytes()
+
+    model_a = pytecode.ClassModel.from_bytes(hello_bytes)
+    model_a.name = "cycle/A"
+    model_a.super_name = "cycle/B"
+    bytes_a = model_a.to_bytes()
+
+    model_b = pytecode.ClassModel.from_bytes(hello_bytes)
+    model_b.name = "cycle/B"
+    model_b.super_name = "cycle/A"
+    bytes_b = model_b.to_bytes()
+
+    resolver = analysis.MappingClassResolver.from_bytes([bytes_a, bytes_b])
+    with pytest.raises(RuntimeError, match="[Cc]ycle"):
+        iter_superclasses(resolver, "cycle/A")
+
+
+def test_hierarchy_unresolved_class_raises_error(tmp_path: Path) -> None:
+    """Verify that querying an unknown class raises an error."""
+    hello = compile_java_resource(tmp_path, "HelloWorld.java")
+    resolver = analysis.MappingClassResolver.from_bytes([hello.read_bytes()])
+    with pytest.raises(RuntimeError):
+        iter_superclasses(resolver, "nonexistent/Class")

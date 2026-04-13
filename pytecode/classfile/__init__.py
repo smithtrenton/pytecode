@@ -7,20 +7,8 @@ than the mutable symbolic editing API in :mod:`pytecode.model`.
 from __future__ import annotations
 
 from .. import _rust
+from .._utils import document_property as _document_property
 from .bytecode import ArrayType, InsnInfoType
-
-
-def _document_property(cls: type[object], name: str, doc: str, return_annotation: object) -> None:
-    descriptor = cls.__dict__[name]
-
-    def getter(self: object) -> object:
-        return descriptor.__get__(self, type(self))
-
-    getter.__name__ = name
-    getter.__doc__ = doc
-    getter.__annotations__ = {"return": return_annotation}
-    setattr(cls, name, property(getter, doc=doc))
-
 
 ClassFile = _rust.ClassFile
 ClassReader = _rust.ClassReader

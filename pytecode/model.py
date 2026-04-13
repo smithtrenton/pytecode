@@ -7,44 +7,14 @@ back to classfile bytes.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from . import _rust
+from ._utils import document_property as _document_property
 
 if TYPE_CHECKING:
     from .analysis import MappingClassResolver
     from .archive import FrameComputationMode
-
-
-def _document_property(
-    cls: type[object],
-    name: str,
-    doc: str,
-    return_annotation: object,
-    *,
-    writable: bool = False,
-) -> None:
-    descriptor = cls.__dict__[name]
-
-    def getter(self: object) -> object:
-        return descriptor.__get__(self, type(self))
-
-    getter.__name__ = name
-    getter.__doc__ = doc
-    getter.__annotations__ = {"return": return_annotation}
-
-    setter_func: Callable[[object, object], None] | None = None
-    if writable:
-
-        def _setter(self: object, value: object) -> None:
-            descriptor.__set__(self, value)
-
-        _setter.__name__ = name
-        _setter.__annotations__ = {"value": return_annotation, "return": None}
-        setter_func = _setter
-
-    setattr(cls, name, property(getter, setter_func, doc=doc))
 
 
 ClassModel = _rust.ClassModel
