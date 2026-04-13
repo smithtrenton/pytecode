@@ -43,7 +43,7 @@ def write_other_files(output_dir: Path, other_files: Sequence[JarInfo]) -> None:
 
 
 def lift_models(classes: Sequence[tuple[JarInfo, ClassReader]]) -> list[tuple[JarInfo, ClassModel]]:
-    return [(jar_info, ClassModel.from_classfile(class_reader.class_info)) for jar_info, class_reader in classes]
+    return [(jar_info, ClassModel.from_bytes(jar_info.bytes)) for jar_info, _class_reader in classes]
 
 
 def write_classmodels(

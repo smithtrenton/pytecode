@@ -1,0 +1,24 @@
+[package]
+name = "pytecode-cli"
+version = "0.1.0"
+description = "CLI helpers for benchmarking and validating the pytecode Rust workspace"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["bytecode", "classfile", "jvm", "jar"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap.workspace = true
+pytecode-archive = { path = "../pytecode-archive" }
+pytecode-engine = { path = "../pytecode-engine" }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+zip.workspace = true

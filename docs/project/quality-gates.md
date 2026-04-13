@@ -18,17 +18,19 @@ uv run ruff format --check .
 uv run basedpyright
 uv run pytest -q
 uv run python tools/generate_api_docs.py --check
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+uv build --wheel --sdist
 ```
 
 ## What the current suite covers
 
-- `tests/test_class_writer.py` exercises Tier 1 byte-for-byte roundtrip coverage for `ClassWriter.write()` and `ClassModel.to_bytes()`.
-- `tests/test_validation.py` exercises the fixture and release matrix for Tier 1 roundtrip, Tier 2 structural verification, and Tier 4 JVM verification.
-- `tests/javap_parser.py` and `tests/test_javap_parser.py` provide the Tier 3 semantic-diff engine for `javap`-level comparisons.
-- `tests/test_cfg_oracle.py` differentially validates `pytecode.analysis.build_cfg()` against an ASM-backed JVM oracle when the required Java tooling is available.
-- `tests/test_api_docs.py` and `tools/generate_api_docs.py --check` enforce the documented public-surface manifest and docstring coverage.
-
-The `oracle`-marked CFG suite skips cleanly when Java or ASM dependencies are unavailable, so ordinary development workflows are not blocked by optional external tooling.
+- `crates/pytecode-engine/tests/raw_roundtrip.rs`, `verifier.rs`, `analysis.rs`, `model.rs`, and `transform.rs` cover parser/emitter fidelity, diagnostics, lowering, analysis, and transform invariants in the Rust engine.
+- `crates/pytecode-archive/tests/jar.rs` plus `crates/pytecode-cli/tests/*.rs` cover archive rewrite behavior and CLI-facing smoke workflows.
+- `tests/test_rust_bindings.py`, `tests/test_rust_transforms.py`, and `tests/test_jar.py` cover the Python-facing bindings, transform composition, and archive rewrite semantics.
+- `tests/javap_parser.py` and `tests/test_javap_parser.py` cover the `javap` parser and semantic-diff utilities.
+- `tests/test_api_docs.py`, `tests/test_validate_release_tag.py`, and `tools/generate_api_docs.py --check` enforce the documented public surface and release-tag expectations.
 
 ## Change expectations by area
 
@@ -48,4 +50,4 @@ To keep scope focused, the project is not trying to become:
 
 ## Summary
 
-`pytecode` already meets the original quality bar for a Python bytecode manipulation toolkit: deterministic classfile emission, a mutable symbolic editing model, transform composition, hierarchy-aware analysis, structured validation diagnostics, optional JAR rewriting, JVM-backed CFG differential checks, multi-release validation tiers, and generated API reference coverage.
+`pytecode` maintains a release-quality bar for a Rust-backed JVM bytecode toolkit with a Python API: deterministic classfile emission, a mutable symbolic editing model, transform composition, hierarchy-aware queries, structured validation diagnostics, archive rewriting, semantic-diff utilities, and generated API reference coverage.

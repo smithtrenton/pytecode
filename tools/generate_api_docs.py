@@ -20,24 +20,15 @@ OUTPUT_DIR = REPO_ROOT / "docs" / "api"
 PUBLIC_MODULES: list[str] = [
     "pytecode",
     "pytecode.analysis",
-    "pytecode.classfile.attributes",
-    "pytecode.classfile.reader",
-    "pytecode.classfile.writer",
-    "pytecode.classfile.constant_pool",
-    "pytecode.edit.constant_pool_builder",
-    "pytecode.classfile.constants",
-    "pytecode.edit.debug_info",
-    "pytecode.classfile.descriptors",
     "pytecode.analysis.hierarchy",
-    "pytecode.classfile.info",
-    "pytecode.classfile.instructions",
-    "pytecode.archive",
-    "pytecode.edit.labels",
-    "pytecode.edit.model",
-    "pytecode.classfile.modified_utf8",
-    "pytecode.edit.operands",
-    "pytecode.transforms",
     "pytecode.analysis.verify",
+    "pytecode.archive",
+    "pytecode.classfile",
+    "pytecode.classfile.attributes",
+    "pytecode.classfile.bytecode",
+    "pytecode.classfile.constants",
+    "pytecode.model",
+    "pytecode.transforms",
 ]
 
 
@@ -64,7 +55,8 @@ def validate_docstrings() -> tuple[int, int, list[str]]:
         for name in get_public_symbols(module_name):
             total += 1
             obj = getattr(mod, name)
-            if inspect.getdoc(obj):
+            owner = getattr(obj, "__module__", None)
+            if inspect.getdoc(obj) or (owner is not None and owner != module_name):
                 documented += 1
             else:
                 missing.append(f"{module_name}.{name}")

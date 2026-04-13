@@ -1,8 +1,10 @@
-"""Profile JAR-processing stages with ``cProfile``.
+"""Profile Rust-first JAR-processing stages with ``cProfile``.
 
 Usage:
-    uv run python tools/profile_jar_pipeline.py 225.jar
-    uv run python tools/profile_jar_pipeline.py 225.jar --stages model-lift model-lower
+    uv run python tools/profile_jar_pipeline.py crates/pytecode-engine/fixtures/jars/byte-buddy-1.17.5.jar
+    uv run python tools/profile_jar_pipeline.py ^
+        crates/pytecode-engine/fixtures/jars/byte-buddy-1.17.5.jar ^
+        --stages model-lift model-lower
     uv run python tools/profile_jar_pipeline.py path/to/jar-corpus --stages model-lift model-lower ^
         --summary-json output/profiles/common-libs/summary.json
 """
@@ -23,12 +25,11 @@ from pathlib import Path
 
 from pytecode import ClassModel, ClassReader, ClassWriter, JarFile
 from pytecode.archive import JarInfo
-from pytecode.classfile.info import ClassFile
 
 type ClassifiedEntries = tuple[list[JarInfo], list[JarInfo]]
 type ParsedClasses = list[tuple[JarInfo, ClassReader]]
 type LiftedModels = list[tuple[JarInfo, ClassModel]]
-type LoweredClasses = list[tuple[JarInfo, ClassFile]]
+type LoweredClasses = list[tuple[JarInfo, object]]
 type SerializedClasses = list[tuple[JarInfo, bytes]]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -66,23 +67,24 @@ def classify_entries(jar: JarFile) -> ClassifiedEntries:
 
 
 def parse_class_entries(class_entries: Sequence[JarInfo]) -> ParsedClasses:
-    """Parse raw ``.class`` bytes into ``ClassReader`` instances."""
+    """Parse raw ``.class`` bytes into Rust-backed ``ClassReader`` instances."""
     return [(jar_info, ClassReader.from_bytes(jar_info.bytes)) for jar_info in class_entries]
 
 
 def lift_models(parsed_classes: Sequence[tuple[JarInfo, ClassReader]]) -> LiftedModels:
-    """Lift parsed class files into mutable ``ClassModel`` instances."""
-    return [(jar_info, ClassModel.from_classfile(reader.class_info)) for jar_info, reader in parsed_classes]
+    """Lift class bytes into Rust-backed mutable ``ClassModel`` instances."""
+    return [(jar_info, ClassModel.from_bytes(jar_info.bytes)) for jar_info, _reader in parsed_classes]
 
 
 def lower_models(models: Sequence[tuple[JarInfo, ClassModel]]) -> LoweredClasses:
-    """Lower mutable models back into raw ``ClassFile`` trees."""
-    return [(jar_info, model.to_classfile()) for jar_info, model in models]
+    """Lower Rust-backed models back into raw ClassFile trees."""
+    lowered = [model.to_classfile() for _jar_info, model in models]
+    return [(jar_info, payload) for (jar_info, _model), payload in zip(models, lowered, strict=True)]
 
 
-def serialize_classfiles(classfiles: Sequence[tuple[JarInfo, ClassFile]]) -> SerializedClasses:
-    """Serialize raw ``ClassFile`` trees into ``.class`` bytes."""
-    return [(jar_info, ClassWriter.write(classfile)) for jar_info, classfile in classfiles]
+def serialize_classfiles(classfiles: Sequence[tuple[JarInfo, ClassReader]]) -> SerializedClasses:
+    """Serialize Rust-backed parsed classfiles into ``.class`` bytes."""
+    return [(jar_info, bytes(ClassWriter.write(class_reader.class_info))) for jar_info, class_reader in classfiles]
 
 
 @dataclass
@@ -172,22 +174,7 @@ def prepare_jar_read(inputs: ProfileInputs) -> PreparedStage:
 
     return PreparedStage(
         name="jar-read",
-        description="Read ZIP metadata and entry bytes into memory.",
-        workload=workload,
-    )
-
-
-def prepare_jar_classify(inputs: ProfileInputs) -> PreparedStage:
-    """Profile separating already-loaded entries into classes and resources."""
-    jar = inputs.archive()
-
-    def workload() -> str:
-        class_entries, other_entries = classify_entries(jar)
-        return f"entries={len(jar.files)} class_entries={len(class_entries)} other_entries={len(other_entries)}"
-
-    return PreparedStage(
-        name="jar-classify",
-        description="Split loaded JAR entries into class and non-class groups.",
+        description="Read ZIP metadata and entry bytes into memory, then split entries into classes and resources.",
         workload=workload,
     )
 
@@ -202,7 +189,7 @@ def prepare_class_parse(inputs: ProfileInputs) -> PreparedStage:
 
     return PreparedStage(
         name="class-parse",
-        description="Parse each class entry into a ClassReader.",
+        description="Parse each class entry into a Rust-backed ClassReader.",
         workload=workload,
     )
 
@@ -218,7 +205,7 @@ def prepare_model_lift(inputs: ProfileInputs) -> PreparedStage:
 
     return PreparedStage(
         name="model-lift",
-        description="Lift parsed ClassFile trees into ClassModel instances.",
+        description="Lift class bytes into Rust-backed ClassModel instances.",
         workload=workload,
     )
 
@@ -229,19 +216,18 @@ def prepare_model_lower(inputs: ProfileInputs) -> PreparedStage:
 
     def workload() -> str:
         classfiles = lower_models(models)
-        total_pool_slots = sum(len(classfile.constant_pool) for _jar_info, classfile in classfiles)
-        return f"classfiles={len(classfiles)} total_pool_slots={total_pool_slots}"
+        return f"classfiles={len(classfiles)}"
 
     return PreparedStage(
         name="model-lower",
-        description="Lower ClassModel instances back into ClassFile trees.",
+        description="Lower Rust-backed ClassModel instances back into raw ClassFile trees.",
         workload=workload,
     )
 
 
 def prepare_class_write(inputs: ProfileInputs) -> PreparedStage:
-    """Profile serializing lowered classfile trees into ``bytes``."""
-    classfiles = lower_models(lift_models(inputs.parsed()))
+    """Profile serializing parsed classfile trees into ``bytes``."""
+    classfiles = inputs.parsed()
 
     def workload() -> str:
         serialized_classes = serialize_classfiles(classfiles)
@@ -250,14 +236,13 @@ def prepare_class_write(inputs: ProfileInputs) -> PreparedStage:
 
     return PreparedStage(
         name="class-write",
-        description="Serialize ClassFile trees into final class bytes.",
+        description="Serialize Rust-backed parsed classfiles into final class bytes.",
         workload=workload,
     )
 
 
 STAGE_BUILDERS: dict[str, Callable[[ProfileInputs], PreparedStage]] = {
     "jar-read": prepare_jar_read,
-    "jar-classify": prepare_jar_classify,
     "class-parse": prepare_class_parse,
     "model-lift": prepare_model_lift,
     "model-lower": prepare_model_lower,

@@ -1,22 +1,24 @@
-"""Python library for parsing, inspecting, manipulating, and emitting JVM class files.
+"""Rust-backed top-level entry points for common pytecode workflows.
 
-Provides four top-level entry points:
+Import from this module when you want the shortest path to the core editing
+surface:
 
-- ``ClassReader`` — parse ``.class`` bytes into a ``ClassFile`` tree.
-- ``ClassWriter`` — serialize a ``ClassFile`` tree back to ``.class`` bytes.
-- ``ClassModel`` — mutable editing model with symbolic references and
-  label-aware code editing.
-- ``JarFile`` — read, mutate, and rewrite JAR archives.
+- ``ClassReader`` and ``ClassWriter`` for raw classfile IO
+- ``ClassModel`` for mutable symbolic editing
+- ``JarFile`` for archive reads and rewrites
 
-Additional submodules expose transforms, descriptors, analysis, hierarchy
-resolution, validation, operands, labels, debug-info helpers, and the
-underlying data types.  See ``pytecode.transforms``, ``pytecode.analysis``,
-``pytecode.analysis.verify``, and the other documented submodules for details.
+For more specialized APIs, prefer the semantic submodules such as
+``pytecode.classfile``, ``pytecode.model``, ``pytecode.archive``, and
+``pytecode.analysis``.
 """
 
 from .archive import JarFile
-from .classfile.reader import ClassReader
-from .classfile.writer import ClassWriter
-from .edit.model import ClassModel
+from .classfile import ClassReader, ClassWriter
+from .model import ClassModel
 
-__all__ = ["ClassModel", "ClassReader", "ClassWriter", "JarFile"]
+__all__ = [
+    "ClassModel",
+    "ClassReader",
+    "ClassWriter",
+    "JarFile",
+]

@@ -1,6 +1,11 @@
 # Ignore output dir and jars
 output
 *.jar
+!crates/pytecode-engine/fixtures/jars/*.jar
+
+# Cython compiled extensions (orphaned, replaced by Rust)
+*_cy.*.pyd
+*_cy.*.so
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -142,3 +147,4 @@ dmypy.json
 
 # uv
 uv.lock
+pytecode/_rust.pdb

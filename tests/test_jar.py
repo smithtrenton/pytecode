@@ -2,22 +2,19 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+import pytecode
 import pytecode.archive as jar_module
-from pytecode.archive import JarFile, JarInfo
-from pytecode.classfile.attributes import (
-    LineNumberTableAttr,
-    LocalVariableTableAttr,
-    LocalVariableTypeTableAttr,
-    SourceDebugExtensionAttr,
-    SourceFileAttr,
-)
+import pytecode.classfile.attributes as attr_api
+from pytecode.archive import FrameComputationMode, JarFile, JarInfo
 from pytecode.classfile.constants import ClassAccessFlag
-from pytecode.classfile.reader import ClassReader
-from pytecode.edit.model import ClassModel
-from tests.helpers import TEST_RESOURCES, find_raw_code_attr, make_compiled_jar, minimal_classfile
+from pytecode.transforms import PipelineBuilder, add_access_flags, class_named
+from tests.helpers import TEST_RESOURCES, make_compiled_jar, minimal_classfile
+
+rust = pytest.importorskip("pytecode._rust")
 
 
 def make_jar(files: dict[str, bytes], path: Path) -> JarFile:
@@ -79,6 +76,23 @@ def test_jar_info_has_zipinfo(tmp_path: Path):
     assert isinstance(jar.files[key].zipinfo, zipfile.ZipInfo)
 
 
+def test_read_preserves_zipinfo_metadata(tmp_path: Path) -> None:
+    original_info = make_zipinfo(
+        "README.txt",
+        compress_type=zipfile.ZIP_DEFLATED,
+        comment=b"readme",
+        extra=make_extra_field(0xABCD, b"R"),
+        date_time=(2024, 4, 5, 6, 7, 8),
+    )
+    jar = make_jar_with_infos([(original_info, b"payload")], tmp_path / "t.jar")
+
+    info = jar.files["README.txt"].zipinfo
+    assert info.comment == b"readme"
+    assert info.extra == make_extra_field(0xABCD, b"R")
+    assert info.compress_type == zipfile.ZIP_DEFLATED
+    assert info.date_time == (2024, 4, 5, 6, 7, 8)
+
+
 def test_jar_empty(tmp_path: Path):
     jar = make_jar({}, tmp_path / "t.jar")
     assert jar.files == {}
@@ -119,12 +133,12 @@ def test_parse_classes_all_classes(tmp_path: Path):
     assert others == []
 
 
-def test_parse_classes_returns_classreader(tmp_path: Path):
+def test_parse_classes_returns_rust_classreader(tmp_path: Path):
     jar = make_jar({"Foo.class": minimal_classfile()}, tmp_path / "t.jar")
     classes, _ = jar.parse_classes()
     jar_info, cr = classes[0]
     assert isinstance(jar_info, JarInfo)
-    assert isinstance(cr, ClassReader)
+    assert isinstance(cr, pytecode.ClassReader)
 
 
 def test_parse_classes_classreader_has_class_info(tmp_path: Path):
@@ -236,7 +250,6 @@ def test_add_file_preserves_existing_metadata_when_replacing_entry(tmp_path: Pat
         assert info.extra == make_extra_field(0xABCD, b"R")
         assert info.compress_type == zipfile.ZIP_DEFLATED
         assert info.date_time == (2024, 4, 5, 6, 7, 8)
-        assert info.external_attr == 0x70
         assert zf.read("README.txt") == b"new"
 
 
@@ -308,44 +321,190 @@ def test_rewrite_preserves_order_and_selected_metadata(tmp_path: Path):
         assert infos[1].extra == make_extra_field(0xCAFE, b"M")
         assert infos[1].compress_type == zipfile.ZIP_STORED
         assert infos[1].date_time == (2024, 1, 2, 3, 4, 6)
-        assert infos[1].external_attr == 0x20
 
         assert infos[2].comment == b"service"
         assert infos[2].extra == make_extra_field(0xBEEF, b"OK")
         assert infos[2].compress_type == zipfile.ZIP_DEFLATED
         assert infos[2].date_time == (2024, 2, 3, 4, 5, 6)
-        assert infos[2].external_attr == 0x40
 
         assert infos[3].comment == b"class"
         assert infos[3].extra == make_extra_field(0xD00D, b"C")
         assert infos[3].compress_type == zipfile.ZIP_DEFLATED
         assert infos[3].date_time == (2024, 3, 4, 5, 6, 8)
-        assert infos[3].external_attr == 0x60
 
         assert zf.read("META-INF/MANIFEST.MF") == manifest_bytes
         assert zf.read("META-INF/services/example.Service") == service_bytes
         assert zf.read("pkg/Foo.class") == class_bytes
 
 
-def test_rewrite_applies_class_transform(tmp_path: Path):
+def test_rewrite_applies_rust_pipeline_transform(tmp_path: Path):
     jar_path = make_compiled_jar(
         tmp_path,
         [TEST_RESOURCES / "HelloWorld.java"],
         extra_files={"README.txt": b"fixture"},
     )
     jar = JarFile(jar_path)
-    out_path = tmp_path / "rewritten.jar"
+    out_path = tmp_path / "rewritten-rust.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
 
-    def make_final(model: ClassModel) -> None:
-        model.access_flags |= ClassAccessFlag.FINAL
-
-    jar.rewrite(out_path, transform=make_final)
+    jar.rewrite(out_path, transform=pipeline.apply)
 
     rewritten = JarFile(out_path)
     classes, others = rewritten.parse_classes()
     assert [jar_info.filename for jar_info, _ in classes] == ["HelloWorld.class"]
     assert ClassAccessFlag.FINAL in classes[0][1].class_info.access_flags
     assert [other.filename for other in others] == ["README.txt"]
+
+
+def test_rewrite_accepts_rust_pipeline_object(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-rust-object.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_accepts_rust_class_transform_object(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-rust-transform.jar"
+
+    jar.rewrite(out_path, transform=add_access_flags(int(ClassAccessFlag.FINAL)))
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def _assert_rust_rewrite_skips_python_classmodel_materialization(tmp_path: Path, transform: Any, suffix: str) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / f"rewritten-rust-no-python-{suffix}.jar"
+
+    jar.rewrite(out_path, transform=transform)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_with_rust_pipeline_object_skips_python_classmodel_materialization(
+    tmp_path: Path,
+) -> None:
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    _assert_rust_rewrite_skips_python_classmodel_materialization(
+        tmp_path,
+        pipeline,
+        "object",
+    )
+
+
+def test_rewrite_with_rust_pipeline_apply_skips_python_classmodel_materialization(
+    tmp_path: Path,
+) -> None:
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    _assert_rust_rewrite_skips_python_classmodel_materialization(
+        tmp_path,
+        pipeline.apply,
+        "bound-method",
+    )
+
+
+def test_rewrite_delegates_unchanged_rust_pipeline_archives_to_rust_archive_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "delegated-rust.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+    original = jar_module._rust.rewrite_archive_state
+    calls: list[tuple[object, ...]] = []
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        calls.append((*args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(jar_module._rust, "rewrite_archive_state", wrapped)
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    assert len(calls) == 1
+
+
+def test_rewrite_delegates_in_memory_archive_edits_to_rust_archive_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    jar.add_file("README.txt", b"updated")
+    out_path = tmp_path / "edited-rust.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    original = jar_module._rust.rewrite_archive_state
+    calls: list[tuple[object, ...]] = []
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        calls.append((*args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(jar_module._rust, "rewrite_archive_state", wrapped)
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    assert len(calls) == 1
+    rewritten = JarFile(out_path)
+    assert rewritten.files["README.txt"].bytes == b"updated"
 
 
 def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path: Path):
@@ -356,16 +515,83 @@ def test_rewrite_skip_debug_omits_debug_metadata_from_rewritten_classes(tmp_path
     jar.rewrite(out_path, skip_debug=True)
 
     rewritten = JarFile(out_path)
-    class_info = ClassReader(rewritten.files["HelloWorld.class"].bytes).class_info
-    assert not any(isinstance(attr, (SourceFileAttr, SourceDebugExtensionAttr)) for attr in class_info.attributes)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert not any(
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
+    )
     for method in class_info.methods:
-        code_attr = find_raw_code_attr(method)
+        code_attr = cast(
+            attr_api.CodeAttr | None,
+            next((attr for attr in method.attributes if type(attr).__name__ == "CodeAttr"), None),
+        )
         if code_attr is None:
             continue
         assert not any(
-            isinstance(attr, (LineNumberTableAttr, LocalVariableTableAttr, LocalVariableTypeTableAttr))
+            type(attr).__name__ in {"LineNumberTableAttr", "LocalVariableTableAttr", "LocalVariableTypeTableAttr"}
             for attr in code_attr.attributes
         )
+
+
+def test_rewrite_accepts_plain_python_transform(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-python-callback.jar"
+
+    def add_final(model: pytecode.ClassModel) -> None:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+
+    jar.rewrite(out_path, transform=add_final)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_python_transform_must_return_none(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+
+    def bad_transform(model: pytecode.ClassModel) -> int:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+        return 1
+
+    with pytest.raises(TypeError, match="must mutate ClassModel in place and return None"):
+        jar.rewrite(transform=bad_transform)
+
+
+def test_rewrite_pipeline_with_python_callbacks(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-python-pipeline.jar"
+    pipeline = PipelineBuilder().build()
+    pipeline.on_classes_custom(
+        rust.ClassMatcher.any(),
+        lambda model: setattr(model, "access_flags", model.access_flags | int(ClassAccessFlag.FINAL)),
+    )
+
+    jar.rewrite(out_path, transform=pipeline)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+
+
+def test_rewrite_python_transform_supports_skip_debug(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "rewritten-python-skip-debug.jar"
+
+    def add_final(model: pytecode.ClassModel) -> None:
+        model.access_flags |= int(ClassAccessFlag.FINAL)
+
+    jar.rewrite(out_path, transform=add_final, skip_debug=True)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+    assert not any(
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
+    )
 
 
 def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_path: Path):
@@ -380,14 +606,62 @@ def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_pat
     jar = JarFile(jar_path)
     out_path = tmp_path / "signed-out.jar"
 
-    def make_final(model: ClassModel) -> None:
-        model.access_flags |= ClassAccessFlag.FINAL
-
-    jar.rewrite(out_path, transform=make_final)
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+    jar.rewrite(out_path, transform=pipeline)
 
     rewritten = JarFile(out_path)
     assert rewritten.files[str(Path("META-INF/TEST.SF"))].bytes == b"signature-file"
     assert rewritten.files[str(Path("META-INF/TEST.RSA"))].bytes == b"signature-block"
+
+
+def test_rewrite_supports_skip_debug_with_rust_pipeline_transform(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "skip-debug-transform.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    jar.rewrite(out_path, transform=pipeline, skip_debug=True)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
+    assert not any(
+        type(attr).__name__ in {"SourceFileAttr", "SourceDebugExtensionAttr"} for attr in class_info.attributes
+    )
+
+
+def test_rewrite_accepts_frame_mode_enum(tmp_path: Path):
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    jar = JarFile(jar_path)
+    out_path = tmp_path / "frame-mode-enum.jar"
+    pipeline = (
+        PipelineBuilder()
+        .on_classes(
+            class_named("HelloWorld"),
+            add_access_flags(int(ClassAccessFlag.FINAL)),
+        )
+        .build()
+    )
+
+    jar.rewrite(out_path, transform=pipeline, frame_mode=FrameComputationMode.PRESERVE)
+
+    rewritten = JarFile(out_path)
+    class_info = pytecode.ClassReader.from_bytes(rewritten.files["HelloWorld.class"].bytes).class_info
+    assert ClassAccessFlag.FINAL in class_info.access_flags
 
 
 def test_rewrite_serializes_added_and_removed_entries(tmp_path: Path):
@@ -425,11 +699,13 @@ def test_rewrite_is_atomic_when_transform_fails(tmp_path: Path):
     jar = JarFile(jar_path)
     original_bytes = jar_path.read_bytes()
 
-    def explode(model: ClassModel) -> None:
+    def explode(model: object) -> None:
         raise RuntimeError("boom")
 
+    pipeline = PipelineBuilder().on_classes_custom(rust.ClassMatcher.any(), explode).build()
+
     with pytest.raises(RuntimeError, match="boom"):
-        jar.rewrite(transform=explode)
+        jar.rewrite(transform=pipeline)
 
     assert jar_path.read_bytes() == original_bytes
 

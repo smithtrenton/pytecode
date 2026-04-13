@@ -1,6 +1,16 @@
 # Best way to validate `pytecode`'s new CFG feature
 
-This document records the research that led to the current ASM-based CFG differential suite. Keep it as design background and oracle-selection rationale rather than as an active implementation plan.
+> **Note:** This document is historical design background and oracle-selection
+> rationale. The APIs discussed below (`build_cfg()`, `simulate()`,
+> `ControlFlowGraph`, `BasicBlock`, `SimulationResult`, `FrameState`) were
+> researched but **never shipped** as public Python API. Control-flow analysis
+> exists only as internal Rust machinery used for frame computation. Do not
+> rely on this document as a description of the current public API surface.
+
+This document records research for a possible ASM-based CFG differential suite.
+The current repository does not ship that suite as part of the default test
+flow, so keep this file as historical design background and oracle-selection
+rationale rather than as an active implementation plan.
 
 ## Executive Summary
 
@@ -52,7 +62,7 @@ The important alignment is that both ASM and `pytecode` operate near the raw byt
 
 The current compiled-fixture tests are broad but shallow. `CfgFixture.java` intentionally covers straight-line control flow, branches, loops, dense and sparse switches, single and multiple handlers, `finally`, nested exceptions, object creation, arrays, monitors, null checks, and explicit `throw` paths.[^4] But the associated integration tests mostly check minimum block counts or the existence of some handler edges instead of exact adjacency and handler coverage.[^3] In practice, that means the repo already has the right corpus shape; it just needs a stronger assertion strategy.[^3][^4]
 
-The good news is that the repository is already set up for compiled-Java differential testing. `tests/helpers.py` caches `javac --release 8` outputs under `.pytest_cache/pytecode-javac` and exposes helpers that compile a fixture source and return the resulting `.class` path, so a JVM-side oracle can consume the exact same class bytes that `ClassModel.from_bytes()` and `build_cfg()` already use.[^11]
+The good news is that the repository is already set up for compiled-Java differential testing. `tests/helpers.py` exposes helpers that compile fixture sources into per-test temporary directories and return the resulting `.class` paths, so a JVM-side oracle can consume the exact same class bytes that `ClassModel.from_bytes()` and `build_cfg()` already use.[^11]
 
 ## Candidate library comparison
 
@@ -99,7 +109,7 @@ Soot also represents exception destinations as `ExceptionDest` collections and `
 
 ### 1. Keep the fast rule-focused tests
 
-Retain the current hand-built `CodeModel` tests for pure-Python validation of specific invariants like leader creation, fall-through suppression after unconditional branches or returns, and frame merge failures.[^2][^10] These are still the fastest way to pin intended semantics when you change `build_cfg()` or `simulate()`.[^2][^10]
+Retain the current hand-built `CodeModel` tests for direct validation of specific invariants like leader creation, fall-through suppression after unconditional branches or returns, and frame merge failures.[^2][^10] These are still the fastest way to pin intended semantics when you change `build_cfg()` or `simulate()`.[^2][^10]
 
 ### 2. Add a JVM differential oracle based on ASM
 
@@ -150,7 +160,7 @@ The current fixture corpus is already broad enough to start. I would upgrade the
 - `tryCatchSingle` / `tryCatchMultiple` -> exact handler target and catch types
 - `tryCatchFinally` / `nestedTryCatch` -> exact multiple-handler coverage and nesting behavior[^3][^4]
 
-These should remain pure-Python and assert the intended semantics directly.
+These should remain direct `CodeModel` tests and assert the intended semantics directly.
 
 ### Phase B: add an ASM oracle helper
 
@@ -187,7 +197,7 @@ Even with the existing broad fixture, I would add or isolate these as dedicated 
 - synchronized blocks and compiler-generated `finally` shapes
 - multi-catch compiled output
 - large `tableswitch` / `lookupswitch`
-- legacy `JSR` / `RET`, likely in a separate non-blocking suite because they are now supported primarily as a compatibility path for older classfiles rather than as a modern code-generation target.[^14]
+- `JSR` / `RET`, likely in a separate non-blocking suite because they target older classfile versions and should not dominate the main CFG corpus.[^14]
 
 ## Final recommendation
 
