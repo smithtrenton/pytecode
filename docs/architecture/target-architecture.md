@@ -4,7 +4,10 @@ This document captures the intended layered architecture for pytecode. Most of t
 
 ## 1. Binary I/O layer ([#4](https://github.com/smithtrenton/pytecode/issues/4))
 
-Both read and write primitives now live in `bytes_utils.py`.
+The low-level read/write primitives now live in the Rust engine and its archive
+support crates. Python callers use the typed surfaces in `pytecode.classfile`,
+`pytecode.model`, and `pytecode.archive` rather than a standalone Python byte
+reader/writer module.
 
 Responsibilities:
 
@@ -13,13 +16,15 @@ Responsibilities:
 - handle alignment and length-prefixed structures
 - provide reusable helpers for parser and emitter code
 
-Module:
+Implementation:
 
-- `bytes_utils.py` — read side (`BytesReader`) and write side (`BytesWriter`)
+- `pytecode-engine` for classfile parsing, lowering, and emission
+- `pytecode-archive` for archive rewrite and ZIP metadata handling
 
 ## 2. Parsed spec model layer
 
-Retain the existing spec-faithful dataclasses for exact representation of on-disk structures.
+Retain a spec-faithful raw classfile layer for exact representation of on-disk
+structures.
 
 Responsibilities:
 
@@ -27,7 +32,8 @@ Responsibilities:
 - preserve raw indexes and attribute layout
 - serve as the lossless interchange model between parser and writer
 
-This is the layer you already have today.
+Today this layer is exposed through the typed Rust-backed objects in
+`pytecode.classfile`.
 
 ## 3. Mutable editing model ([#6](https://github.com/smithtrenton/pytecode/issues/6) — now Rust-owned)
 
@@ -65,16 +71,22 @@ Max stack/max locals recomputation and StackMapTable generation are now implemen
 
 Max stack/max locals recomputation and StackMapTable generation are now complete ([#10](https://github.com/smithtrenton/pytecode/issues/10) — done), built on the analysis layer.
 
-## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed; four tiers implemented in [#14](https://github.com/smithtrenton/pytecode/issues/14))
+## 5. Validation layer ([#11](https://github.com/smithtrenton/pytecode/issues/11) — core layer landed)
 
-Explicit validation is now implemented in `pytecode.analysis.verify`, and the broader architecture is now exercised as a four-tier framework in the test suite. Tier 1 roundtrip coverage lives in `tests/test_class_writer.py`; `tests/test_validation.py` covers the fixture/release matrix for Tiers 1, 2, and 4; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; and `tests/jvm_harness.py` provides the JVM harness used by Tier 4. Each tier catches a different class of bugs, is independently testable, and builds on the one below:
+Explicit validation is now implemented in `pytecode.analysis.verify`. For
+future changes, the validation architecture is still best understood as a
+layered model: the repository actively covers Tier 1 and Tier 2 behavior in the
+Rust workspace and Python API suites, keeps Tier 3 `javap` tooling in
+`tests/javap_parser.py`, and treats JVM-backed differential or oracle checks as
+optional extensions rather than part of the default suite. Each tier catches a
+different class of bugs and builds on the one below:
 
 | Tier | What it catches | Speed | External deps |
 |------|-----------------|-------|---------------|
 | 1 — Binary Roundtrip | Serialization bugs, offset miscalculation, endianness | Fast | None |
 | 2 — Structural Verification | Spec violations, illegal attributes, invalid CP refs | Medium (subprocess) | javap; optionally AsmTools |
 | 3 — Semantic Comparison | Non-idiomatic output, CP ordering drift, wide-instruction overuse | Slow (subprocess) | javac + javap |
-| 4 — JVM Loading & Execution | StackMapTable errors, verifier failures, type-safety | Slowest (JVM launch) | java + test harness |
+| 4 — JVM Loading & Execution | StackMapTable errors, verifier failures, type-safety | Slowest (JVM launch) | java + optional test harness |
 
 Responsibilities across all tiers:
 
@@ -87,7 +99,7 @@ Responsibilities across all tiers:
 - report actionable, structured diagnostics (not just exceptions) with location context (class, method, bytecode offset, constant-pool index)
 - support diagnostic collection mode (report all errors, not fail-fast)
 - compare emitted output against javac-produced class files for instruction selection and CP ordering fidelity
-- prove JVM verifier acceptance of generated classes via `defineClass()` + `-Xverify:all`
+- optionally prove JVM verifier acceptance of generated classes when a dedicated harness is warranted
 
 The detailed design for each tier is in the [bytecode validation framework](../design/validation-framework.md).
 
@@ -120,8 +132,8 @@ Responsibilities:
 Mutation can leave debug metadata semantically stale even when label rebinding keeps offset-bound tables structurally valid. The current editing model now covers four explicit pieces of behavior:
 
 - rebind lifted code-debug metadata to labels so ordinary instruction edits keep offset-based tables aligned automatically
-- provide explicit preserve/strip helpers so callers can omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata deliberately during lowering
-- model known-stale debug metadata explicitly on `CodeModel` and `ClassModel` via `DebugInfoState`, with helper functions in `pytecode.edit.debug_info`; explicitly stale class/code debug metadata is stripped automatically during lowering, and `verify_classmodel()` warns before emission
-- provide `skip_debug=True` lift controls on `ClassModel.from_classfile()`, `ClassModel.from_bytes()`, and `JarFile.rewrite()` for an ASM-like path that omits `SourceFile`, `SourceDebugExtension`, `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, and `MethodParameters` before the mutable model is materialized
+- provide explicit preserve/strip helpers so callers can omit `LineNumberTable`, `LocalVariableTable`, `LocalVariableTypeTable`, `SourceFile`, and `SourceDebugExtension` metadata deliberately during lowering or archive rewrite
+- surface debug-policy choices through `DebugInfoPolicy` and `verify_classmodel()` diagnostics rather than a separate Python-side debug-info module
+- keep `JarFile.rewrite(skip_debug=True)` only as a compatibility alias; new code should prefer `debug_info=DebugInfoPolicy.STRIP`
 
 Staleness is defined semantically rather than by raw bytecode-offset movement alone. Offsets can move safely under label rebinding; metadata becomes stale when callers mutate source mapping or local-variable meaning/scope/signature/slot usage without updating the corresponding debug metadata.

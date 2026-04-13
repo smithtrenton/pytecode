@@ -1,6 +1,6 @@
 """Benchmark transform execution across native Rust and compatibility callback paths.
 
-Measures transform pipeline throughput on the guava fixture JAR.
+Measures transform pipeline throughput on the Byte Buddy fixture JAR.
 """
 
 from __future__ import annotations

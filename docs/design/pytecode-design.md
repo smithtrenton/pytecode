@@ -23,7 +23,7 @@ These top-level exports are the primary entry points:
 | --- | --- | --- |
 | `pytecode.ClassReader` | Parse `.class` bytes into a raw classfile model | `from_bytes`, `from_file`, `class_info` |
 | `pytecode.ClassWriter` | Emit raw classfile models back to bytes | `write(classfile)` |
-| `pytecode.ClassModel` | Mutable symbolic editing model | `from_bytes`, `from_classfile`, `to_bytes`, `to_bytes_with_options` |
+| `pytecode.ClassModel` | Mutable symbolic editing model | `from_bytes`, `to_classfile`, `to_bytes`, `to_bytes_with_options` |
 | `pytecode.JarFile` | Read, mutate, and rewrite JAR archives | `parse_classes`, `add_file`, `remove_file`, `rewrite` |
 
 ## Raw classfile surface
@@ -58,7 +58,7 @@ Public options that matter:
 
 | Option | Where | Meaning |
 | --- | --- | --- |
-| `skip_debug=True` | lift phase | omit debug metadata when building a `ClassModel` |
+| `debug_info=DebugInfoPolicy.STRIP` | lower or archive-rewrite phase | strip debug metadata during emission or archive rewrite |
 | `frame_mode=FrameComputationMode.RECOMPUTE` | lower phase | recompute `max_stack`, `max_locals`, and `StackMapTable` |
 | `resolver=...` | lower phase | supply hierarchy information for frame computation |
 | `debug_info="preserve"` / `"strip"` | lower phase | preserve or strip debug metadata during emission |
@@ -79,10 +79,9 @@ mutate a `ClassModel`.
 ## Analysis and validation
 
 `pytecode.analysis` is part of the public package contract, not an internal
-detail. The current design includes:
+detail. The current public surface includes:
 
 - hierarchy resolution via `MappingClassResolver`
-- control-flow and frame-sensitive validation support
 - `verify_classfile()` and `verify_classmodel()`
 - structured diagnostics through `Diagnostic`
 

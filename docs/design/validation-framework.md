@@ -1,6 +1,10 @@
 # Bytecode validation framework
 
-This document describes the validation architecture used by pytecode's classfile emission and transformation workflow. The framework addresses three concerns: (1) structural validity per the JVM specification, (2) fidelity to javac-equivalent output, and (3) suitability for use in bytecode transformation toolchains. It is organized into four composable tiers.
+This document describes the validation architecture used by pytecode's classfile
+emission and transformation workflow. The active repository today centers on
+Rust workspace tests, Python API tests, and `javap` semantic-diff utilities.
+The four-tier model below remains the right conceptual framework, but not every
+tier currently has a dedicated standalone test module.
 
 ## Validation tiers
 
@@ -32,7 +36,8 @@ This document describes the validation architecture used by pytecode's classfile
 
 Each tier catches different classes of bugs and is independently testable.
 
-All four tiers are now implemented in the current repository. The sections below describe both the architecture and the concrete workflow exercised by `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, `tests/test_javap_parser.py`, and `tests/jvm_harness.py`.
+The sections below describe the architecture and point at the current
+repository surfaces that cover each tier.
 
 ## External tool landscape
 
@@ -51,7 +56,9 @@ AsmTools' reflexive property is key: if `jdec(our_output)` matches `jdec(javac_o
 
 For control-flow graph validation specifically, see [CFG validation research](cfg-validation-research.md) for a source-backed comparison of ASM, BCEL, and Soot and a recommended differential-testing design based on ASM's `Analyzer`.
 
-That CFG-oracle work has now landed via [#17](https://github.com/smithtrenton/pytecode/issues/17). It complements rather than replaces the four emission-validation tiers in this document: the implemented oracle suite differentially validates `pytecode.analysis.build_cfg()` output before later frame, verifier, and emission layers depend on it.
+That CFG-oracle work did not ship as part of the current default suite. Keep the
+research in [CFG validation research](cfg-validation-research.md) as design
+background for any future JVM-backed differential testing.
 
 ## Tier 1: Binary roundtrip
 
@@ -59,11 +66,11 @@ The most fundamental test: read a class file, convert to the editing model, conv
 
 ```
 javac output (bytes₁)
-    → ClassReader.read_class()       → ClassFile₁
-    → ClassModel.from_classfile()    → ClassModel
+    → ClassReader.from_bytes()       → ClassFile₁
+    → ClassModel.from_bytes()        → ClassModel
     → ClassModel.to_classfile()      → ClassFile₂
     → ClassWriter.write()            → bytes₂
-    → ClassReader.read_class()       → ClassFile₃   (verify bytes₂ is parseable)
+    → ClassReader.from_bytes()       → ClassFile₃   (verify bytes₂ is parseable)
 ```
 
 Three levels of fidelity apply:
@@ -72,9 +79,11 @@ Three levels of fidelity apply:
 - **Level B — Structural equivalence**: `parse(bytes₁) ≅ parse(bytes₂)`, comparing parsed structures with CP references resolved to symbolic values.
 - **Level C — Semantic equivalence**: Behavior-preserving — the two class files define the same class with the same runtime behavior.
 
-Apply roundtrip tests to every Java fixture in `tests/resources/` using parametrized pytest tests. Level A is the default expectation for unmodified roundtrips.
+Level A is the default expectation for unmodified roundtrips.
 
-Tier 1 is now implemented in `tests/test_class_writer.py`: the suite covers byte-for-byte `ClassWriter.write()` roundtrips over the compiled fixture corpus, byte-for-byte `ClassModel.to_bytes()` roundtrips over the same corpus, and raw edge cases such as unknown attributes and double-slot constant-pool gaps.
+The current repository covers Tier 1 primarily through
+`crates/pytecode-engine/tests/raw_roundtrip.rs`, with Python-facing roundtrip
+coverage in `tests/test_rust_bindings.py`.
 
 ## Tier 2: Structural verification
 
@@ -95,6 +104,10 @@ The verifier returns a list of structured `Diagnostic` findings (severity, categ
 **External cross-check** via `javap -v`: Writing emitted bytes to a temp `.class` file and running `javap -v -p -c` on it provides an independent format check — `javap` errors on malformed class files.
 
 **Optional AsmTools `jdec`**: For the deepest structural inspection, `jdec` exposes raw constant-pool structure and byte offsets. Comparing `jdec` output between our emission and javac's provides byte-level structural equivalence beyond what `javap` checks.
+
+Today the most direct Tier 2 coverage lives in
+`crates/pytecode-engine/tests/verifier.rs` plus the Python-facing verifier
+checks in `tests/test_rust_bindings.py` and `tests/test_jar.py`.
 
 ## Tier 3: Semantic comparison with javac
 
@@ -119,13 +132,20 @@ The lowering pipeline already handles VarInsn normalization and LDC size selecti
 
 **Semantic diff severities**: Differences are categorized as `error` (wrong content), `warning` (valid but non-idiomatic), or `info` (CP ordering difference). The goal is zero errors; warnings indicate optimization opportunities.
 
+The current Tier 3 tooling lives in `tests/javap_parser.py` and
+`tests/test_javap_parser.py`.
+
 ## Tier 4: JVM loading and execution
 
 The definitive validity test: can the JVM actually load and use the class? This catches StackMapTable errors, type verification failures, and linking issues that no static checker can find.
 
-**Verification harness**: A small `VerifierHarness.java` under `tests/resources/verifier/` that reads a `.class` file, defines it via a custom `ClassLoader` (`defineClass()`), and reports `VERIFY_OK`, `VERIFY_FAIL` (with the `VerifyError` message), or `FORMAT_FAIL` (with the `ClassFormatError` message). Run with `-Xverify:all` for strictest verification.
+The current repository does not ship a dedicated JVM verification harness as
+part of the default test suite. Treat this tier as an optional extension point
+when future changes justify an explicit load-and-execute lane.
 
-**Execution testing**: For fixtures with known behavior (e.g., `HelloWorld.main()` prints "Hello, World!"), verify that roundtripped output produces the correct runtime output — not just that it loads.
+**Execution testing**: For fixtures with known behavior (for example a simple
+`HelloWorld.main()`), verify that roundtripped output produces the correct
+runtime output — not just that it loads.
 
 **StackMapTable dependency**: Tier 4 for *generated* (non-roundtrip) classes requires valid StackMapTable attributes for class files with version ≥ 50.0. This depends on Issue #10 (stack frame computation). For roundtrip classes, the original StackMapTable is preserved if code is not modified.
 
@@ -148,43 +168,46 @@ This mode is not implemented today; current from-scratch generation uses the bui
 
 ## Validation test infrastructure
 
-Validation tests integrate with the existing `tests/helpers.py` caching infrastructure and are split across a small set of focused modules:
+Validation coverage is split across focused Rust and Python modules:
 
 ```
-tests/
-├── helpers.py                   # Shared fixture compilation / caching helpers
-├── test_class_writer.py         # Tier 1 byte-for-byte roundtrip coverage
-├── test_validation.py           # End-to-end Tier 1/2/4 validation matrix
-├── javap_parser.py              # Tier 3 parser + semantic diff engine
-├── test_javap_parser.py         # Unit coverage for Tier 3 parsing / diffing
-├── jvm_harness.py               # Tier 4 Python wrapper for JVM verification
-├── validation_fixtures.py       # Fixture registry and (fixture, release) matrix
-├── resources/
-│   └── VerifierHarness.java
-└── ...existing test files...
+crates/pytecode-engine/tests/raw_roundtrip.rs
+crates/pytecode-engine/tests/verifier.rs
+crates/pytecode-engine/tests/analysis.rs
+crates/pytecode-engine/tests/model.rs
+crates/pytecode-engine/tests/transform.rs
+crates/pytecode-archive/tests/jar.rs
+crates/pytecode-cli/tests/*.rs
+tests/test_rust_bindings.py
+tests/test_rust_transforms.py
+tests/test_jar.py
+tests/javap_parser.py
+tests/test_javap_parser.py
+tests/test_api_docs.py
 ```
 
-The repository currently exposes the `oracle` marker for the JVM-backed CFG differential suite. The four validation tiers themselves are exercised across `tests/test_class_writer.py`, `tests/test_validation.py`, `tests/javap_parser.py`, `tests/test_javap_parser.py`, and `tests/jvm_harness.py`: the fixture/release matrix in `tests/test_validation.py` exercises Tiers 1, 2, and 4, while `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine. Fixture selection and batching are handled by `tests/helpers.py` and `tests/validation_fixtures.py`.
+`tests/helpers.py` still provides shared fixture compilation and caching for the
+Python-facing suite.
 
 ## Validation data flow
 
 ```
  .java ──javac──▶ .class (gold) ──┐
                                    ├──▶ Tier 3 compare
- .class ──pytecode──▶ .class (ours)┘
-                          │
-                          ├──javap──▶ text ──▶ Tier 2 verify
-                          ├──jvm────▶ load ──▶ Tier 4 verify
-                          └──pytecode──▶ parse ──▶ Tier 1 roundtrip
+  .class ──pytecode──▶ .class (ours)┘
+                           │
+                           ├──javap──▶ text ──▶ Tier 2 verify
+                           ├──jvm────▶ load ──▶ Tier 4 verify (optional)
+                           └──pytecode──▶ parse ──▶ Tier 1 roundtrip
 ```
 
 ## Implementation status
 
 - **Issue #12 (ClassWriter)**: Implemented.
 - **Issue #10 (StackMapTable computation)**: Implemented.
-- **Issue #14 (round-trip and verifier-focused validation)**: Implemented end-to-end.
-- **Current module split**: `tests/test_class_writer.py` focuses on Tier 1 byte-for-byte roundtrips; `tests/test_validation.py` exercises the Tier 1/Tier 2/Tier 4 fixture matrix plus selected execution fixtures; `tests/javap_parser.py` plus `tests/test_javap_parser.py` cover the Tier 3 semantic-diff engine; `tests/jvm_harness.py` wraps `tests/resources/VerifierHarness.java` for Tier 4 JVM verification and execution checks.
-- **Fixture selection**: `tests/validation_fixtures.py` derives the `(fixture, release)` matrix from `tests/helpers.py`, so new Java fixtures join the validation matrix once their minimum release is declared.
+- **Issue #14 (round-trip and verifier-focused validation)**: Landed as a mix of Rust workspace coverage, Python API tests, and `javap` semantic-diff tooling rather than the older Python-only module split.
+- **Current module split**: Tier 1 and Tier 2 behavior are covered primarily in `crates/pytecode-engine/tests/*.rs`, archive/CLI workflows in `crates/pytecode-archive/tests/jar.rs` and `crates/pytecode-cli/tests/*.rs`, and Python-facing behavior in `tests/test_rust_bindings.py`, `tests/test_rust_transforms.py`, `tests/test_jar.py`, `tests/javap_parser.py`, and `tests/test_javap_parser.py`.
+- **Fixture selection**: shared fixture compilation and caching live in `tests/helpers.py` and the Rust fixture helpers under `crates/pytecode-engine/src/fixtures.rs`.
 
 ## Known considerations
 

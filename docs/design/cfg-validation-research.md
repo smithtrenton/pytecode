@@ -1,6 +1,9 @@
 # Best way to validate `pytecode`'s new CFG feature
 
-This document records the research that led to the current ASM-based CFG differential suite. Keep it as design background and oracle-selection rationale rather than as an active implementation plan.
+This document records research for a possible ASM-based CFG differential suite.
+The current repository does not ship that suite as part of the default test
+flow, so keep this file as historical design background and oracle-selection
+rationale rather than as an active implementation plan.
 
 ## Executive Summary
 

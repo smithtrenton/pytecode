@@ -30,7 +30,7 @@ validation model, and operational guidance.
 | Current public surface and design contracts | [design/pytecode-design.md](design/pytecode-design.md) |
 | Editing-model evaluation, alternatives considered, and extension strategy | [design/editing-model.md](design/editing-model.md) |
 | Bytecode validation framework, tier breakdown, and external-tool strategy | [design/validation-framework.md](design/validation-framework.md) |
-| CFG oracle research and the reasoning behind the ASM-based differential suite | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
+| Historical CFG-oracle research and rationale for a possible future ASM-based differential suite | [design/cfg-validation-research.md](design/cfg-validation-research.md) |
 
 ## Current package shape
 

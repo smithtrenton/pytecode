@@ -17,7 +17,7 @@ The original roadmap is complete. This file now serves as a compact record of th
 - Parser hardening for classfile structure, attributes, and instructions.
 - Full constant-pool coverage, including Modified UTF-8 handling.
 - Descriptor and signature parsing utilities.
-- Binary read and write primitives in `pytecode._internal.bytes_utils`.
+- Rust-backed binary read and write primitives in `pytecode-engine`.
 - Deterministic constant-pool management via `ConstantPoolBuilder`.
 
 ### Mutable editing surface
@@ -34,8 +34,8 @@ The original roadmap is complete. This file now serves as a compact record of th
 - Control-flow graph construction and stack/local simulation in `pytecode.analysis`.
 - `max_stack`, `max_locals`, and `StackMapTable` recomputation.
 - Structured verification diagnostics in `pytecode.analysis.verify`.
-- Four validation tiers covering byte-for-byte roundtrip, structural verification, semantic diffing, and JVM verification.
-- ASM-backed CFG differential validation for `build_cfg()`.
+- Validation coverage across Rust workspace tests, Python API tests, and `javap` semantic-diff utilities.
+- Historical CFG-oracle research for `build_cfg()`, retained as design background rather than a shipped default suite.
 
 ### Packaging and documentation
 

@@ -104,8 +104,7 @@ modified archives.
 
 ### Edit and emit a class
 
-1. `ClassModel.from_bytes()` or `ClassModel.from_classfile()` creates a mutable
-   symbolic model.
+1. `ClassModel.from_bytes()` creates a mutable symbolic model.
 2. Callers mutate fields, methods, code, and debug-info settings on the model.
 3. `to_bytes()` or `to_bytes_with_options()` lowers the model back to classfile
    bytes.
@@ -131,11 +130,19 @@ modified archives.
 
 ## Validation coverage
 
-The repository keeps the documented surface aligned with implementation through:
+The repository keeps the documented surface aligned with implementation through
+the Rust workspace tests plus the Python-facing suite:
 
+- `crates/pytecode-engine/tests/raw_roundtrip.rs`
+- `crates/pytecode-engine/tests/verifier.rs`
+- `crates/pytecode-engine/tests/analysis.rs`
+- `crates/pytecode-engine/tests/model.rs`
+- `crates/pytecode-engine/tests/transform.rs`
+- `crates/pytecode-archive/tests/jar.rs`
+- `crates/pytecode-cli/tests/*.rs`
 - `tests/test_rust_bindings.py`
 - `tests/test_rust_transforms.py`
 - `tests/test_jar.py`
-- `tests/test_validation.py`
+- `tests/test_javap_parser.py`
 - `tests/test_api_docs.py`
 - `tools/generate_api_docs.py --check`

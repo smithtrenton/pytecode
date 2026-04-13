@@ -1,10 +1,21 @@
 # Editing model design rationale
 
-This document records the design evaluation that led to the current editing API. It is historical rationale rather than an active implementation plan. Five candidate designs were analyzed against pytecode's existing codebase, the original feature roadmap, and Python ergonomics. A survey of eight additional JVM bytecode libraries identified further design patterns that informed the resulting extension strategy.
+This document records the design evaluation that led to the current editing API.
+It predates the Rust migration and should be read as historical rationale, not
+as a description of the current implementation. Five candidate designs were
+analyzed against pytecode's original roadmap and Python ergonomics, and a
+survey of eight additional JVM bytecode libraries identified further design
+patterns that informed the resulting extension strategy.
 
 ## Context
 
-pytecode's parsed output is a tree of `@dataclass` objects (`ClassFile`, `FieldInfo`, `MethodInfo`, `AttributeInfo`) with raw constant-pool indexes and byte offsets. This is excellent for lossless parsing but hostile to safe editing — users would have to manually manage constant-pool indexes, recalculate branch offsets, and handle WIDE instruction expansion. The editing model must support all planned features:
+At the time of this evaluation, pytecode's parsed output was a tree of Python
+objects carrying raw constant-pool indexes and byte offsets. Today that raw
+surface is Rust-backed and exposed through `pytecode.classfile`, but the core
+editing problem is unchanged: direct raw mutation forces callers to manage
+constant-pool indexes, recalculate branch offsets, and handle WIDE instruction
+expansion themselves. The editing model therefore needed to support all planned
+features:
 
 | Feature | Issue | Interaction |
 |---------|-------|-------------|
@@ -62,9 +73,15 @@ pytecode's parsed output is a tree of `@dataclass` objects (`ClassFile`, `FieldI
 
 ## Recommendation and phased approach
 
-Given pytecode's characteristics — Python-first audience, existing tree-based read model, interactive/scripting primary use case, small team, and a roadmap full of other features — **Design A (Mutable Dataclasses) is the strongest starting point**, with the tree model designed so that pass composition (Design D) layers on naturally. That Phase 2 composition layer has now landed via `pytecode.transforms`, including the richer matcher DSL, while a full visitor layer (Design E) was evaluated and found not yet justified (see Phase 3 below).
+Given pytecode's characteristics — Python-first audience, interactive/scripting
+primary use case, small team, and a roadmap full of other features — **a
+mutable symbolic model as the primary editing surface** was the strongest
+starting point, with pass composition (Design D) layered on naturally. That
+composition layer has now landed via `pytecode.transforms`, while a full
+visitor layer (Design E) was evaluated and found not yet justified (see Phase 3
+below).
 
-- **Phase 1 (done)**: `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` as mutable dataclasses with symbolic references, `ConstantPoolBuilder`, label-based instruction editing, and symbolic operand wrappers.
+- **Phase 1 (done)**: `ClassModel`/`MethodModel`/`FieldModel`/`CodeModel` as Rust-backed mutable symbolic objects with `ConstantPoolBuilder`, label-based instruction editing, and symbolic operand wrappers.
 - **Phase 2 (done)**: Pass-style composition in `pytecode.transforms` — callable `Pipeline` objects, `pipeline()` construction, `on_classes()` / `on_fields()` / `on_methods()` / `on_code()` lifting helpers, owner-class filtering on the field/method/code lifting helpers, and a richer `Matcher` DSL with `&` / `|` / `~` composition, regex helpers, lightweight structural helpers, access-flag convenience matchers, plus the original functional combinators for callers that prefer them. Transforms remain ordinary in-place `ClassModel` callables so they plug directly into existing lowering and `JarFile.rewrite()` flows.
 - **Phase 3 (evaluated — [#21](https://github.com/smithtrenton/pytecode/issues/21) — done)**: A full visitor/streaming API was evaluated and found not yet justified — no concrete use cases exist for high-throughput streaming or memory-efficient bulk processing that the current tree model cannot handle. The evaluation identified a concrete gap: `FieldTransform`, `MethodTransform`, and `CodeTransform` lacked access to their owning context. Rather than introducing a second traversal model, the existing protocols were updated to pass context directly: field and method transforms receive the owning `ClassModel`, code transforms receive both the owning `MethodModel` and `ClassModel`. This addresses the real gap while keeping the API surface minimal.
 - **Future follow-up**: Declarative instruction-pattern matching may still be layered on top of the current matcher/pipeline surface if real-world use cases justify the extra API surface.
@@ -95,4 +112,8 @@ A broader survey of JVM bytecode manipulation libraries identified additional de
 | Immutable element + transform lifting | JDK Class-File API | ✓ (informs Phase 2 transform design) | Phase 2 |
 | Instruction pattern matching | ProGuardCORE | ✓ (declarative find-and-replace) | Future follow-up |
 
-None of the surveyed designs displace Design A as the Phase 1 choice. Every library surveyed either uses a mutable tree internally (Javassist, CafeDude, BCEL), builds on a visitor/tree substrate (Byte Buddy, ProGuardCORE), or uses an IR that is a different kind of tree (Soot). The mutable tree is the universal substrate.
+None of the surveyed designs displace a mutable symbolic editing surface as the
+Phase 1 choice. Every library surveyed either uses a mutable tree internally
+(Javassist, CafeDude, BCEL), builds on a visitor/tree substrate (Byte Buddy,
+ProGuardCORE), or uses an IR that is a different kind of tree (Soot). A mutable
+editing model remains the common substrate.

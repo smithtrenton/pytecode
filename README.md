@@ -6,7 +6,7 @@ It is built for Python tooling that needs direct access to Java bytecode: classf
 
 ## Why pytecode?
 
-- Parse `.class` files into typed Python dataclasses.
+- Parse `.class` files into typed Python objects backed by the Rust engine.
 - Edit classes, fields, methods, and bytecode through a mutable symbolic model.
 - Rewrite JAR files while preserving non-class resources and ZIP metadata.
 - Recompute `max_stack`, `max_locals`, and `StackMapTable` when requested.
@@ -73,7 +73,7 @@ Import `FrameComputationMode` from `pytecode.archive` and use `to_bytes_with_opt
 
 ```python
 from pytecode import JarFile
-from pytecode.archive import FrameComputationMode
+from pytecode.classfile.constants import MethodAccessFlag
 from pytecode.transforms import (
     PipelineBuilder,
     add_access_flags,
@@ -88,7 +88,7 @@ pipeline = (
     PipelineBuilder()
     .on_methods(
         method_name_matches(r"main") & method_is_public() & method_is_static(),
-        add_access_flags(0x0010),
+        add_access_flags(int(MethodAccessFlag.FINAL)),
         owner_matcher=class_named("HelloWorld"),
     )
     .build()
@@ -101,7 +101,7 @@ JarFile("input.jar").rewrite(
 )
 ```
 
-For code-shape changes, pass `frame_mode=FrameComputationMode.RECOMPUTE`. To strip debug metadata during rewrite, pass `skip_debug=True`.
+For code-shape changes, pass `frame_mode=FrameComputationMode.RECOMPUTE`. To strip debug metadata during rewrite, prefer `debug_info=DebugInfoPolicy.STRIP`.
 
 `JarFile.rewrite()` uses the Rust archive layer for in-memory archive edits and
 Rust-native transforms. Python-callable transforms are also supported through
@@ -165,14 +165,14 @@ Workspace smoke and comparison commands:
 cargo run --release -p pytecode-cli -- bench-smoke --iterations 5
 uv run python tools\benchmark_jar_pipeline.py crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5
 uv run python tools\compare_rust_python_benchmarks.py --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar --iterations 5 --output output\benchmarks\rust-vs-python-byte-buddy.json
-cargo run -p pytecode-cli -- class-summary --path target\pytecode-rust-javac\release-8\HelloWorld\classes\HelloWorld.class
+cargo run -p pytecode-cli -- class-summary --path crates\pytecode-engine\fixtures\classes\HelloWorld\HelloWorld.class
 cargo run -p pytecode-cli -- rewrite-smoke --jar input.jar --output output.jar --class-name HelloWorld
 cargo run -p pytecode-cli -- patch-jar --jar input.jar --output output.jar --rules rules.json
 uv run python examples\patch_jar.py --jar input.jar --output output.jar --rules rules.json
-cargo run -p pytecode-cli -- deobfuscate analyze --jar injected-client-1.12.22.1.jar
-cargo run -p pytecode-cli -- deobfuscate rewrite --jar injected-client-1.12.22.1.jar --output output\injected-client-cleaned.jar
-uv run python examples\deobfuscate.py analyze --jar injected-client-1.12.22.1.jar
-uv run python examples\deobfuscate.py rewrite --jar injected-client-1.12.22.1.jar --output output\injected-client-python-cleaned.jar
+cargo run -p pytecode-cli -- deobfuscate analyze --jar path\to\obfuscated-client.jar
+cargo run -p pytecode-cli -- deobfuscate rewrite --jar path\to\obfuscated-client.jar --output output\obfuscated-client-cleaned.jar
+uv run python examples\deobfuscate.py analyze --jar path\to\obfuscated-client.jar
+uv run python examples\deobfuscate.py rewrite --jar path\to\obfuscated-client.jar --output output\obfuscated-client-python-cleaned.jar
 ```
 
 `patch-jar` is the first real config-driven consumer of the Rust archive + transform stack. It reads a JSON rule file, rewrites matching classes in a JAR, and prints a JSON report with per-rule match/change counts.
@@ -350,8 +350,6 @@ uv run python tools/bench_full_comparison.py --extension-build installed
 ```
 
 When making runtime-performance changes, prefer checking both a focused jar such as `crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar` and the wider common-jar corpus so regressions and wins are not judged from a single artifact. Byte Buddy is the default focused Rust benchmark fixture because it is a common JVM library, carries a much larger class corpus than the old `225.jar` fixture, and also includes newer multi-release classes than Guava. A single jar defaults to all stages; directories and multi-jar runs default to `model-lift` and `model-lower`.
-
-The `oracle`-marked CFG tests lazily cache ASM 9.7.1 test jars under `.pytest_cache/pytecode-oracle` and also honor manually seeded jars in `tests/resources/oracle/lib`. If `java`, `javac`, or the ASM jars are unavailable, that suite skips without failing the rest of the test run.
 
 ## Release automation
 
