@@ -35,6 +35,12 @@ jobs:
           components: rustfmt, clippy
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --workspace
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Lint
@@ -43,34 +49,8 @@ jobs:
         run: uv run ruff format --check .
       - name: Type-check
         run: uv run basedpyright
-      - name: Check Rust formatting
-        run: cargo fmt --all --check
-      - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run Rust tests
-        run: cargo test --workspace
-      - name: Build wheel
-        run: uv build --wheel
-      - name: Extract built extension
-        run: |
-          .venv/bin/python - <<'PY'
-          import zipfile
-          from pathlib import Path
-
-          wheel = next(Path("dist").glob("*.whl"))
-          with zipfile.ZipFile(wheel) as archive:
-              members = [
-                  name
-                  for name in archive.namelist()
-                  if name.startswith("pytecode/_rust.")
-                  and not name.endswith("/")
-                  and Path(name).suffix in {".so", ".pyd", ".dylib"}
-              ]
-              if len(members) != 1:
-                  raise SystemExit(f"Expected exactly one pytecode._rust binary in {wheel}, found: {members}")
-              target = Path("pytecode") / Path(members[0]).name
-              target.write_bytes(archive.read(members[0]))
-          PY
+      - name: Run pytest
+        run: uv run pytest -q
       - name: Generate API docs
         run: uv run python tools/generate_api_docs.py
       - name: Upload API docs artifact
@@ -80,8 +60,6 @@ jobs:
           name: github-pages-docs
           path: docs/api
           if-no-files-found: error
-      - name: Run pytest
-        run: uv run pytest -q
 
   pages-build:
     name: Build GitHub Pages artifact
