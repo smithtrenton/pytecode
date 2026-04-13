@@ -60,7 +60,7 @@ jobs:
         run: uv sync --extra dev --no-install-project
       - name: Extract built extension
         run: |
-          uv run python - <<'PY'
+          .venv/bin/python - <<'PY'
           import zipfile
           from pathlib import Path
 
@@ -144,7 +144,7 @@ jobs:
         run: uv sync --extra dev --no-install-project
       - name: Extract built extension
         run: |
-          uv run python - <<'PY'
+          .venv/bin/python - <<'PY'
           import zipfile
           from pathlib import Path
 
@@ -199,7 +199,7 @@ jobs:
         run: uv sync --extra dev --no-install-project
       - name: Extract built extension
         run: |
-          uv run python - <<'PY'
+          .venv/bin/python - <<'PY'
           import zipfile
           from pathlib import Path
 
