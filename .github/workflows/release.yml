@@ -79,6 +79,12 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --workspace
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Validate release tag
@@ -93,12 +99,6 @@ jobs:
         run: uv run pytest -q
       - name: Validate API docs coverage
         run: uv run python tools/generate_api_docs.py --check
-      - name: Check Rust formatting
-        run: cargo fmt --all --check
-      - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run Rust tests
-        run: cargo test --workspace
 
   build-wheels:
     name: Build wheel (${{ matrix.target }})
