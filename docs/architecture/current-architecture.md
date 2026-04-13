@@ -11,7 +11,7 @@ layers:
 
 ## Runtime and packaging
 
-- The published package targets Python 3.14+.
+- The published package targets Python 3.12+.
 - Wheels are built for the supported platforms, with an sdist alongside them.
 - The Python package ships type information (`py.typed` and `.pyi` stubs).
 - The development validation set uses Ruff, basedpyright, pytest, generated API

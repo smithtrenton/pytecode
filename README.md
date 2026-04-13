@@ -1,6 +1,6 @@
 # pytecode
 
-`pytecode` is a Python 3.14+ library for parsing, inspecting, editing, validating, and emitting JVM class files and JAR archives.
+`pytecode` is a Python 3.12+ library for parsing, inspecting, editing, validating, and emitting JVM class files and JAR archives.
 
 It is built for Python tooling that needs direct access to Java bytecode: classfile readers and writers, archive rewriters, transformation pipelines, control-flow analysis, descriptor utilities, hierarchy-aware frame computation, and verification-oriented workflows.
 
@@ -31,7 +31,7 @@ Published releases ship prebuilt wheels for Windows, macOS, and Linux.
 If a matching wheel is unavailable, `pip`/`uv` falls back to a source build,
 which requires a working Rust toolchain.
 
-`pytecode` requires Python `3.14+`.
+`pytecode` requires Python `3.12+`.
 
 ## Quick start
 

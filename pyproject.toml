@@ -10,11 +10,13 @@ readme = "README.md"
 authors = [{ name = "Trenton Smith" }]
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 keywords = ["bytecode", "classfile", "java", "jvm"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Rust",
   "Operating System :: MacOS",
@@ -46,7 +48,7 @@ module-name = "pytecode._rust"
 include = ["pytecode/*.pyi", "pytecode/py.typed"]
 
 [tool.basedpyright]
-pythonVersion = "3.14"
+pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["pytecode", "run.py", "tools", "tests"]
 exclude = ["output", "venv", ".venv"]
@@ -55,7 +57,7 @@ reportAttributeAccessIssue = false
 reportPrivateUsage = false
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 line-length = 120
 extend-exclude = [
   "output",

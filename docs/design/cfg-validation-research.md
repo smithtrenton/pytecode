@@ -55,7 +55,7 @@ The important alignment is that both ASM and `pytecode` operate near the raw byt
 
 The current compiled-fixture tests are broad but shallow. `CfgFixture.java` intentionally covers straight-line control flow, branches, loops, dense and sparse switches, single and multiple handlers, `finally`, nested exceptions, object creation, arrays, monitors, null checks, and explicit `throw` paths.[^4] But the associated integration tests mostly check minimum block counts or the existence of some handler edges instead of exact adjacency and handler coverage.[^3] In practice, that means the repo already has the right corpus shape; it just needs a stronger assertion strategy.[^3][^4]
 
-The good news is that the repository is already set up for compiled-Java differential testing. `tests/helpers.py` caches `javac --release 8` outputs under `.pytest_cache/pytecode-javac` and exposes helpers that compile a fixture source and return the resulting `.class` path, so a JVM-side oracle can consume the exact same class bytes that `ClassModel.from_bytes()` and `build_cfg()` already use.[^11]
+The good news is that the repository is already set up for compiled-Java differential testing. `tests/helpers.py` exposes helpers that compile fixture sources into per-test temporary directories and return the resulting `.class` paths, so a JVM-side oracle can consume the exact same class bytes that `ClassModel.from_bytes()` and `build_cfg()` already use.[^11]
 
 ## Candidate library comparison
 
