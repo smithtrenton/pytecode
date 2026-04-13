@@ -79,13 +79,13 @@ jobs:
               target.write_bytes(archive.read(members[0]))
           PY
       - name: Lint
-        run: uv run ruff check .
+        run: .venv/bin/ruff check .
       - name: Check formatting
-        run: uv run ruff format --check .
+        run: .venv/bin/ruff format --check .
       - name: Type-check
-        run: uv run basedpyright
+        run: .venv/bin/basedpyright
       - name: Generate API docs
-        run: uv run python tools/generate_api_docs.py
+        run: .venv/bin/python tools/generate_api_docs.py
       - name: Upload API docs artifact
         if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
         uses: actions/upload-artifact@v7
@@ -171,7 +171,7 @@ jobs:
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-${{ hashFiles('uv.lock', 'tests/helpers.py', 'tests/resources/**/*.java') }}-
             pytest-cache-${{ env.PYTEST_CACHE_VERSION }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-jdk${{ env.JAVA_VERSION }}-
       - name: Run pytest (excluding oracle)
-        run: uv run pytest -q -m "not oracle"
+        run: .venv/bin/pytest -q -m "not oracle"
 
   oracle:
     name: Pytest (oracle)
@@ -228,7 +228,7 @@ jobs:
       - name: Run oracle suite
         run: |
           set +e
-          uv run pytest -q -m oracle
+          .venv/bin/pytest -q -m oracle
           status=$?
           set -e
           if [ "$status" -eq 0 ]; then
