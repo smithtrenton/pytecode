@@ -1045,23 +1045,19 @@ fn verify_constant_pool(classfile: &ClassFile, class_name: Option<&str>) -> Vec<
         };
         expect_gap = entry.is_wide();
         match entry {
-            ConstantPoolEntry::Class(info) => {
-                if cp_utf8(classfile, info.name_index).is_err() {
-                    diagnostics.push(Diagnostic::error(
-                        Category::ConstantPool,
-                        "class entry references invalid Utf8 name",
-                        location,
-                    ));
-                }
+            ConstantPoolEntry::Class(info) if cp_utf8(classfile, info.name_index).is_err() => {
+                diagnostics.push(Diagnostic::error(
+                    Category::ConstantPool,
+                    "class entry references invalid Utf8 name",
+                    location,
+                ));
             }
-            ConstantPoolEntry::String(info) => {
-                if cp_utf8(classfile, info.string_index).is_err() {
-                    diagnostics.push(Diagnostic::error(
-                        Category::ConstantPool,
-                        "string entry references invalid Utf8 payload",
-                        location,
-                    ));
-                }
+            ConstantPoolEntry::String(info) if cp_utf8(classfile, info.string_index).is_err() => {
+                diagnostics.push(Diagnostic::error(
+                    Category::ConstantPool,
+                    "string entry references invalid Utf8 payload",
+                    location,
+                ));
             }
             ConstantPoolEntry::FieldRef(info) => {
                 if cp_class_name(classfile, info.class_index).is_err() {
@@ -1225,23 +1221,19 @@ fn verify_constant_pool(classfile: &ClassFile, class_name: Option<&str>) -> Vec<
                     ));
                 }
             }
-            ConstantPoolEntry::Module(info) => {
-                if cp_utf8(classfile, info.name_index).is_err() {
-                    diagnostics.push(Diagnostic::error(
-                        Category::ConstantPool,
-                        "module/package entry references invalid Utf8 name",
-                        location,
-                    ));
-                }
+            ConstantPoolEntry::Module(info) if cp_utf8(classfile, info.name_index).is_err() => {
+                diagnostics.push(Diagnostic::error(
+                    Category::ConstantPool,
+                    "module/package entry references invalid Utf8 name",
+                    location,
+                ));
             }
-            ConstantPoolEntry::Package(info) => {
-                if cp_utf8(classfile, info.name_index).is_err() {
-                    diagnostics.push(Diagnostic::error(
-                        Category::ConstantPool,
-                        "module/package entry references invalid Utf8 name",
-                        location,
-                    ));
-                }
+            ConstantPoolEntry::Package(info) if cp_utf8(classfile, info.name_index).is_err() => {
+                diagnostics.push(Diagnostic::error(
+                    Category::ConstantPool,
+                    "module/package entry references invalid Utf8 name",
+                    location,
+                ));
             }
             _ => {}
         }
@@ -1550,14 +1542,14 @@ fn verify_attribute_contents(
                 ));
             }
         }
-        AttributeInfo::SourceFile(attribute) => {
-            if cp_utf8(classfile, attribute.sourcefile_index).is_err() {
-                diagnostics.push(Diagnostic::error(
-                    Category::ConstantPool,
-                    "SourceFile attribute must reference a Utf8 source file name",
-                    location.clone(),
-                ));
-            }
+        AttributeInfo::SourceFile(attribute)
+            if cp_utf8(classfile, attribute.sourcefile_index).is_err() =>
+        {
+            diagnostics.push(Diagnostic::error(
+                Category::ConstantPool,
+                "SourceFile attribute must reference a Utf8 source file name",
+                location.clone(),
+            ));
         }
         AttributeInfo::Exceptions(attribute) => {
             for exception_index in &attribute.exception_index_table {
@@ -1654,14 +1646,14 @@ fn verify_attribute_contents(
                 }
             }
         }
-        AttributeInfo::NestHost(attribute) => {
-            if cp_class_name(classfile, attribute.host_class_index).is_err() {
-                diagnostics.push(Diagnostic::error(
-                    Category::ConstantPool,
-                    "NestHost attribute must reference CONSTANT_Class",
-                    location.clone(),
-                ));
-            }
+        AttributeInfo::NestHost(attribute)
+            if cp_class_name(classfile, attribute.host_class_index).is_err() =>
+        {
+            diagnostics.push(Diagnostic::error(
+                Category::ConstantPool,
+                "NestHost attribute must reference CONSTANT_Class",
+                location.clone(),
+            ));
         }
         AttributeInfo::NestMembers(attribute) => {
             for class_index in &attribute.classes {
@@ -1784,14 +1776,14 @@ fn verify_attribute_contents(
                 }
             }
         }
-        AttributeInfo::ModuleMainClass(attribute) => {
-            if cp_class_name(classfile, attribute.main_class_index).is_err() {
-                diagnostics.push(Diagnostic::error(
-                    Category::ConstantPool,
-                    "ModuleMainClass attribute must reference CONSTANT_Class",
-                    location.clone(),
-                ));
-            }
+        AttributeInfo::ModuleMainClass(attribute)
+            if cp_class_name(classfile, attribute.main_class_index).is_err() =>
+        {
+            diagnostics.push(Diagnostic::error(
+                Category::ConstantPool,
+                "ModuleMainClass attribute must reference CONSTANT_Class",
+                location.clone(),
+            ));
         }
         AttributeInfo::PermittedSubclasses(attribute) => {
             for class_index in &attribute.classes {
