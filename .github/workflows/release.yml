@@ -64,7 +64,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_ref }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.0.0
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -133,7 +133,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_ref }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.0.0
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -164,7 +164,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_ref }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.0.0
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
