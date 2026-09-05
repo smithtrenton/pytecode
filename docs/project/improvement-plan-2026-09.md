@@ -43,6 +43,19 @@ Remote checks passed on `cfc6392`:
 and [sanitizer fuzzing](https://github.com/smithtrenton/pytecode/actions/runs/33941339978).
 Later coverage/documentation commits run the same delivery gates.
 
+Switching the default branch reactivated Dependabot on the updated manifests and
+cleared the two stale dependency alerts. The obsolete Ruff PR was closed because
+the delivered requirement and lock already include Ruff 0.16.6. The Actions
+upgrade PR was reviewed and integrated after its platform checks passed:
+[checkout v7](https://github.com/actions/checkout/releases/tag/v7.0.0),
+[setup-uv v10.0.1](https://github.com/astral-sh/setup-uv/releases/tag/v10.0.1),
+[setup-java v6](https://github.com/actions/setup-java/releases/tag/v6.0.0), and
+[deploy-pages v5.0.1](https://github.com/actions/deploy-pages/releases/tag/v5.0.1).
+The checkout event restrictions are compatible with the existing push/PR/dispatch
+workflows. setup-uv's newer cache defaults are accepted; the Rust-only job still
+explicitly disables caching, and the installed uv version remains pinned at
+0.12.10. No release was published.
+
 ## Original implementation progress
 
 | Batch | Status and evidence |

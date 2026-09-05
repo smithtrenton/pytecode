@@ -17,16 +17,16 @@ jobs:
     name: Build, lint, and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.10"
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -85,13 +85,13 @@ jobs:
           - os: macos-latest
             python: "3.14"
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.10"
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
@@ -108,11 +108,11 @@ jobs:
     name: Minimum Rust 1.94
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.0"
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.10"
           python-version: "3.12"
@@ -125,12 +125,12 @@ jobs:
     env:
       PYTECODE_TEST_JAVA26: "1"
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.10"
           python-version: "3.14"
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "26"
@@ -169,4 +169,4 @@ jobs:
           path: docs/api
       - name: Deploy GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5.0.0
+        uses: actions/deploy-pages@v5.0.1
