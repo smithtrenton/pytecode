@@ -2,7 +2,37 @@
 
 Reviewed 2026-09-04 at commit `bb357f9`. The review below is retained as the implementation checklist. A follow-up goal requested implementation and delivery to remote `main` with passing CI. The implementation is delivered to remote `main`. Local validation and remote execution evidence are recorded below; CI checks every delivered revision.
 
-## Implementation progress
+## Follow-up delivery
+
+The requested follow-up review found and fixed additional constructor-analysis
+errors. Initialization state now survives local-variable overwrites and joins;
+failed constructor calls invalidate saved receiver aliases; `null` cannot merge
+with uninitialized references; and the root Object constructor is handled
+correctly. Model lowering validates constructor owners and fields assigned before
+initialization. Independent JVM tests cover valid aliases, invalid constructors,
+and exception handlers, including errors that cannot be represented by a modern
+StackMapTable. Standalone-analysis context limits are explicit in
+[compatibility and limits](compatibility-and-limits.md#frame-recomputation).
+
+Generated generic-signature tests cover nested type arguments, bounds, arrays,
+inner types, method results, throws clauses, and trailing-input rejection. Plain
+`pytest` now searches `tests/`, avoiding accidental collection of packaging
+snapshots under `output/`. Frame simulation and worklist logic have their own
+module without changing public FrameState layout.
+
+Measured follow-ups replace linear queue membership checks, remove discarded
+typed-pop allocations, and count borrowed archive entries. The wide-switch case
+is about 27% faster and archive open/classification about 11% faster on the recorded
+workloads. The javac fixture workload has no statistically clear timing change.
+[Performance evidence and commands](performance-2026-09.md#follow-up-frame-worklists-and-archive-classification)
+record the baseline, uncertainty, corpus hashes, and copy-volume calculation.
+
+Final follow-up local checks: 243 Rust tests; 233 Python tests with two Java 26
+skips; 37 separate Java 26 checks; rustfmt, Clippy, Ruff, Basedpyright, Rust 1.94,
+and API documentation coverage (262/262). The CI and installed-artifact workflow
+histories linked below verify delivery revisions on remote `main`.
+
+## Original implementation progress
 
 | Batch | Status and evidence |
 | --- | --- |
@@ -66,9 +96,9 @@ The unused cache is disabled, and warning expectations now use the standard
 library's actual emitted filename. The archive duplicate-rejection assertion stays
 unchanged.
 
-The remote default branch remains `master`; changing that repository setting is
-separate from delivery to `main`. No release tag, PyPI publish, or GitHub release
-is part of this delivery.
+`main` is the delivery branch. The follow-up checks repository settings and moves
+the default to `main` after successful CI so scheduled maintenance uses this code.
+No release tag, PyPI publish, or GitHub release is part of this delivery.
 Broader verifier conformance, large-module refactors beyond the affected areas,
 streaming/concurrency APIs, and unmeasured performance candidates remain follow-up
 work under the documented compatibility limits, not claims established by this batch.
@@ -295,4 +325,4 @@ For fail-fast, load the base class, set `access_flags = 0x0411` (public/final/ab
 
 ## New-session starting instruction
 
-> Read `docs/project/improvement-plan-2026-09.md`, inspect the current diff and repository instructions, and start with batch 1. Establish a clean, source-built baseline using the selected toolchain without discarding local work. Then reproduce and fix batch 2's negation/long-shift stack effects as the first semantic change, with Rust/Python regressions and actual JVM verification. Keep dependency migrations and unrelated refactors separate. Update this plan with evidence and completed items as work lands.
+> The implementation and concrete follow-up fixes are delivered. Read the delivery evidence and compatibility limits first, inspect the current diff and repository instructions, and establish a source-built baseline before making further changes. Treat the original review below the delivery record as historical evidence, not a fresh list of unfixed bugs. Choose further work from a reproducible failure or a measured workload and retain independent JVM verification for semantic changes.

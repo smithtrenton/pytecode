@@ -325,8 +325,17 @@ impl BenchmarkInputs {
 
     fn class_entries(&mut self) -> CliResult<&Vec<RawClassStub>> {
         if self.class_entries.is_none() {
-            let (classes, _resources) = self.archive()?.parse_classes();
-            self.class_entries = Some(classes.into_iter().map(|(_info, class)| class).collect());
+            self.class_entries = Some(
+                self.archive()?
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.is_class())
+                    .map(|entry| RawClassStub {
+                        entry_name: entry.filename.clone(),
+                        bytes: entry.bytes.clone(),
+                    })
+                    .collect(),
+            );
         }
         Ok(self
             .class_entries
@@ -407,9 +416,13 @@ fn execute_benchmark_stage(
     match stage {
         BenchmarkStage::JarRead => {
             let jar = JarFile::open(path)?;
-            let (class_entries, resource_entries) = jar.parse_classes();
+            let entry_count = jar
+                .entries
+                .iter()
+                .filter(|entry| !entry.metadata.is_dir)
+                .count();
             let total_bytes = jar.entries.iter().map(|entry| entry.bytes.len()).sum();
-            Ok((class_entries.len() + resource_entries.len(), total_bytes))
+            Ok((entry_count, total_bytes))
         }
         BenchmarkStage::ClassParse => {
             let class_entries = inputs.class_entries()?;

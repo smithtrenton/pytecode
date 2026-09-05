@@ -22,9 +22,14 @@ fn bench_jar_open(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let jar = JarFile::open(&jar_path).expect("open failed");
-                let (classes, resources) = jar.parse_classes();
-                assert!(!classes.is_empty());
-                let _ = resources;
+                let classes = jar.entries.iter().filter(|entry| entry.is_class()).count();
+                let resources = jar
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.metadata.is_dir && !entry.is_class())
+                    .count();
+                assert!(classes > 0);
+                std::hint::black_box((classes, resources));
             });
         },
     );

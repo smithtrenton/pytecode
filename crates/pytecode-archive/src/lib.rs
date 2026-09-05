@@ -71,6 +71,11 @@ impl JarInfo {
     pub const fn original_index(&self) -> Option<usize> {
         self.original_index
     }
+
+    /// Whether this entry is a non-directory classfile, including versioned entries.
+    pub fn is_class(&self) -> bool {
+        !self.metadata.is_dir && self.filename.ends_with(".class")
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -278,7 +283,7 @@ impl JarFile {
         let mut classes = Vec::new();
         let mut others = Vec::new();
         for entry in &self.entries {
-            if is_class_filename(entry) {
+            if entry.is_class() {
                 classes.push((
                     entry.clone(),
                     RawClassStub {
@@ -374,7 +379,7 @@ pub fn inventory_jar(path: &Path) -> io::Result<JarInventory> {
     let mut total_bytes = 0_usize;
     for entry in jar.entries {
         total_bytes += entry.bytes.len();
-        if is_class_filename(&entry) {
+        if entry.is_class() {
             class_entries.push(RawClassStub {
                 entry_name: entry.filename,
                 bytes: entry.bytes,
@@ -543,7 +548,7 @@ fn write_entry(
         return Ok(());
     }
 
-    let bytes: Cow<'_, [u8]> = if is_class_filename(entry) {
+    let bytes: Cow<'_, [u8]> = if entry.is_class() {
         let should_relower = transform.is_some()
             || options.frame_mode == FrameComputationMode::Recompute
             || options.debug_info != DebugInfoPolicy::Preserve
@@ -660,8 +665,4 @@ fn archive_name(filename: &str) -> String {
     } else {
         archive_name
     }
-}
-
-fn is_class_filename(entry: &JarInfo) -> bool {
-    !entry.metadata.is_dir && entry.filename.ends_with(".class")
 }

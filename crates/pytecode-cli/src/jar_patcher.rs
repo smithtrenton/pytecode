@@ -450,10 +450,16 @@ struct RuleStats {
 pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarPatchReport> {
     let plan = load_patch_plan(rules_path)?;
     let mut jar_file = JarFile::open(jar)?;
-    let (class_entries, resource_entries) = {
-        let (classes, resources) = jar_file.parse_classes();
-        (classes.len(), resources.len())
-    };
+    let class_entries = jar_file
+        .entries
+        .iter()
+        .filter(|entry| entry.is_class())
+        .count();
+    let resource_entries = jar_file
+        .entries
+        .iter()
+        .filter(|entry| !entry.metadata.is_dir && !entry.is_class())
+        .count();
     let (mut pipeline, stats_handles, names, kinds) = build_pipeline(&plan)?;
     let transform = if plan.rules.is_empty() {
         None

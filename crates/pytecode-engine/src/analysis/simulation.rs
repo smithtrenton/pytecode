@@ -36,6 +36,33 @@ struct PendingFrame {
     this_uninitialized: bool,
 }
 
+struct Worklist {
+    queue: VecDeque<usize>,
+    queued: Vec<bool>,
+}
+
+impl Worklist {
+    fn new(nodes: usize) -> Self {
+        Self {
+            queue: VecDeque::new(),
+            queued: vec![false; nodes],
+        }
+    }
+
+    fn push_back(&mut self, node: usize) {
+        if !self.queued[node] {
+            self.queued[node] = true;
+            self.queue.push_back(node);
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<usize> {
+        let node = self.queue.pop_front()?;
+        self.queued[node] = false;
+        Some(node)
+    }
+}
+
 fn simulate_in_class(
     code: &CodeModel,
     class: ClassContext<'_>,
@@ -57,7 +84,7 @@ fn simulate_in_class(
         ));
     }
     let mut entry_frames = vec![None; cfg.nodes.len()];
-    let mut worklist = VecDeque::new();
+    let mut worklist = Worklist::new(cfg.nodes.len());
     let initial = initial_frame(class_name, method_name, descriptor, access_flags)?;
     entry_frames[cfg.entry_node] = Some(PendingFrame {
         this_uninitialized: initial.locals.contains(&VType::UninitializedThis),
@@ -316,7 +343,7 @@ fn propagate(
     target: usize,
     candidate: PendingFrame,
     entry_frames: &mut [Option<PendingFrame>],
-    worklist: &mut VecDeque<usize>,
+    worklist: &mut Worklist,
     resolver: Option<&dyn ClassResolver>,
 ) -> Result<(), AnalysisError> {
     let changed = match &entry_frames[target] {
@@ -338,7 +365,7 @@ fn propagate(
             true
         }
     };
-    if changed && !worklist.contains(&target) {
+    if changed {
         worklist.push_back(target);
     }
     Ok(())

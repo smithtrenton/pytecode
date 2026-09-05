@@ -74,8 +74,9 @@ impl FrameState {
     pub fn push(&self, types: impl IntoIterator<Item = VType>) -> Self {
         let mut stack = self.stack.clone();
         for value in types {
-            stack.push(value.clone());
-            if is_category2(&value) {
+            let category2 = is_category2(&value);
+            stack.push(value);
+            if category2 {
                 stack.push(VType::Top);
             }
         }
@@ -184,7 +185,10 @@ impl FrameState {
         self.check_stack_groups(&[width])?;
         let actual = &self.stack[self.stack.len() - width];
         require_type(actual, expected)?;
-        Ok(self.pop(width)?.0)
+        Ok(Self {
+            stack: self.stack[..self.stack.len() - width].to_vec(),
+            locals: self.locals.clone(),
+        })
     }
 }
 
