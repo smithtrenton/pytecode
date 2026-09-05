@@ -1,18 +1,18 @@
 # Repository improvement plan
 
-Reviewed 2026-09-04 at commit `bb357f9`. The review below is retained as the implementation checklist. A follow-up goal requested implementation and delivery to remote `main` with passing CI. Local implementation is validated. Delivery to remote `main` and CI verification are authorized and in progress.
+Reviewed 2026-09-04 at commit `bb357f9`. The review below is retained as the implementation checklist. A follow-up goal requested implementation and delivery to remote `main` with passing CI. The implementation is delivered to remote `main`. Local validation and remote execution evidence are recorded below; CI checks every delivered revision.
 
 ## Implementation progress
 
 | Batch | Status and evidence |
 | --- | --- |
-| 1: Tooling/baseline | Local checks pass with source-built release extension: 212 Rust tests, 182 Python tests, Ruff, Basedpyright, docs, rustfmt, Clippy, and Rust 1.94 workspace check. Rust 1.98.1/Python 3.14.7 pinned; uv.lock now tracked; CI platform/MSRV jobs added; source/JDK-keyed fixture cache protected by process/thread file locks. Remote CI pending. |
+| 1: Tooling/baseline | Local checks pass with source-built release extension: 212 Rust tests, 182 Python tests, Ruff, Basedpyright, docs, rustfmt, Clippy, and Rust 1.94 workspace check. Rust 1.98.1/Python 3.14.7 pinned; uv.lock now tracked; CI platform/MSRV jobs added; source/JDK-keyed fixture cache protected by process/thread file locks. Remote CI runs the platform and minimum-Rust checks. |
 | 2: Frames | Core fixes implemented locally: typed stack/local effects, category-2 shapes, constructors, array joins, resolver error propagation, raw-code normalization, fail-fast, and checked frame bounds. javac regressions execute with `java -Xverify:all`, with and without a supplied resolver. Broader independent negative coverage remains in batch 5. |
 | 3: Archives | Staged transaction implemented in Rust and Python, including validation/Python refresh before commit, temporary cleanup, live public-entry edits, archive comments, creating system, duplicate-name rejection, and configurable decompression limits. Four new Rust integrity tests and 13 new Python cases pass; all archive/frame Python tests total 62 passing. ZIP raw-copy drops extra fields, so such entries use normal emission. Full metadata contract/docs audit remains in batch 9. |
 | 4: Classfile hardening | Descriptor dimensions/names/parameter slots, checked nested writer lengths, strict whole-class parsing, switch/reserved-opcode checks, and reader/writer/signature nesting budgets implemented with regressions. Added UTF-16-backed `JavaString` for LDC values and lossless Python constant-pool/string conversion. Seven Python surrogate cases pass, including javac literals, annotations/constants, model recomputation, and JVM execution. Remaining operand/malformed-input expansion continues with batch 5. |
 | 5: Independent verification/fuzzing | Shared JVM harness now forces method resolution and distinguishes execution failure; invalid-method, wide-local, and valid recomputation cases pass. UTF-16/descriptor/model property tests added with deterministic CI seed. Three AddressSanitizer fuzz targets compiled and passed short local runs (130,601 / 38,592 / 49,335 executions); change-time and weekly CI lanes added. Multi-release preservation covered; duplicate resolver names are rejected. |
 | 6: Java 26 | Major 70 and explicit inspection/runtime preview policies implemented. Dedicated JDK 26 CI lane added. Locally, 21 Java 26/frame/string cases pass, including GA and preview execution. Independent JVM execution found and fixed category-2 slot padding incorrectly emitted as an extra stack-map type. |
-| 7: Dependencies/artifacts | Upgraded the listed stable Python/Rust dependencies, including PyO3 0.29.2 and ZIP 8.6.0. Rust 1.94 still passes. Both RustSec audits report zero advisories/warnings. Final locked sdist rebuild and installed-wheel smoke checks pass on Windows x86-64/Python 3.12, 3.13, and 3.14. Native six-target artifact gates now precede release publishing; remote execution remains pending. |
+| 7: Dependencies/artifacts | Upgraded the listed stable Python/Rust dependencies, including PyO3 0.29.2 and ZIP 8.6.0. Rust 1.94 still passes. Both RustSec audits report zero advisories/warnings. Final locked sdist rebuild and installed-wheel smoke checks pass on Windows x86-64/Python 3.12, 3.13, and 3.14. Native six-target artifact gates now precede release publishing and have passed remotely. |
 | 8: Performance | Direct attribute/code output replaces temporary 32 KiB buffers, reducing writer time about 49% and allocation traffic about 99% on the fixed corpus. Full pipeline timing has no statistically clear change. [Measurements and reproduction](performance-2026-09.md) record uncertainty, allocation counts, and peak live bytes. Other candidates remain measurement-driven follow-up work. |
 | 9: Maintainability/docs | Extracted attribute emission, stack-map encoding, and Python constant-pool bindings; shared internal/member-name validation; consolidated Java fixtures; removed the global attribute-access suppression with only two specific descriptor-assignment exceptions; added stub/runtime checks; revised compatibility, ownership, quality gates, roadmap, historical audit, and PowerShell benchmark examples. |
 
@@ -44,11 +44,31 @@ for that packaging test.
 
 ## Delivery verification
 
-Push the reviewed implementation to `origin/main` and verify the workflows for the
-exact delivered commit: CI, Installed artifacts, Fuzz, and Dependency advisories.
-Remote results will be recorded here after all required jobs succeed. The remote
-default branch remains `master`; changing that repository setting is separate from
-this delivery. No release tag, PyPI publish, or GitHub release is required.
+The implementation and CI corrections are delivered to `origin/main`. The current
+[CI run history for main](https://github.com/smithtrenton/pytecode/actions/workflows/ci.yml?query=branch%3Amain)
+records build, lint, Rust/Python platform tests, minimum Rust, and Java 26 results
+for each delivered revision.
+
+Remote evidence already obtained:
+
+- [Installed artifacts](https://github.com/smithtrenton/pytecode/actions/runs/33939424208)
+  passed on `5c895f8`: all six native platform/architecture wheels ran on CPython
+  3.12, 3.13, and 3.14; the source distribution also rebuilt and passed those checks.
+- [Fuzz](https://github.com/smithtrenton/pytecode/actions/runs/33939424242) passed all
+  three sanitizer targets on `5c895f8`.
+- [Dependency advisories](https://github.com/smithtrenton/pytecode/actions/runs/33939287212)
+  passed on `0f3ddde`; the audited lockfiles are unchanged in the delivery fixes.
+
+CI exposed two portability issues that local Windows checks did not reveal: the
+Rust-only MSRV job's unused uv cache failed during cleanup, and a ZIP fixture
+warning assertion incorrectly assumed Windows filename normalization on POSIX.
+The unused cache is disabled, and warning expectations now use the standard
+library's actual emitted filename. The archive duplicate-rejection assertion stays
+unchanged.
+
+The remote default branch remains `master`; changing that repository setting is
+separate from delivery to `main`. No release tag, PyPI publish, or GitHub release
+is part of this delivery.
 Broader verifier conformance, large-module refactors beyond the affected areas,
 streaming/concurrency APIs, and unmeasured performance candidates remain follow-up
 work under the documented compatibility limits, not claims established by this batch.

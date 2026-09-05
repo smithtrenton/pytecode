@@ -104,8 +104,7 @@ supported wheel target. Use separate processes for parallel independent work.
 
 The abi3 wheels target ordinary CPython 3.12 and newer. Installed-artifact CI tests
 3.12, 3.13, and 3.14 on native x86-64 and ARM64 runners for Linux, Windows, and
-macOS, and rebuilds a wheel from the sdist before release publishing. Local evidence
-currently covers Windows x86-64; other platform results require the remote CI run.
+macOS, and rebuilds a wheel from the sdist before release publishing. Local checks cover Windows x86-64; the remote installed-artifact matrix has also passed on all six native targets.
 Runner labels follow the [GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 Development pins Rust 1.98.1, Python 3.14.7, uv 0.12.10, and maturin 1.15.0. Rust
