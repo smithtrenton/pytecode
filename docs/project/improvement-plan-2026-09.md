@@ -32,6 +32,17 @@ skips; 37 separate Java 26 checks; rustfmt, Clippy, Ruff, Basedpyright, Rust 1.9
 and API documentation coverage (262/262). The CI and installed-artifact workflow
 histories linked below verify delivery revisions on remote `main`.
 
+The follow-up sdist rebuilt in isolation, and its wheel passed installed checks
+on Python 3.12, 3.13, and 3.14 outside the checkout. The expanded verifier fuzz
+target now exercises bounded frame recomputation and passed 18,129 local ASan
+executions. Constructor regressions are included in the Java 26 CI lane.
+
+Remote checks passed on `cfc6392`:
+[CI](https://github.com/smithtrenton/pytecode/actions/runs/33941340004),
+[all native artifacts and sdist](https://github.com/smithtrenton/pytecode/actions/runs/33941339972),
+and [sanitizer fuzzing](https://github.com/smithtrenton/pytecode/actions/runs/33941339978).
+Later coverage/documentation commits run the same delivery gates.
+
 ## Original implementation progress
 
 | Batch | Status and evidence |
@@ -96,8 +107,8 @@ The unused cache is disabled, and warning expectations now use the standard
 library's actual emitted filename. The archive duplicate-rejection assertion stays
 unchanged.
 
-`main` is the delivery branch. The follow-up checks repository settings and moves
-the default to `main` after successful CI so scheduled maintenance uses this code.
+`main` is now both the delivery and default branch. The GitHub Pages environment's
+branch rule also targets `main`; scheduled maintenance now uses the improved code.
 No release tag, PyPI publish, or GitHub release is part of this delivery.
 Broader verifier conformance, large-module refactors beyond the affected areas,
 streaming/concurrency APIs, and unmeasured performance candidates remain follow-up

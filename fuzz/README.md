@@ -9,7 +9,11 @@ cargo +nightly-2026-09-03 fuzz run class_parse -- -max_total_time=30 -timeout=10
 ```
 
 Other targets are `model_lift` and `verify_bounded`. The verifier target caps input
-bytes, methods, and constant-pool entries. Targets exercise parser/writer/model
+bytes, methods, and constant-pool entries. It also recomputes frames when the model
+has at most 512 instruction/label items and 32 handlers, referenced local slots are
+below 256, and constant-pool UTF-8 entries are at most 512 bytes. These extra caps
+bound the frame-analysis workload while exercising constructor and join errors.
+Targets exercise parser/writer/model
 error handling; JVM acceptance is covered by separate runtime tests. Seeds come
 from checked-in class fixtures; generated corpora and artifacts are ignored.
 
@@ -38,3 +42,9 @@ Post-optimization rerun on the same toolchain (10-second configured budgets,
 41,317 executions, and `verify_bounded` 48,657 executions. All passed. The local
 corpora include discoveries from the earlier runs, so execution rates are not
 direct performance comparisons.
+
+The follow-up verifier target now also exercises bounded frame recomputation. Its
+local ASan run completed 18,129 executions in 11 seconds with no failure (463 MB
+reported RSS), using the same nightly and the accumulated local corpus. This is
+a smoke test of the expanded target, not a comparison with the previous target's
+execution rate or an exhaustive verification result.
