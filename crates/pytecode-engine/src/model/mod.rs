@@ -6,7 +6,7 @@ mod debug_info;
 mod labels;
 mod operands;
 
-use crate::analysis::{ClassResolver, FrameComputationResult, VType, recompute_frames};
+use crate::analysis::{ClassResolver, FrameComputationResult, VType, recompute_frames_for_class};
 pub use constant_pool_builder::ConstantPoolBuilder;
 pub use debug_info::{DebugInfoPolicy, DebugInfoState};
 pub use labels::{
@@ -461,13 +461,7 @@ impl ClassModel {
         let mut methods = Vec::with_capacity(self.methods.len());
         for method in &self.methods {
             methods.push(lower_method_model(
-                method,
-                &self.name,
-                self.version.0,
-                &mut cp,
-                debug_info,
-                frame_mode,
-                resolver,
+                method, self, &mut cp, debug_info, frame_mode, resolver,
             )?);
         }
 
@@ -916,8 +910,7 @@ fn lower_field_model(field: &FieldModel, cp: &mut ConstantPoolBuilder) -> Result
 
 fn lower_method_model(
     method: &MethodModel,
-    class_name: &str,
-    class_major_version: u16,
+    class: &ClassModel,
     cp: &mut ConstantPoolBuilder,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
@@ -943,17 +936,8 @@ fn lower_method_model(
             .code
             .as_ref()
             .map(|code| {
-                lower_code_model(
-                    code,
-                    method,
-                    class_name,
-                    class_major_version,
-                    cp,
-                    debug_info,
-                    frame_mode,
-                    resolver,
-                )
-                .map(AttributeInfo::Code)
+                lower_code_model(code, method, class, cp, debug_info, frame_mode, resolver)
+                    .map(AttributeInfo::Code)
             })
             .transpose()?
     };
@@ -990,32 +974,24 @@ fn lower_method_model(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_code_model(
     code: &CodeModel,
     method: &MethodModel,
-    class_name: &str,
-    class_major_version: u16,
+    class: &ClassModel,
     cp: &mut ConstantPoolBuilder,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn ClassResolver>,
 ) -> Result<CodeAttribute> {
+    let class_major_version = class.version.0;
     if frame_mode == FrameComputationMode::Preserve {
         ensure_frame_sensitive_attrs_supported(code)?;
     }
     let layout = compute_code_layout(code, cp)?;
     let frame_result = if frame_mode == FrameComputationMode::Recompute {
         Some(
-            recompute_frames(
-                code,
-                class_name,
-                &method.name,
-                &method.descriptor,
-                method.access_flags,
-                resolver,
-            )
-            .map_err(|error| model_error(error.to_string()))?,
+            recompute_frames_for_class(code, class, method, resolver)
+                .map_err(|error| model_error(error.to_string()))?,
         )
     } else {
         None

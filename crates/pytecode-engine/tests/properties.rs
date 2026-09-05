@@ -3,7 +3,74 @@ use pytecode_engine::constants::MethodAccessFlags;
 use pytecode_engine::descriptors::{parse_field_descriptor, to_descriptor_field};
 use pytecode_engine::model::{ClassModel, CodeModel, ConstantPoolBuilder, MethodModel};
 use pytecode_engine::modified_utf8::JavaString;
+use pytecode_engine::signatures::{
+    ArrayTypeSignature, ClassTypeSignature, ReferenceTypeSignature, ResultSignature,
+    SimpleClassTypeSignature, TypeArgument, TypeSignature, TypeVariableSignature,
+    parse_class_signature, parse_field_signature, parse_method_signature,
+};
 use pytecode_engine::{parse_class, write_class};
+
+// Generate grammar text and its expected tree independently of the parser.
+fn reference_signature() -> impl Strategy<Value = (String, ReferenceTypeSignature)> {
+    let leaf = "[A-Z][a-zA-Z0-9]{0,12}".prop_map(|name| {
+        (
+            format!("T{name};"),
+            ReferenceTypeSignature::TypeVariable(TypeVariableSignature { identifier: name }),
+        )
+    });
+    leaf.prop_recursive(4, 64, 6, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|(text, tree)| (
+                format!("[{text}"),
+                ReferenceTypeSignature::Array(ArrayTypeSignature {
+                    component_type: Box::new(TypeSignature::Reference(tree))
+                })
+            )),
+            prop::collection::vec((0..4u8, inner), 1..5).prop_map(|arguments| {
+                let mut text = String::from("Lpackage/Outer<");
+                let mut type_arguments = Vec::new();
+                for (kind, (argument, tree)) in arguments {
+                    let value = match kind {
+                        0 => {
+                            text.push('*');
+                            TypeArgument::Any
+                        }
+                        1 => {
+                            text.push_str(&argument);
+                            TypeArgument::Exact(tree)
+                        }
+                        2 => {
+                            text.push('+');
+                            text.push_str(&argument);
+                            TypeArgument::Extends(tree)
+                        }
+                        _ => {
+                            text.push('-');
+                            text.push_str(&argument);
+                            TypeArgument::Super(tree)
+                        }
+                    };
+                    type_arguments.push(value);
+                }
+                text.push_str(">.Inner;");
+                (
+                    text,
+                    ReferenceTypeSignature::Class(ClassTypeSignature {
+                        package_specifier: vec!["package".into()],
+                        simple_class: SimpleClassTypeSignature {
+                            identifier: "Outer".into(),
+                            type_arguments,
+                        },
+                        suffixes: vec![SimpleClassTypeSignature {
+                            identifier: "Inner".into(),
+                            type_arguments: vec![],
+                        }],
+                    }),
+                )
+            }),
+        ]
+    })
+}
 
 proptest! {
     #![proptest_config(ProptestConfig {
@@ -45,5 +112,21 @@ proptest! {
         prop_assert_eq!(&write_class(&parse_class(&emitted).unwrap()).unwrap(), &emitted);
         let lifted = ClassModel::from_bytes(&emitted).unwrap();
         prop_assert_eq!(write_class(&lifted.to_classfile().unwrap()).unwrap(), emitted);
+    }
+
+    #[test]
+    fn generated_generic_signatures_match_their_trees((text, tree) in reference_signature()) {
+        prop_assert_eq!(parse_field_signature(&text).unwrap(), tree.clone());
+        let trailing = format!("{text}!");
+        prop_assert!(parse_field_signature(&trailing).is_err());
+        let method = parse_method_signature(&format!("<T:{text}>(I{text}){text}^TT;^Ljava/lang/Exception;")).unwrap();
+        prop_assert_eq!(&method.type_parameters[0].class_bound, &Some(tree.clone()));
+        prop_assert_eq!(&method.parameter_types[1], &TypeSignature::Reference(tree.clone()));
+        prop_assert_eq!(method.result, ResultSignature::Type(TypeSignature::Reference(tree.clone())));
+        prop_assert_eq!(method.throws_signatures.len(), 2);
+        let class = parse_class_signature(&format!("<T::{text}>Ljava/lang/Object;Ljava/lang/Comparable<TT;>;")).unwrap();
+        prop_assert_eq!(&class.type_parameters[0].interface_bounds, &[tree]);
+        prop_assert!(class.type_parameters[0].class_bound.is_none());
+        prop_assert_eq!(class.superinterface_signatures.len(), 1);
     }
 }

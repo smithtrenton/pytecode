@@ -1,5 +1,10 @@
 mod hierarchy;
+mod simulation;
 mod verify;
+
+use simulation::ClassContext;
+pub(crate) use simulation::recompute_frames_for_class;
+pub use simulation::{recompute_frames, simulate};
 
 pub use hierarchy::{
     ClassResolver, InheritedMethod, JAVA_LANG_OBJECT, MappingClassResolver, ResolvedClass,
@@ -13,11 +18,12 @@ pub use verify::{
 
 use crate::constants::MethodAccessFlags;
 use crate::descriptors::{
-    BaseType, FieldDescriptor, ReturnType, parse_field_descriptor, parse_method_descriptor,
+    BaseType, FieldDescriptor, ReturnType, parameter_slot_count, parse_field_descriptor,
+    parse_method_descriptor,
 };
 use crate::model::{
-    BranchInsn, CodeItem, CodeModel, FieldInsn, IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn,
-    LdcInsn, LdcValue, MethodInsn, MultiANewArrayInsn, TypeInsn, VarInsn,
+    BranchInsn, ClassModel, CodeItem, CodeModel, FieldInsn, IIncInsn, InterfaceMethodInsn,
+    InvokeDynamicInsn, LdcInsn, LdcValue, MethodInsn, MultiANewArrayInsn, TypeInsn, VarInsn,
 };
 use crate::raw::ArrayType;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -288,10 +294,10 @@ pub fn merge_vtypes(left: &VType, right: &VType, resolver: Option<&dyn ClassReso
     {
         return VType::ReturnAddress(merge_return_targets(left_targets, right_targets));
     }
-    if matches!(left, VType::Null) && is_reference(right) {
+    if matches!(left, VType::Null) && matches!(right, VType::Object(_)) {
         return right.clone();
     }
-    if matches!(right, VType::Null) && is_reference(left) {
+    if matches!(right, VType::Null) && matches!(left, VType::Object(_)) {
         return left.clone();
     }
     match (left, right) {
@@ -493,259 +499,10 @@ pub fn build_cfg(code: &CodeModel) -> Result<ControlFlowGraph, AnalysisError> {
     })
 }
 
-pub fn simulate(
-    code: &CodeModel,
-    class_name: &str,
-    method_name: &str,
-    descriptor: &str,
-    access_flags: MethodAccessFlags,
-    resolver: Option<&dyn ClassResolver>,
-) -> Result<SimulationResult, AnalysisError> {
-    let cfg = build_cfg(code)?;
-    let return_type = parse_method_descriptor(descriptor)
-        .map_err(|error| type_error(error.to_string()))?
-        .return_type;
-    let mut entry_frames = vec![None; cfg.nodes.len()];
-    let mut worklist = VecDeque::new();
-    entry_frames[cfg.entry_node] = Some(initial_frame(
-        class_name,
-        method_name,
-        descriptor,
-        access_flags,
-    )?);
-    worklist.push_back(cfg.entry_node);
-    let mut max_stack = 0_usize;
-    let mut max_locals = 0_usize;
-
-    while let Some(node_index) = worklist.pop_front() {
-        let state =
-            entry_frames[node_index]
-                .clone()
-                .ok_or_else(|| AnalysisError::InvalidControlFlow {
-                    reason: "worklist node missing entry frame".to_owned(),
-                })?;
-        max_stack = max_stack.max(state.stack_depth());
-        max_locals = max_locals.max(state.locals.len());
-        let code_index = cfg.nodes[node_index].code_index;
-        let item = &code.instructions[code_index];
-        if let CodeItem::Raw(raw) = item {
-            let expected = match &return_type {
-                ReturnType::Void => 0xb1,
-                ReturnType::Field(field) => match vtype_from_descriptor(field) {
-                    VType::Long => 0xad,
-                    VType::Float => 0xae,
-                    VType::Double => 0xaf,
-                    VType::Object(_) => 0xb0,
-                    _ => 0xac,
-                },
-            };
-            if (0xac..=0xb1).contains(&raw.opcode()) {
-                if raw.opcode() != expected {
-                    return Err(type_error(format!(
-                        "return opcode does not match {descriptor} at instruction {code_index}"
-                    )));
-                }
-                if method_name == "<init>" && state.locals.contains(&VType::UninitializedThis) {
-                    return Err(type_error("constructor returns before initializing this"));
-                }
-            }
-        }
-
-        for exception_edge in &cfg.nodes[node_index].exception_successors {
-            let stack = vec![match &exception_edge.catch_type {
-                Some(catch_type) => VType::Object(catch_type.clone()),
-                None => VType::Object("java/lang/Throwable".to_owned()),
-            }];
-            let handler_state = FrameState {
-                stack,
-                locals: state.locals.clone(),
-            };
-            propagate(
-                exception_edge.target,
-                handler_state,
-                &mut entry_frames,
-                &mut worklist,
-                resolver,
-            )?;
-        }
-
-        let next_state = simulate_item(
-            item,
-            &state,
-            class_name,
-            code_index,
-            (node_index + 1 < cfg.nodes.len()).then_some(node_index + 1),
-        )
-        .map_err(|error| {
-            type_error(format!(
-                "{class_name}.{method_name}{descriptor} instruction {code_index}: {error}"
-            ))
-        })?;
-        max_stack = max_stack.max(next_state.stack_depth());
-        max_locals = max_locals.max(next_state.locals.len());
-        let normal_successors = dynamic_successors(item, &state)
-            .unwrap_or_else(|| cfg.nodes[node_index].normal_successors.clone());
-        for successor in &normal_successors {
-            propagate(
-                *successor,
-                next_state.clone(),
-                &mut entry_frames,
-                &mut worklist,
-                resolver,
-            )?;
-        }
-    }
-
-    Ok(SimulationResult {
-        cfg,
-        entry_frames,
-        max_stack: u16::try_from(max_stack).map_err(|_| type_error("max_stack exceeds 65535"))?,
-        max_locals: u16::try_from(max_locals)
-            .map_err(|_| type_error("max_locals exceeds 65535"))?,
-    })
-}
-
-pub fn recompute_frames(
-    code: &CodeModel,
-    class_name: &str,
-    method_name: &str,
-    descriptor: &str,
-    access_flags: MethodAccessFlags,
-    resolver: Option<&dyn ClassResolver>,
-) -> Result<FrameComputationResult, AnalysisError> {
-    let simulation = simulate(
-        code,
-        class_name,
-        method_name,
-        descriptor,
-        access_flags,
-        resolver,
-    )?;
-    let mut frames = Vec::new();
-    for node in &simulation.cfg.nodes {
-        if node.node_index == simulation.cfg.entry_node || !node.is_block_start {
-            continue;
-        }
-        if let Some(frame) = &simulation.entry_frames[node.node_index] {
-            frames.push(StackMapFrameState {
-                code_index: node.code_index,
-                locals: frame.locals.clone(),
-                stack: frame.stack.clone(),
-            });
-        }
-    }
-    Ok(FrameComputationResult {
-        max_stack: simulation.max_stack,
-        max_locals: simulation.max_locals,
-        frames,
-    })
-}
-
-fn initial_frame(
-    class_name: &str,
-    method_name: &str,
-    descriptor: &str,
-    access_flags: MethodAccessFlags,
-) -> Result<FrameState, AnalysisError> {
-    let parsed =
-        parse_method_descriptor(descriptor).map_err(|error| AnalysisError::InvalidControlFlow {
-            reason: error.to_string(),
-        })?;
-    let mut locals = Vec::new();
-    if !access_flags.contains(MethodAccessFlags::STATIC) {
-        if method_name == "<init>" {
-            locals.push(VType::UninitializedThis);
-        } else {
-            locals.push(VType::Object(class_name.to_owned()));
-        }
-    }
-    for parameter in &parsed.parameter_types {
-        let value = vtype_from_descriptor(parameter);
-        locals.push(value.clone());
-        if is_category2(&value) {
-            locals.push(VType::Top);
-        }
-    }
-    Ok(FrameState {
-        stack: Vec::new(),
-        locals,
-    })
-}
-
-fn propagate(
-    target: usize,
-    candidate: FrameState,
-    entry_frames: &mut [Option<FrameState>],
-    worklist: &mut VecDeque<usize>,
-    resolver: Option<&dyn ClassResolver>,
-) -> Result<(), AnalysisError> {
-    let changed = match &entry_frames[target] {
-        Some(existing) => {
-            let merged = merge_frames(existing, &candidate, resolver)?;
-            if merged != *existing {
-                entry_frames[target] = Some(merged);
-                true
-            } else {
-                false
-            }
-        }
-        None => {
-            entry_frames[target] = Some(candidate);
-            true
-        }
-    };
-    if changed && !worklist.contains(&target) {
-        worklist.push_back(target);
-    }
-    Ok(())
-}
-
-fn merge_frames(
-    left: &FrameState,
-    right: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
-) -> Result<FrameState, AnalysisError> {
-    if left.stack.len() != right.stack.len() {
-        return Err(AnalysisError::TypeMerge {
-            reason: format!(
-                "stack depths differ at join point: {} vs {}",
-                left.stack.len(),
-                right.stack.len()
-            ),
-        });
-    }
-    let merge = |left: &VType, right: &VType| -> Result<VType, AnalysisError> {
-        if let (VType::Object(left), VType::Object(right)) = (left, right) {
-            return hierarchy::common_reference_type(resolver, left, right).map(VType::Object);
-        }
-        Ok(merge_vtypes(left, right, resolver))
-    };
-    let stack = left
-        .stack
-        .iter()
-        .zip(&right.stack)
-        .map(|(left, right)| {
-            let value = merge(left, right)?;
-            if value == VType::Top && left != right {
-                return Err(type_error("incompatible operand stack types at join"));
-            }
-            Ok(value)
-        })
-        .collect::<Result<Vec<_>, AnalysisError>>()?;
-    let max_locals = left.locals.len().max(right.locals.len());
-    let mut locals = Vec::with_capacity(max_locals);
-    for index in 0..max_locals {
-        let left_value = left.locals.get(index).unwrap_or(&VType::Top);
-        let right_value = right.locals.get(index).unwrap_or(&VType::Top);
-        locals.push(merge(left_value, right_value)?);
-    }
-    Ok(FrameState { stack, locals })
-}
-
 fn simulate_item(
     item: &CodeItem,
     state: &FrameState,
-    class_name: &str,
+    class: ClassContext<'_>,
     code_index: usize,
     next_node: Option<usize>,
 ) -> Result<FrameState, AnalysisError> {
@@ -753,8 +510,8 @@ fn simulate_item(
         CodeItem::Raw(raw) => simulate_raw_opcode(raw.opcode(), state, raw, code_index),
         CodeItem::Var(var) => simulate_var(var, state),
         CodeItem::IInc(iinc) => simulate_iinc(iinc, state),
-        CodeItem::Field(field) => simulate_field(field, state),
-        CodeItem::Method(method) => simulate_method(method, state, class_name),
+        CodeItem::Field(field) => simulate_field(field, state, class),
+        CodeItem::Method(method) => simulate_method(method, state, class),
         CodeItem::InterfaceMethod(method) => simulate_interface_method(method, state),
         CodeItem::InvokeDynamic(insn) => simulate_invokedynamic(insn, state),
         CodeItem::Type(insn) => simulate_type(insn, state, code_index),
@@ -838,7 +595,11 @@ fn simulate_iinc(iinc: &IIncInsn, state: &FrameState) -> Result<FrameState, Anal
     Ok(state.clone())
 }
 
-fn simulate_field(field: &FieldInsn, state: &FrameState) -> Result<FrameState, AnalysisError> {
+fn simulate_field(
+    field: &FieldInsn,
+    state: &FrameState,
+    class: ClassContext<'_>,
+) -> Result<FrameState, AnalysisError> {
     let descriptor = parse_field_descriptor(&field.descriptor).map_err(|error| {
         AnalysisError::InvalidControlFlow {
             reason: error.to_string(),
@@ -856,6 +617,17 @@ fn simulate_field(field: &FieldInsn, state: &FrameState) -> Result<FrameState, A
             let next = state.pop_typed(&field_type)?;
             // A constructor may assign its own fields before invoking super.
             if next.peek(0)? == &VType::UninitializedThis {
+                if field.owner != class.name
+                    || class.model.is_some_and(|model| {
+                        !model.fields.iter().any(|declared| {
+                            declared.name == field.name && declared.descriptor == field.descriptor
+                        })
+                    })
+                {
+                    return Err(type_error(
+                        "putfield before initialization requires a field declared by the current class",
+                    ));
+                }
                 Ok(next.pop(1)?.0)
             } else {
                 next.pop_typed(&VType::Object(field.owner.clone()))
@@ -868,13 +640,21 @@ fn simulate_field(field: &FieldInsn, state: &FrameState) -> Result<FrameState, A
 fn simulate_method(
     method: &MethodInsn,
     state: &FrameState,
-    class_name: &str,
+    class: ClassContext<'_>,
 ) -> Result<FrameState, AnalysisError> {
     let parsed = parse_method_descriptor(&method.descriptor).map_err(|error| {
         AnalysisError::InvalidControlFlow {
             reason: error.to_string(),
         }
     })?;
+    if method.name == "<clinit>"
+        || (method.name == "<init>"
+            && (method.opcode != 0xb7 || parsed.return_type != ReturnType::Void))
+    {
+        return Err(type_error(
+            "constructor invocation requires invokespecial and a void descriptor; <clinit> cannot be invoked",
+        ));
+    }
     let after_args = pop_arguments(state, &parsed.parameter_types)?;
     let receiver_state = if method.opcode == 0xB8 {
         after_args
@@ -882,7 +662,18 @@ fn simulate_method(
         let (after_receiver, receiver) = after_args.pop(1)?;
         if method.opcode == 0xB7 && method.name == "<init>" {
             let replacement = match receiver.first() {
-                Some(VType::UninitializedThis) => VType::Object(class_name.to_owned()),
+                Some(VType::UninitializedThis) => {
+                    if method.owner != class.name
+                        && class
+                            .model
+                            .is_some_and(|model| model.super_name.as_deref() != Some(&method.owner))
+                    {
+                        return Err(type_error(
+                            "constructor receiver requires the current class or its direct superclass",
+                        ));
+                    }
+                    VType::Object(class.name.to_owned())
+                }
                 Some(VType::Uninitialized { class_name, .. }) if *class_name == method.owner => {
                     VType::Object(class_name.clone())
                 }

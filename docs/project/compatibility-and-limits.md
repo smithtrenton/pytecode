@@ -48,6 +48,26 @@ the modified-UTF-8 **encoded byte** limit of 65,535. Code bodies must contain
 limited to 128 parser levels. Array signatures are read iteratively up to 255
 dimensions. These are library resource limits, distinct from JVM type verification.
 
+## Frame recomputation
+
+Frame recomputation tracks constructor initialization independently of local
+variables. Overwriting local zero does not permit an early return. Calls that
+initialize a receiver replace all its aliases on the normal path and invalidate
+saved aliases on the exception path. A pending constructor flag that cannot be
+represented in a modern StackMapTable produces an explicit error.
+
+Model-based recomputation checks the actual direct superclass and declared fields:
+before initialization, `putfield` must reference a field declared by the current
+class. The standalone Rust analysis functions take a class name rather than a
+complete model, so they cannot establish those missing declarations. The root
+`java/lang/Object` constructor is handled separately. These rules follow the
+[JVMS constructor and field instruction checks](https://docs.oracle.com/javase/specs/jvms/se26/html/jvms-4.html#jvms-4.10.1.9).
+
+This analysis does not certify every JVM verification rule. In particular, ordinary
+reference operands are checked as initialized references; a supplied hierarchy
+resolver improves joins but does not establish all operand assignability or member
+access constraints. Use independent JVM verification for transformed output.
+
 ## Archive mutation and transactions
 
 Python `JarFile.files` and its `JarInfo` values are authoritative. Changes to bytes,

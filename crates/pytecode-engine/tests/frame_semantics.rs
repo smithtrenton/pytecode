@@ -190,3 +190,130 @@ fn wide_local_beyond_u16_limit_is_rejected() {
         recompute_frames(&code, "Test", "run", "()V", MethodAccessFlags::STATIC, None).unwrap_err();
     assert!(error.to_string().contains("max_locals exceeds"));
 }
+
+#[test]
+fn constructor_initialization_survives_overwriting_local_zero() {
+    let pool = pytecode_engine::model::ConstantPoolBuilder::new();
+    let code = CodeModel::from_raw_code(1, 1, &[0x01, 0x4b, 0xb1], &pool).unwrap();
+    let error = simulate(
+        &code,
+        "Test",
+        "<init>",
+        "()V",
+        MethodAccessFlags::PUBLIC,
+        None,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("before initializing this"));
+}
+
+#[test]
+fn object_constructor_does_not_require_a_super_constructor() {
+    simulate(
+        &code(&[0xb1]),
+        "java/lang/Object",
+        "<init>",
+        "()V",
+        MethodAccessFlags::PUBLIC,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn null_does_not_merge_with_uninitialized_references() {
+    for uninitialized in [
+        VType::UninitializedThis,
+        VType::Uninitialized {
+            code_index: 0,
+            class_name: "Test".into(),
+        },
+    ] {
+        assert_eq!(merge_vtypes(&VType::Null, &uninitialized, None), VType::Top);
+        assert_eq!(merge_vtypes(&uninitialized, &VType::Null, None), VType::Top);
+    }
+}
+
+#[test]
+fn special_method_names_require_valid_invocation_forms() {
+    use pytecode_engine::model::MethodInsn;
+    for (opcode, name, descriptor) in [
+        (0xb8, "<init>", "()V"),
+        (0xb7, "<init>", "()I"),
+        (0xb8, "<clinit>", "()V"),
+    ] {
+        let mut code = code(&[0xb1]);
+        code.instructions.insert(
+            0,
+            CodeItem::Method(MethodInsn {
+                opcode,
+                owner: "Test".into(),
+                name: name.into(),
+                descriptor: descriptor.into(),
+                is_interface: false,
+            }),
+        );
+        assert!(simulate(&code, "Test", "run", "()V", MethodAccessFlags::STATIC, None).is_err());
+    }
+}
+
+#[test]
+fn failed_initialization_poisoned_alias_cannot_be_retried() {
+    use pytecode_engine::model::{ExceptionHandler, Label, MethodInsn, TypeInsn};
+    let start = Label::new();
+    let end = Label::new();
+    let handler = Label::new();
+    let init = CodeItem::Method(MethodInsn {
+        opcode: 0xb7,
+        owner: "Test".into(),
+        name: "<init>".into(),
+        descriptor: "()V".into(),
+        is_interface: false,
+    });
+    let mut code = code(&[0xb1]);
+    let return_insn = code.instructions[0].clone();
+    let pop = self::code(&[0x57]).instructions[0].clone();
+    code.instructions = vec![
+        CodeItem::Type(TypeInsn {
+            opcode: 0xbb,
+            descriptor: "Test".into(),
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0x3a,
+            slot: 0,
+        }),
+        CodeItem::Var(VarInsn {
+            opcode: 0x19,
+            slot: 0,
+        }),
+        CodeItem::Label(start.clone()),
+        init.clone(),
+        CodeItem::Label(end.clone()),
+        return_insn.clone(),
+        CodeItem::Label(handler.clone()),
+        pop,
+        CodeItem::Var(VarInsn {
+            opcode: 0x19,
+            slot: 0,
+        }),
+        init,
+        return_insn,
+    ];
+    code.exception_handlers.push(ExceptionHandler {
+        start,
+        end,
+        handler,
+        catch_type: None,
+    });
+    let error = simulate(&code, "Test", "run", "()V", MethodAccessFlags::STATIC, None).unwrap_err();
+    assert!(
+        error.to_string().contains("slot is not initialized"),
+        "{error}"
+    );
+    // A handler that only rethrows is valid; its saved allocation alias is Top.
+    code.instructions.truncate(8);
+    code.instructions.extend(self::code(&[0xbf]).instructions);
+    let result =
+        recompute_frames(&code, "Test", "run", "()V", MethodAccessFlags::STATIC, None).unwrap();
+    assert_eq!(result.frames.last().unwrap().locals, vec![VType::Top]);
+}
