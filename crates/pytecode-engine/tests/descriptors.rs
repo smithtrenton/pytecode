@@ -77,3 +77,15 @@ fn descriptor_validation_rejects_invalid_forms() {
     );
     let _ = VOID;
 }
+
+#[test]
+fn descriptor_limits_and_unicode_names() {
+    assert!(parse_field_descriptor("Lbad[name;").is_err());
+    assert!(parse_field_descriptor("Lpkg/名;").is_ok());
+    assert!(parse_field_descriptor(&format!("{}I", "[".repeat(255))).is_ok());
+    assert!(parse_field_descriptor(&format!("{}I", "[".repeat(256))).is_err());
+    assert!(parse_field_descriptor(&format!("{}I", "[".repeat(100_000))).is_err());
+    assert!(parse_method_descriptor(&format!("({})V", "I".repeat(255))).is_ok());
+    assert!(parse_method_descriptor(&format!("({})V", "I".repeat(256))).is_err());
+    assert!(parse_method_descriptor(&format!("({})V", "J".repeat(128))).is_err());
+}

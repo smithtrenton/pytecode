@@ -139,3 +139,20 @@ fn signature_validation_rejects_invalid_forms() {
     let base = parse_type_signature("I").unwrap();
     assert_eq!(base, TypeSignature::Base(BaseType::Int));
 }
+
+#[test]
+fn deeply_nested_signatures_are_bounded() {
+    let signature = format!(
+        "{}Ljava/lang/String;{}",
+        "Ljava/util/List<".repeat(200),
+        ">;".repeat(200)
+    );
+    assert!(
+        parse_field_signature(&signature)
+            .unwrap_err()
+            .to_string()
+            .contains("nesting exceeds limit")
+    );
+    assert!(parse_field_signature(&format!("{}I", "[".repeat(255))).is_ok());
+    assert!(parse_field_signature(&format!("{}I", "[".repeat(256))).is_err());
+}

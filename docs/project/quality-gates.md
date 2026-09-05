@@ -12,16 +12,20 @@ A change is ready to merge or tag when it:
 
 Run the standard validation set with:
 
+Use the pinned Rust toolchain and uv 0.12.10. Set `JAVA_HOME` to JDK 25 and put
+its `bin` directory on PATH for the main suite. Java 26 has a separate CI lane.
+
 ```powershell
-uv run ruff check .
-uv run ruff format --check .
-uv run basedpyright
-uv run pytest -q
-uv run python tools/generate_api_docs.py --check
+uv sync --locked --extra dev
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync basedpyright
+uv run --no-sync pytest -q
+uv run --no-sync python tools/generate_api_docs.py --check
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-uv build --wheel --sdist
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+uv build --wheel --sdist --build-constraints tools/build-constraints.txt
 ```
 
 ## What the current suite covers
@@ -31,6 +35,17 @@ uv build --wheel --sdist
 - `tests/test_rust_bindings.py`, `tests/test_rust_transforms.py`, and `tests/test_jar.py` cover the Python-facing bindings, transform composition, and archive rewrite semantics.
 - `tests/javap_parser.py` and `tests/test_javap_parser.py` cover the `javap` parser and semantic-diff utilities.
 - `tests/test_api_docs.py`, `tests/test_validate_release_tag.py`, and `tools/generate_api_docs.py --check` enforce the documented public surface and release-tag expectations.
+- JVM verification, frame semantics, Java string, archive integrity, and stub-contract
+  regressions supplement those suites. The main Python suite requires JDK 25;
+  `PYTECODE_TEST_JAVA26=1` enables the two Java 26 cases when running with JDK 26.
+- `artifacts.yml` builds and installs native wheels outside the checkout on all six
+  advertised platform/architecture targets, tests CPython 3.12/3.13/3.14, and rebuilds
+  the source distribution before publishing. A build alone is not an execution check.
+- `advisories.yml` checks both Rust lockfiles weekly and on dependency changes.
+  `fuzz.yml` runs three bounded sanitizer targets on changes and weekly; see
+  [the fuzz instructions](../../fuzz/README.md) for reproducing failures.
+- Strict type checking now validates attribute accesses. Only the two dynamic
+  classmethod descriptor assignments retain targeted exceptions.
 
 ## Change expectations by area
 

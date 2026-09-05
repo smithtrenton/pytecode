@@ -19,9 +19,12 @@ validation model, and operational guidance.
 | Current runtime shape, public entry points, module responsibilities, data flow, and test coverage | [architecture/current-architecture.md](architecture/current-architecture.md) |
 | Intended layered architecture and extension boundaries | [architecture/target-architecture.md](architecture/target-architecture.md) |
 | Benchmarking guidance and reproduction commands | [benchmarks.md](benchmarks.md) |
+| September 2026 review, implementation evidence, and remaining delivery steps | [project/improvement-plan-2026-09.md](project/improvement-plan-2026-09.md) |
+| Java versions, strings, resource limits, archive metadata, and Python ownership | [project/compatibility-and-limits.md](project/compatibility-and-limits.md) |
+| Measured writer optimization and allocation results | [project/performance-2026-09.md](project/performance-2026-09.md) |
 | Release-quality expectations and required validation checks | [project/quality-gates.md](project/quality-gates.md) |
 | Roadmap status and delivered milestone summary | [project/roadmap.md](project/roadmap.md) |
-| Rust JVMS 25 audit, remediation status, and scoped conformance notes | [project/rust-jvms-25-audit.md](project/rust-jvms-25-audit.md) |
+| Historical Rust JVMS 25 audit and limits of its earlier claims | [project/rust-jvms-25-audit.md](project/rust-jvms-25-audit.md) |
 
 ## Design and research docs
 

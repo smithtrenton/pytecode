@@ -1,0 +1,27 @@
+name: Dependency advisories
+
+on:
+  push:
+    branches: [main, master]
+    paths: [Cargo.lock, fuzz/Cargo.lock, .github/workflows/advisories.yml]
+  pull_request:
+    paths: [Cargo.lock, fuzz/Cargo.lock, .github/workflows/advisories.yml]
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit --file Cargo.lock
+      - run: cargo audit --file fuzz/Cargo.lock

@@ -1,5 +1,60 @@
 use crate::error::{EngineError, EngineErrorKind, Result};
 
+/// Java string content as UTF-16 code units, including unmatched surrogates.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct JavaString(Vec<u16>);
+
+impl JavaString {
+    pub fn from_utf16(units: Vec<u16>) -> Self {
+        Self(units)
+    }
+
+    pub fn as_utf16(&self) -> &[u16] {
+        &self.0
+    }
+
+    pub fn from_modified_utf8(bytes: &[u8]) -> Result<Self> {
+        decode_modified_utf8_units(bytes).map(Self)
+    }
+
+    pub fn to_modified_utf8(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.0.len());
+        for &unit in &self.0 {
+            encode_code_unit(unit, &mut bytes);
+        }
+        bytes
+    }
+
+    /// Convert only when the code units form Unicode scalar values.
+    pub fn to_unicode(&self) -> std::result::Result<String, std::string::FromUtf16Error> {
+        String::from_utf16(&self.0)
+    }
+}
+
+impl From<&str> for JavaString {
+    fn from(value: &str) -> Self {
+        Self(value.encode_utf16().collect())
+    }
+}
+
+impl From<String> for JavaString {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl PartialEq<str> for JavaString {
+    fn eq(&self, other: &str) -> bool {
+        self.0.iter().copied().eq(other.encode_utf16())
+    }
+}
+
+impl PartialEq<String> for JavaString {
+    fn eq(&self, other: &String) -> bool {
+        self == other.as_str()
+    }
+}
+
 pub fn encode_modified_utf8(value: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(value.len());
     for code_unit in value.encode_utf16() {
@@ -9,6 +64,18 @@ pub fn encode_modified_utf8(value: &str) -> Vec<u8> {
 }
 
 pub fn decode_modified_utf8(data: &[u8]) -> Result<String> {
+    let utf16_units = decode_modified_utf8_units(data)?;
+    String::from_utf16(&utf16_units).map_err(|err| {
+        EngineError::new(
+            data.len(),
+            EngineErrorKind::InvalidModifiedUtf8 {
+                reason: format!("invalid UTF-16 surrogate sequence: {err}"),
+            },
+        )
+    })
+}
+
+fn decode_modified_utf8_units(data: &[u8]) -> Result<Vec<u16>> {
     let mut utf16_units = Vec::with_capacity(data.len());
     let mut index = 0_usize;
 
@@ -97,14 +164,7 @@ pub fn decode_modified_utf8(data: &[u8]) -> Result<String> {
         utf16_units.push(code_unit);
     }
 
-    String::from_utf16(&utf16_units).map_err(|err| {
-        EngineError::new(
-            data.len(),
-            EngineErrorKind::InvalidModifiedUtf8 {
-                reason: format!("invalid UTF-16 surrogate sequence: {err}"),
-            },
-        )
-    })
+    Ok(utf16_units)
 }
 
 fn encode_code_unit(code_unit: u16, out: &mut Vec<u8>) {

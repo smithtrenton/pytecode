@@ -12,6 +12,7 @@ use std::sync::Arc;
 mod analysis;
 mod archive;
 mod attributes;
+mod java_string;
 mod model;
 mod transforms;
 
@@ -2362,7 +2363,8 @@ impl PyClassWriter {
     }
 }
 
-#[pymodule]
+// Mutable model views have thread ownership; do not advertise GIL-free execution.
+#[pymodule(gil_used = true)]
 fn _rust(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "MalformedClassException",

@@ -143,7 +143,7 @@ fn verify_classfile_applies_java_25_version_rules() {
     );
 
     let mut future_major = base_classfile();
-    future_major.major_version = 70;
+    future_major.major_version = 71;
     let future_major_diagnostics = verify_classfile(&future_major);
     assert!(
         future_major_diagnostics

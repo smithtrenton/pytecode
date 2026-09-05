@@ -65,8 +65,14 @@ pub fn parse_method_descriptor(descriptor: &str) -> Result<MethodDescriptor> {
     let mut index = 0_usize;
     expect_byte(bytes, &mut index, b'(')?;
     let mut parameter_types = Vec::new();
+    let mut parameter_slots = 0;
     while peek(bytes, index) != Some(b')') {
-        parameter_types.push(parse_field_descriptor_at(bytes, &mut index)?);
+        let parameter = parse_field_descriptor_at(bytes, &mut index)?;
+        parameter_slots += slot_size(&parameter);
+        if parameter_slots > 255 {
+            return Err(descriptor_error("method parameters exceed 255 slots"));
+        }
+        parameter_types.push(parameter);
     }
     expect_byte(bytes, &mut index, b')')?;
     let return_type = if peek(bytes, index) == Some(b'V') {
@@ -136,6 +142,24 @@ pub fn to_descriptor_method(descriptor: &MethodDescriptor) -> String {
 }
 
 fn parse_field_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDescriptor> {
+    let mut dimensions = 0;
+    while peek(bytes, *index) == Some(b'[') {
+        dimensions += 1;
+        *index += 1;
+        if dimensions > 255 {
+            return Err(descriptor_error("array descriptor exceeds 255 dimensions"));
+        }
+    }
+    let mut field = parse_non_array_descriptor_at(bytes, index)?;
+    for _ in 0..dimensions {
+        field = FieldDescriptor::Array(ArrayType {
+            component_type: Box::new(field),
+        });
+    }
+    Ok(field)
+}
+
+fn parse_non_array_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDescriptor> {
     let current = next_byte(bytes, index)?;
     match current {
         b'Z' => Ok(FieldDescriptor::Base(BaseType::Boolean)),
@@ -147,9 +171,6 @@ fn parse_field_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDes
         b'F' => Ok(FieldDescriptor::Base(BaseType::Float)),
         b'D' => Ok(FieldDescriptor::Base(BaseType::Double)),
         b'L' => parse_object_type(bytes, index).map(FieldDescriptor::Object),
-        b'[' => Ok(FieldDescriptor::Array(ArrayType {
-            component_type: Box::new(parse_field_descriptor_at(bytes, index)?),
-        })),
         value => Err(descriptor_error(format!(
             "invalid descriptor character '{}'",
             value as char
@@ -172,7 +193,7 @@ fn parse_object_type(bytes: &[u8], index: &mut usize) -> Result<ObjectType> {
         return Err(descriptor_error("empty class name"));
     }
     let raw = std::str::from_utf8(&bytes[start..*index])
-        .map_err(|_| descriptor_error("descriptor must be ASCII"))?;
+        .map_err(|_| descriptor_error("descriptor must be valid UTF-8"))?;
     validate_internal_name(raw)?;
     *index += 1;
     Ok(ObjectType {
@@ -181,11 +202,8 @@ fn parse_object_type(bytes: &[u8], index: &mut usize) -> Result<ObjectType> {
 }
 
 fn validate_internal_name(value: &str) -> Result<()> {
-    if value.contains('.') {
-        return Err(descriptor_error("invalid character '.' in class name"));
-    }
-    if value.split('/').any(str::is_empty) {
-        return Err(descriptor_error("empty class name segment"));
+    if !crate::names::is_valid_internal_name(value) {
+        return Err(descriptor_error("invalid internal class name"));
     }
     Ok(())
 }

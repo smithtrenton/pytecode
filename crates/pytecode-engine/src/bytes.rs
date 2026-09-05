@@ -76,10 +76,13 @@ pub(crate) struct ByteWriter {
 }
 
 impl ByteWriter {
-    pub(crate) fn new() -> Self {
-        Self {
-            bytes: Vec::with_capacity(32 * 1024),
-        }
+    pub(crate) fn position(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Fill a length placeholder previously written to this buffer.
+    pub(crate) fn patch_u4(&mut self, position: usize, value: u32) {
+        self.bytes[position..position + 4].copy_from_slice(&value.to_be_bytes());
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {

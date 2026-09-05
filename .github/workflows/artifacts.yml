@@ -1,0 +1,91 @@
+name: Installed artifacts
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_call:
+    inputs:
+      release_ref:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: Wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.12.10"
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.15.0
+          rust-toolchain: "1.98.1"
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist --compatibility pypi
+          manylinux: auto
+      - name: Test installed wheel on supported CPython versions
+        shell: bash
+        run: uv run --no-project --python 3.12 python tools/check_artifact.py dist/*.whl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Source distribution rebuild
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.12.10"
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build source distribution with pinned backend
+        run: uv build --sdist --build-constraints tools/build-constraints.txt
+      - name: Check source distribution contents
+        run: uv run --no-project --python 3.12 python tools/check_sdist.py dist/*.tar.gz
+      - name: Build wheel from source archive in isolation
+        run: uv build dist/*.tar.gz --wheel --out-dir rebuilt --build-constraints tools/build-constraints.txt
+      - name: Test rebuilt wheel outside checkout
+        run: uv run --no-project --python 3.12 python tools/check_artifact.py rebuilt/*.whl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error

@@ -1546,7 +1546,18 @@ class _ArchiveEntryState:
     @property
     def original_index(self) -> int | None: ...
 
-def read_archive_state(source_path: str | Path) -> list[_ArchiveEntryState]: ...
+class _PreparedArchiveRewrite:
+    @property
+    def path(self) -> Path: ...
+    def commit(self) -> Path: ...
+
+def read_archive_state(
+    source_path: str | Path,
+    *,
+    max_entries: int = 100_000,
+    max_entry_bytes: int = 268_435_456,
+    max_total_bytes: int = 1_073_741_824,
+) -> list[_ArchiveEntryState]: ...
 def rewrite_archive_with_rust_transform(
     source_path: str | Path,
     transform: ArchiveTransform,
@@ -1563,7 +1574,11 @@ def rewrite_archive_state(
     frame_mode: FrameComputationMode | None = None,
     resolver: MappingClassResolver | None = None,
     debug_info: str = "preserve",
-) -> Path: ...
+    *,
+    max_entries: int = 100_000,
+    max_entry_bytes: int = 268_435_456,
+    max_total_bytes: int = 1_073_741_824,
+) -> _PreparedArchiveRewrite: ...
 
 # =============================================================================
 # Analysis

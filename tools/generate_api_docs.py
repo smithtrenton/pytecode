@@ -104,16 +104,16 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         print(f"\n{len(missing)} undocumented symbol(s):")
         for sym in sorted(missing):
-            print(f"  ✗ {sym}")
+            print(f"  MISSING: {sym}")
         return 1
 
-    print("✓ All public symbols are documented.")
+    print("OK: All public symbols are documented.")
 
     if not args.check:
         print(f"\nGenerating HTML docs in {OUTPUT_DIR} ...")
         generate_html()
         html_count = len(list(OUTPUT_DIR.rglob("*.html")))
-        print(f"✓ Generated {html_count} HTML file(s).")
+        print(f"OK: Generated {html_count} HTML file(s).")
 
     return 0
 

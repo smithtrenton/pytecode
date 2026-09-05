@@ -221,7 +221,10 @@ fn recompute_frames_allows_phase3_edit_that_used_to_fail() -> TestResult<()> {
     let bytes = fixture_bytes("ControlFlowExample.java", "ControlFlowExample.class");
     let mut model = ClassModel::from_bytes(&bytes)?;
     let class_name = model.name.clone();
-    let code = code_mut(method_named(&mut model, "branch"));
+    let method = method_named(&mut model, "branch");
+    let access_flags = method.access_flags;
+    let descriptor = method.descriptor.clone();
+    let code = code_mut(method);
     let insert_at = code
         .instructions
         .iter()
@@ -235,14 +238,8 @@ fn recompute_frames_allows_phase3_edit_that_used_to_fail() -> TestResult<()> {
         }),
     );
 
-    let frame_result = recompute_frames(
-        code,
-        &class_name,
-        "branch",
-        "(I)I",
-        MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
-        None,
-    )?;
+    let frame_result =
+        recompute_frames(code, &class_name, "branch", &descriptor, access_flags, None)?;
     assert!(!frame_result.frames.is_empty());
 
     let lowered = model.to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)?;

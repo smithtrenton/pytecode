@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
+import sys
+
+import pytest
 
 from tools.generate_api_docs import (
     PUBLIC_MODULES,
@@ -99,3 +104,15 @@ class TestEdgeCases:
         from pytecode.classfile.constants import MAGIC
 
         assert inspect.getdoc(MAGIC)
+
+
+@pytest.mark.parametrize("encoding", ["cp1252", "utf-8"])
+def test_docs_check_supports_console_encodings(encoding: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "tools/generate_api_docs.py", "--check"],
+        env={**os.environ, "PYTHONIOENCODING": encoding},
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode(encoding)
+    assert b"All public symbols are documented" in result.stdout

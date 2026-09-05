@@ -64,7 +64,7 @@ fn invalid_magic_and_version_return_structured_errors() {
     let err = parse_class(&invalid_version).unwrap_err();
     assert!(matches!(err.kind, EngineErrorKind::InvalidVersion { .. }));
 
-    let future_version = minimal_classfile_with_version(70, 0);
+    let future_version = minimal_classfile_with_version(71, 0);
     let err = parse_class(&future_version).unwrap_err();
     assert!(matches!(err.kind, EngineErrorKind::InvalidVersion { .. }));
 }
@@ -76,6 +76,7 @@ fn historical_and_current_preview_versions_parse_when_supported() -> TestResult<
     parse_class(&minimal_classfile_with_version(56, u16::MAX))?;
     parse_class(&minimal_classfile_with_version(68, u16::MAX))?;
     parse_class(&minimal_classfile_with_version(69, u16::MAX))?;
+    parse_class(&minimal_classfile_with_version(70, u16::MAX))?;
     Ok(())
 }
 
@@ -1012,4 +1013,196 @@ fn module_packages_attribute_payload() -> Vec<u8> {
 
 fn module_main_class_attribute_payload() -> Vec<u8> {
     u2(18).to_vec()
+}
+
+#[test]
+fn whole_class_reader_rejects_trailing_bytes() {
+    let mut bytes = minimal_classfile();
+    bytes.push(0);
+    assert!(
+        parse_class(&bytes)
+            .unwrap_err()
+            .to_string()
+            .contains("trailing bytes")
+    );
+}
+
+#[test]
+fn writer_checks_utf8_encoded_length_and_nested_attribute_counts() {
+    use pytecode_engine::raw::{ConstantPoolEntry, SyntheticAttribute, Utf8Info};
+    let mut classfile = parse_class(&minimal_classfile()).unwrap();
+    classfile
+        .constant_pool
+        .push(Some(ConstantPoolEntry::Utf8(Utf8Info {
+            bytes: vec![b'x'; 65535],
+        })));
+    assert!(write_class(&classfile).is_ok());
+    if let Some(ConstantPoolEntry::Utf8(info)) = classfile.constant_pool.last_mut().unwrap() {
+        info.bytes.push(b'x');
+    }
+    assert!(
+        write_class(&classfile)
+            .unwrap_err()
+            .to_string()
+            .contains("65536")
+    );
+    classfile.constant_pool.pop();
+    classfile.attributes = vec![
+        AttributeInfo::Synthetic(SyntheticAttribute {
+            attribute_name_index: Utf8Index::from(1),
+            attribute_length: 0,
+        });
+        65536
+    ];
+    assert!(
+        write_class(&classfile)
+            .unwrap_err()
+            .to_string()
+            .contains("65536")
+    );
+}
+
+#[test]
+fn writer_checks_u8_counts_and_code_length() {
+    use pytecode_engine::constants::MethodParameterAccessFlag;
+    use pytecode_engine::raw::{
+        CodeAttribute, Instruction, MethodParameterInfo, MethodParametersAttribute,
+    };
+    let mut classfile = parse_class(&minimal_classfile()).unwrap();
+    classfile
+        .attributes
+        .push(AttributeInfo::MethodParameters(MethodParametersAttribute {
+            attribute_name_index: Utf8Index::from(1),
+            attribute_length: 0,
+            parameters: vec![
+                MethodParameterInfo {
+                    name_index: Utf8Index::from(0),
+                    access_flags: MethodParameterAccessFlag::empty()
+                };
+                256
+            ],
+        }));
+    assert!(
+        write_class(&classfile)
+            .unwrap_err()
+            .to_string()
+            .contains("256")
+    );
+    classfile.attributes.clear();
+    for count in [0, 65536] {
+        classfile.attributes = vec![AttributeInfo::Code(CodeAttribute {
+            attribute_name_index: Utf8Index::from(1),
+            attribute_length: 0,
+            max_stack: 0,
+            max_locals: 0,
+            code_length: 0,
+            code: vec![
+                Instruction::Simple {
+                    offset: 0,
+                    opcode: 0
+                };
+                count
+            ],
+            exception_table: vec![],
+            attributes: vec![],
+        })];
+        assert!(
+            write_class(&classfile)
+                .unwrap_err()
+                .to_string()
+                .contains("Code length")
+        );
+    }
+}
+
+#[test]
+fn reserved_opcodes_and_malformed_switches_are_rejected() {
+    use pytecode_engine::parse_instructions;
+    for opcode in [0xca, 0xfe, 0xff] {
+        assert!(parse_instructions(&[opcode]).is_err());
+    }
+    let mut table = vec![0xaa, 0, 0, 0];
+    for value in [0_i32, 1, 0] {
+        table.extend_from_slice(&value.to_be_bytes());
+    }
+    assert!(
+        parse_instructions(&table)
+            .unwrap_err()
+            .to_string()
+            .contains("tableswitch range")
+    );
+    let mut lookup = vec![0xab, 0, 0, 0];
+    for value in [0_i32, 2, 2, 0, 1, 0] {
+        lookup.extend_from_slice(&value.to_be_bytes());
+    }
+    assert!(
+        parse_instructions(&lookup)
+            .unwrap_err()
+            .to_string()
+            .contains("strictly increasing")
+    );
+}
+
+#[test]
+fn nested_annotations_have_a_read_depth_budget() {
+    let mut payload = Vec::new();
+    for _ in 0..129 {
+        payload.extend_from_slice(&[b'[', 0, 1]);
+    }
+    payload.extend_from_slice(&[b'I', 0, 1]);
+    let raw = minimal_classfile_with_options(MinimalClassfileOptions {
+        extra_cp_bytes: utf8_entry_bytes("AnnotationDefault"),
+        extra_cp_count: 1,
+        class_attrs_count: 1,
+        class_attrs_bytes: make_attribute_blob(5, &payload),
+        ..MinimalClassfileOptions::default()
+    });
+    assert!(
+        parse_class(&raw)
+            .unwrap_err()
+            .to_string()
+            .contains("nesting exceeds limit")
+    );
+}
+
+#[test]
+fn nested_annotation_models_have_a_write_depth_budget() {
+    use pytecode_engine::raw::{AnnotationDefaultAttribute, ElementValueInfo};
+    let mut value = ElementValueInfo::Array { values: vec![] };
+    for _ in 0..129 {
+        value = ElementValueInfo::Array {
+            values: vec![value],
+        };
+    }
+    let mut classfile = parse_class(&minimal_classfile()).unwrap();
+    classfile.attributes.push(AttributeInfo::AnnotationDefault(
+        AnnotationDefaultAttribute {
+            attribute_name_index: Utf8Index::from(1),
+            attribute_length: 0,
+            default_value: value,
+        },
+    ));
+    assert!(
+        write_class(&classfile)
+            .unwrap_err()
+            .to_string()
+            .contains("nesting exceeds limit")
+    );
+}
+
+#[test]
+fn inspection_and_runtime_version_policies_are_distinct() {
+    use pytecode_engine::constants::{
+        class_version_compatible_with_runtime, class_version_supported,
+    };
+    assert!(class_version_supported(70, 0));
+    assert!(class_version_supported(70, 65535));
+    assert!(class_version_supported(69, 65535));
+    assert!(!class_version_supported(70, 1));
+    assert!(!class_version_supported(71, 0));
+    assert!(class_version_compatible_with_runtime(69, 0, 70, false));
+    assert!(!class_version_compatible_with_runtime(69, 65535, 70, true));
+    assert!(!class_version_compatible_with_runtime(70, 65535, 70, false));
+    assert!(class_version_compatible_with_runtime(70, 65535, 70, true));
+    assert!(!class_version_compatible_with_runtime(70, 0, 69, true));
 }

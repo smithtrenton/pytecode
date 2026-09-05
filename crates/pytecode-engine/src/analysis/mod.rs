@@ -14,7 +14,6 @@ pub use verify::{
 use crate::constants::MethodAccessFlags;
 use crate::descriptors::{
     BaseType, FieldDescriptor, ReturnType, parse_field_descriptor, parse_method_descriptor,
-    slot_size,
 };
 use crate::model::{
     BranchInsn, CodeItem, CodeModel, FieldInsn, IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn,
@@ -81,12 +80,7 @@ impl FrameState {
     }
 
     pub fn pop(&self, slots: usize) -> Result<(Self, Vec<VType>), AnalysisError> {
-        if self.stack.len() < slots {
-            return Err(AnalysisError::StackUnderflow {
-                needed: slots,
-                available: self.stack.len(),
-            });
-        }
+        self.check_stack_groups(&[slots])?;
         let remaining = self.stack[..self.stack.len() - slots].to_vec();
         let popped = self.stack[self.stack.len() - slots..]
             .iter()
@@ -120,6 +114,9 @@ impl FrameState {
         if locals.len() < index + width {
             locals.resize(index + width, VType::Top);
         }
+        if index > 0 && is_category2(&locals[index - 1]) {
+            locals[index - 1] = VType::Top;
+        }
         locals[index] = value.clone();
         if is_category2(&value) {
             locals[index + 1] = VType::Top;
@@ -146,6 +143,63 @@ impl FrameState {
 
     pub fn stack_depth(&self) -> usize {
         self.stack.len()
+    }
+
+    // Groups are expressed in slots, from the top of the stack down. Every
+    // boundary must fall between complete values, never inside a long/double.
+    fn check_stack_groups(&self, groups: &[usize]) -> Result<(), AnalysisError> {
+        let needed: usize = groups.iter().sum();
+        if self.stack.len() < needed {
+            return Err(AnalysisError::StackUnderflow {
+                needed,
+                available: self.stack.len(),
+            });
+        }
+        let mut end = self.stack.len();
+        for &group in groups {
+            let start = end - group;
+            while end > start {
+                match &self.stack[end - 1] {
+                    VType::Top if end >= start + 2 && is_category2(&self.stack[end - 2]) => {
+                        end -= 2
+                    }
+                    VType::Top | VType::Long | VType::Double => {
+                        return Err(type_error("stack operation splits a category-2 value"));
+                    }
+                    _ => end -= 1,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn pop_typed(&self, expected: &VType) -> Result<Self, AnalysisError> {
+        let width = if is_category2(expected) { 2 } else { 1 };
+        self.check_stack_groups(&[width])?;
+        let actual = &self.stack[self.stack.len() - width];
+        require_type(actual, expected)?;
+        Ok(self.pop(width)?.0)
+    }
+}
+
+fn type_error(reason: impl Into<String>) -> AnalysisError {
+    AnalysisError::InvalidControlFlow {
+        reason: reason.into(),
+    }
+}
+
+fn require_type(actual: &VType, expected: &VType) -> Result<(), AnalysisError> {
+    if actual == expected
+        || matches!(
+            (actual, expected),
+            (VType::Null | VType::Object(_), VType::Object(_))
+        )
+    {
+        Ok(())
+    } else {
+        Err(type_error(format!(
+            "expected {expected:?}, found {actual:?}"
+        )))
     }
 }
 
@@ -241,16 +295,10 @@ pub fn merge_vtypes(left: &VType, right: &VType, resolver: Option<&dyn ClassReso
         return left.clone();
     }
     match (left, right) {
-        (VType::Object(left_name), VType::Object(right_name)) => {
-            if let Some(resolver) = resolver {
-                match common_superclass(resolver, left_name, right_name) {
-                    Ok(name) => VType::Object(name),
-                    Err(_) => VType::Object(JAVA_LANG_OBJECT.to_owned()),
-                }
-            } else {
-                VType::Object(JAVA_LANG_OBJECT.to_owned())
-            }
-        }
+        (VType::Object(left_name), VType::Object(right_name)) => VType::Object(
+            hierarchy::common_reference_type(resolver, left_name, right_name)
+                .unwrap_or_else(|_| JAVA_LANG_OBJECT.to_owned()),
+        ),
         _ => VType::Top,
     }
 }
@@ -454,6 +502,9 @@ pub fn simulate(
     resolver: Option<&dyn ClassResolver>,
 ) -> Result<SimulationResult, AnalysisError> {
     let cfg = build_cfg(code)?;
+    let return_type = parse_method_descriptor(descriptor)
+        .map_err(|error| type_error(error.to_string()))?
+        .return_type;
     let mut entry_frames = vec![None; cfg.nodes.len()];
     let mut worklist = VecDeque::new();
     entry_frames[cfg.entry_node] = Some(initial_frame(
@@ -477,6 +528,28 @@ pub fn simulate(
         max_locals = max_locals.max(state.locals.len());
         let code_index = cfg.nodes[node_index].code_index;
         let item = &code.instructions[code_index];
+        if let CodeItem::Raw(raw) = item {
+            let expected = match &return_type {
+                ReturnType::Void => 0xb1,
+                ReturnType::Field(field) => match vtype_from_descriptor(field) {
+                    VType::Long => 0xad,
+                    VType::Float => 0xae,
+                    VType::Double => 0xaf,
+                    VType::Object(_) => 0xb0,
+                    _ => 0xac,
+                },
+            };
+            if (0xac..=0xb1).contains(&raw.opcode()) {
+                if raw.opcode() != expected {
+                    return Err(type_error(format!(
+                        "return opcode does not match {descriptor} at instruction {code_index}"
+                    )));
+                }
+                if method_name == "<init>" && state.locals.contains(&VType::UninitializedThis) {
+                    return Err(type_error("constructor returns before initializing this"));
+                }
+            }
+        }
 
         for exception_edge in &cfg.nodes[node_index].exception_successors {
             let stack = vec![match &exception_edge.catch_type {
@@ -502,7 +575,12 @@ pub fn simulate(
             class_name,
             code_index,
             (node_index + 1 < cfg.nodes.len()).then_some(node_index + 1),
-        )?;
+        )
+        .map_err(|error| {
+            type_error(format!(
+                "{class_name}.{method_name}{descriptor} instruction {code_index}: {error}"
+            ))
+        })?;
         max_stack = max_stack.max(next_state.stack_depth());
         max_locals = max_locals.max(next_state.locals.len());
         let normal_successors = dynamic_successors(item, &state)
@@ -521,8 +599,9 @@ pub fn simulate(
     Ok(SimulationResult {
         cfg,
         entry_frames,
-        max_stack: max_stack as u16,
-        max_locals: max_locals as u16,
+        max_stack: u16::try_from(max_stack).map_err(|_| type_error("max_stack exceeds 65535"))?,
+        max_locals: u16::try_from(max_locals)
+            .map_err(|_| type_error("max_locals exceeds 65535"))?,
     })
 }
 
@@ -635,18 +714,30 @@ fn merge_frames(
             ),
         });
     }
+    let merge = |left: &VType, right: &VType| -> Result<VType, AnalysisError> {
+        if let (VType::Object(left), VType::Object(right)) = (left, right) {
+            return hierarchy::common_reference_type(resolver, left, right).map(VType::Object);
+        }
+        Ok(merge_vtypes(left, right, resolver))
+    };
     let stack = left
         .stack
         .iter()
         .zip(&right.stack)
-        .map(|(left, right)| merge_vtypes(left, right, resolver))
-        .collect::<Vec<_>>();
+        .map(|(left, right)| {
+            let value = merge(left, right)?;
+            if value == VType::Top && left != right {
+                return Err(type_error("incompatible operand stack types at join"));
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, AnalysisError>>()?;
     let max_locals = left.locals.len().max(right.locals.len());
     let mut locals = Vec::with_capacity(max_locals);
     for index in 0..max_locals {
         let left_value = left.locals.get(index).unwrap_or(&VType::Top);
         let right_value = right.locals.get(index).unwrap_or(&VType::Top);
-        locals.push(merge_vtypes(left_value, right_value, resolver));
+        locals.push(merge(left_value, right_value)?);
     }
     Ok(FrameState { stack, locals })
 }
@@ -670,10 +761,7 @@ fn simulate_item(
         CodeItem::Ldc(insn) => simulate_ldc(insn, state),
         CodeItem::MultiANewArray(insn) => simulate_multianewarray(insn, state),
         CodeItem::Branch(branch) => simulate_branch(branch, state, next_node),
-        CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_) => {
-            let (next, _) = state.pop(1)?;
-            Ok(next)
-        }
+        CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_) => state.pop_typed(&VType::Integer),
         CodeItem::Label(_) => Err(AnalysisError::InvalidControlFlow {
             reason: "labels do not execute".to_owned(),
         }),
@@ -681,27 +769,34 @@ fn simulate_item(
 }
 
 fn simulate_var(var: &VarInsn, state: &FrameState) -> Result<FrameState, AnalysisError> {
+    let primitive = match var.opcode {
+        0x15 | 0x36 => Some(VType::Integer),
+        0x16 | 0x37 => Some(VType::Long),
+        0x17 | 0x38 => Some(VType::Float),
+        0x18 | 0x39 => Some(VType::Double),
+        _ => None,
+    };
+    if let Some(expected) = primitive {
+        if var.opcode <= 0x18 {
+            let actual = state.get_local(var.slot as usize)?;
+            require_type(actual, &expected)?;
+            if is_category2(actual) && state.locals.get(var.slot as usize + 1) != Some(&VType::Top)
+            {
+                return Err(type_error("category-2 local is missing its second slot"));
+            }
+            return Ok(state.push([expected]));
+        }
+        return Ok(state
+            .pop_typed(&expected)?
+            .set_local(var.slot as usize, expected));
+    }
     match var.opcode {
-        0x15 => Ok(state.push([VType::Integer])),
-        0x16 => Ok(state.push([VType::Long])),
-        0x17 => Ok(state.push([VType::Float])),
-        0x18 => Ok(state.push([VType::Double])),
-        0x19 => Ok(state.push([state.get_local(var.slot as usize)?.clone()])),
-        0x36 => {
-            let (next, _) = state.pop(1)?;
-            Ok(next.set_local(var.slot as usize, VType::Integer))
-        }
-        0x37 => {
-            let (next, _) = state.pop(2)?;
-            Ok(next.set_local(var.slot as usize, VType::Long))
-        }
-        0x38 => {
-            let (next, _) = state.pop(1)?;
-            Ok(next.set_local(var.slot as usize, VType::Float))
-        }
-        0x39 => {
-            let (next, _) = state.pop(2)?;
-            Ok(next.set_local(var.slot as usize, VType::Double))
+        0x19 => {
+            let value = state.get_local(var.slot as usize)?;
+            if !is_reference(value) {
+                return Err(type_error("aload requires a reference local"));
+            }
+            Ok(state.push([value.clone()]))
         }
         0x3A => {
             let (next, popped) = state.pop(1)?;
@@ -712,6 +807,9 @@ fn simulate_var(var: &VarInsn, state: &FrameState) -> Result<FrameState, Analysi
                     needed: 1,
                     available: 0,
                 })?;
+            if !is_reference(&value) && !matches!(value, VType::ReturnAddress(_)) {
+                return Err(type_error("astore requires a reference or returnAddress"));
+            }
             Ok(next.set_local(var.slot as usize, value))
         }
         0xA9 => {
@@ -747,20 +845,21 @@ fn simulate_field(field: &FieldInsn, state: &FrameState) -> Result<FrameState, A
         }
     })?;
     let field_type = vtype_from_descriptor(&descriptor);
-    let field_slots = slot_size(&descriptor);
     match field.opcode {
         0xB2 => Ok(state.push([field_type])),
-        0xB3 => {
-            let (next, _) = state.pop(field_slots)?;
-            Ok(next)
-        }
+        0xB3 => state.pop_typed(&field_type),
         0xB4 => {
-            let (next, _) = state.pop(1)?;
+            let next = state.pop_typed(&VType::Object(field.owner.clone()))?;
             Ok(next.push([field_type]))
         }
         0xB5 => {
-            let (next, _) = state.pop(field_slots + 1)?;
-            Ok(next)
+            let next = state.pop_typed(&field_type)?;
+            // A constructor may assign its own fields before invoking super.
+            if next.peek(0)? == &VType::UninitializedThis {
+                Ok(next.pop(1)?.0)
+            } else {
+                next.pop_typed(&VType::Object(field.owner.clone()))
+            }
         }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
     }
@@ -769,23 +868,33 @@ fn simulate_field(field: &FieldInsn, state: &FrameState) -> Result<FrameState, A
 fn simulate_method(
     method: &MethodInsn,
     state: &FrameState,
-    _class_name: &str,
+    class_name: &str,
 ) -> Result<FrameState, AnalysisError> {
     let parsed = parse_method_descriptor(&method.descriptor).map_err(|error| {
         AnalysisError::InvalidControlFlow {
             reason: error.to_string(),
         }
     })?;
-    let arg_slots = parsed.parameter_types.iter().map(slot_size).sum::<usize>();
-    let (after_args, _) = state.pop(arg_slots)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types)?;
     let receiver_state = if method.opcode == 0xB8 {
         after_args
     } else {
         let (after_receiver, receiver) = after_args.pop(1)?;
         if method.opcode == 0xB7 && method.name == "<init>" {
-            let replacement = VType::Object(method.owner.clone());
+            let replacement = match receiver.first() {
+                Some(VType::UninitializedThis) => VType::Object(class_name.to_owned()),
+                Some(VType::Uninitialized { class_name, .. }) if *class_name == method.owner => {
+                    VType::Object(class_name.clone())
+                }
+                _ => {
+                    return Err(type_error(
+                        "invokespecial <init> requires a matching uninitialized receiver",
+                    ));
+                }
+            };
             initialize_receiver(&after_receiver, receiver.first().cloned(), replacement)
         } else {
+            require_type(&receiver[0], &VType::Object(method.owner.clone()))?;
             after_receiver
         }
     };
@@ -804,9 +913,8 @@ fn simulate_interface_method(
             reason: error.to_string(),
         }
     })?;
-    let arg_slots = parsed.parameter_types.iter().map(slot_size).sum::<usize>();
-    let (after_args, _) = state.pop(arg_slots)?;
-    let (after_receiver, _) = after_args.pop(1)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types)?;
+    let after_receiver = after_args.pop_typed(&VType::Object(method.owner.clone()))?;
     match &parsed.return_type {
         ReturnType::Void => Ok(after_receiver),
         ReturnType::Field(field) => Ok(after_receiver.push([vtype_from_descriptor(field)])),
@@ -822,12 +930,22 @@ fn simulate_invokedynamic(
             reason: error.to_string(),
         }
     })?;
-    let arg_slots = parsed.parameter_types.iter().map(slot_size).sum::<usize>();
-    let (after_args, _) = state.pop(arg_slots)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types)?;
     match &parsed.return_type {
         ReturnType::Void => Ok(after_args),
         ReturnType::Field(field) => Ok(after_args.push([vtype_from_descriptor(field)])),
     }
+}
+
+fn pop_arguments(
+    state: &FrameState,
+    parameters: &[FieldDescriptor],
+) -> Result<FrameState, AnalysisError> {
+    let mut next = state.clone();
+    for parameter in parameters.iter().rev() {
+        next = next.pop_typed(&vtype_from_descriptor(parameter))?;
+    }
+    Ok(next)
 }
 
 fn simulate_type(
@@ -841,15 +959,15 @@ fn simulate_type(
             class_name: insn.descriptor.clone(),
         }])),
         0xBD => {
-            let (next, _) = state.pop(1)?;
+            let next = state.pop_typed(&VType::Integer)?;
             Ok(next.push([VType::Object(anewarray_descriptor(&insn.descriptor))]))
         }
         0xC0 => {
-            let (next, _) = state.pop(1)?;
+            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()))?;
             Ok(next.push([VType::Object(insn.descriptor.clone())]))
         }
         0xC1 => {
-            let (next, _) = state.pop(1)?;
+            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()))?;
             Ok(next.push([VType::Integer]))
         }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
@@ -882,7 +1000,10 @@ fn simulate_multianewarray(
     insn: &MultiANewArrayInsn,
     state: &FrameState,
 ) -> Result<FrameState, AnalysisError> {
-    let (next, _) = state.pop(insn.dimensions as usize)?;
+    let mut next = state.clone();
+    for _ in 0..insn.dimensions {
+        next = next.pop_typed(&VType::Integer)?;
+    }
     Ok(next.push([VType::Object(insn.descriptor.clone())]))
 }
 
@@ -891,14 +1012,16 @@ fn simulate_branch(
     state: &FrameState,
     next_node: Option<usize>,
 ) -> Result<FrameState, AnalysisError> {
-    let pops = match branch.opcode {
-        0x99..=0x9E | 0xC6 | 0xC7 => 1,
-        0x9F..=0xA6 => 2,
-        0xA7 => 0,
-        0xA8 => return simulate_jsr(state, next_node),
-        opcode => return Err(AnalysisError::UnsupportedInstruction { opcode }),
-    };
-    Ok(state.pop(pops)?.0)
+    let reference = VType::Object(JAVA_LANG_OBJECT.to_owned());
+    match branch.opcode {
+        0x99..=0x9E => state.pop_typed(&VType::Integer),
+        0xC6 | 0xC7 => state.pop_typed(&reference),
+        0x9F..=0xA4 => state.pop_typed(&VType::Integer)?.pop_typed(&VType::Integer),
+        0xA5..=0xA6 => state.pop_typed(&reference)?.pop_typed(&reference),
+        0xA7 => Ok(state.clone()),
+        0xA8 => simulate_jsr(state, next_node),
+        opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
+    }
 }
 
 fn simulate_jsr(state: &FrameState, next_node: Option<usize>) -> Result<FrameState, AnalysisError> {
@@ -924,6 +1047,15 @@ fn simulate_raw_opcode(
     raw: &crate::raw::Instruction,
     _code_index: usize,
 ) -> Result<FrameState, AnalysisError> {
+    match opcode {
+        0x59 => state.check_stack_groups(&[1])?,
+        0x5a | 0x5f => state.check_stack_groups(&[1, 1])?,
+        0x5b => state.check_stack_groups(&[1, 2])?,
+        0x5c => state.check_stack_groups(&[2])?,
+        0x5d => state.check_stack_groups(&[2, 1])?,
+        0x5e => state.check_stack_groups(&[2, 2])?,
+        _ => {}
+    }
     match opcode {
         0x00 => Ok(state.clone()),
         0x01 => Ok(state.push([VType::Null])),
@@ -1008,65 +1140,81 @@ fn simulate_raw_opcode(
                 locals: state.locals.clone(),
             })
         }
-        0x60 | 0x64 | 0x68 | 0x6C | 0x70 | 0x74 | 0x78 | 0x7A | 0x7C | 0x7E | 0x80 | 0x82 => {
-            Ok(state.pop(2)?.0.push([VType::Integer]))
-        }
-        0x61 | 0x65 | 0x69 | 0x6D | 0x71 | 0x75 | 0x79 | 0x7B | 0x7D | 0x7F | 0x81 | 0x83 => {
-            Ok(state.pop(4)?.0.push([VType::Long]))
-        }
-        0x62 | 0x66 | 0x6A | 0x6E | 0x72 | 0x76 => Ok(state.pop(2)?.0.push([VType::Float])),
-        0x63 | 0x67 | 0x6B | 0x6F | 0x73 | 0x77 => Ok(state.pop(4)?.0.push([VType::Double])),
-        0x85 => Ok(state.pop(1)?.0.push([VType::Long])),
-        0x86 => Ok(state.pop(1)?.0.push([VType::Float])),
-        0x87 => Ok(state.pop(1)?.0.push([VType::Double])),
-        0x88 => Ok(state.pop(2)?.0.push([VType::Integer])),
-        0x89 => Ok(state.pop(2)?.0.push([VType::Float])),
-        0x8A => Ok(state.pop(2)?.0.push([VType::Double])),
-        0x8B | 0x91 | 0x92 | 0x93 => Ok(state.pop(1)?.0.push([VType::Integer])),
-        0x8C => Ok(state.pop(1)?.0.push([VType::Long])),
-        0x8D => Ok(state.pop(1)?.0.push([VType::Double])),
-        0x8E => Ok(state.pop(2)?.0.push([VType::Integer])),
-        0x8F => Ok(state.pop(2)?.0.push([VType::Long])),
-        0x90 => Ok(state.pop(2)?.0.push([VType::Float])),
+        0x74 => Ok(state.pop_typed(&VType::Integer)?.push([VType::Integer])),
+        0x75 => Ok(state.pop_typed(&VType::Long)?.push([VType::Long])),
+        0x76 => Ok(state.pop_typed(&VType::Float)?.push([VType::Float])),
+        0x77 => Ok(state.pop_typed(&VType::Double)?.push([VType::Double])),
+        0x79 | 0x7b | 0x7d => Ok(state
+            .pop_typed(&VType::Integer)?
+            .pop_typed(&VType::Long)?
+            .push([VType::Long])),
+        0x60 | 0x64 | 0x68 | 0x6C | 0x70 | 0x78 | 0x7A | 0x7C | 0x7E | 0x80 | 0x82 => Ok(state
+            .pop_typed(&VType::Integer)?
+            .pop_typed(&VType::Integer)?
+            .push([VType::Integer])),
+        0x61 | 0x65 | 0x69 | 0x6D | 0x71 | 0x7F | 0x81 | 0x83 => Ok(state
+            .pop_typed(&VType::Long)?
+            .pop_typed(&VType::Long)?
+            .push([VType::Long])),
+        0x62 | 0x66 | 0x6A | 0x6E | 0x72 => Ok(state
+            .pop_typed(&VType::Float)?
+            .pop_typed(&VType::Float)?
+            .push([VType::Float])),
+        0x63 | 0x67 | 0x6B | 0x6F | 0x73 => Ok(state
+            .pop_typed(&VType::Double)?
+            .pop_typed(&VType::Double)?
+            .push([VType::Double])),
+        0x85 => Ok(state.pop_typed(&VType::Integer)?.push([VType::Long])),
+        0x86 => Ok(state.pop_typed(&VType::Integer)?.push([VType::Float])),
+        0x87 => Ok(state.pop_typed(&VType::Integer)?.push([VType::Double])),
+        0x88 => Ok(state.pop_typed(&VType::Long)?.push([VType::Integer])),
+        0x89 => Ok(state.pop_typed(&VType::Long)?.push([VType::Float])),
+        0x8A => Ok(state.pop_typed(&VType::Long)?.push([VType::Double])),
+        0x8B => Ok(state.pop_typed(&VType::Float)?.push([VType::Integer])),
+        0x91..=0x93 => Ok(state.pop_typed(&VType::Integer)?.push([VType::Integer])),
+        0x8C => Ok(state.pop_typed(&VType::Float)?.push([VType::Long])),
+        0x8D => Ok(state.pop_typed(&VType::Float)?.push([VType::Double])),
+        0x8E => Ok(state.pop_typed(&VType::Double)?.push([VType::Integer])),
+        0x8F => Ok(state.pop_typed(&VType::Double)?.push([VType::Long])),
+        0x90 => Ok(state.pop_typed(&VType::Double)?.push([VType::Float])),
         0x94..=0x98 => {
-            let pops = if opcode == 0x94 || opcode >= 0x97 {
-                4
-            } else {
-                2
+            let expected = match opcode {
+                0x94 => VType::Long,
+                0x95 | 0x96 => VType::Float,
+                _ => VType::Double,
             };
-            Ok(state.pop(pops)?.0.push([VType::Integer]))
+            Ok(state
+                .pop_typed(&expected)?
+                .pop_typed(&expected)?
+                .push([VType::Integer]))
         }
-        0x2E | 0x33..=0x35 => Ok(state.pop(2)?.0.push([VType::Integer])),
-        0x2F => Ok(state.pop(2)?.0.push([VType::Long])),
-        0x30 => Ok(state.pop(2)?.0.push([VType::Float])),
-        0x31 => Ok(state.pop(2)?.0.push([VType::Double])),
-        0x32 => {
-            let (next, popped) = state.pop(2)?;
-            let array = popped
-                .get(1)
-                .cloned()
-                .unwrap_or(VType::Object(JAVA_LANG_OBJECT.to_owned()));
-            Ok(next.push([aaload_type(&array)]))
+        0x2e..=0x35 => {
+            let next = state.pop_typed(&VType::Integer)?;
+            let (next, array) = pop_array(&next)?;
+            Ok(next.push([array_element_type(opcode, &array)?]))
         }
-        0x4F | 0x51 | 0x53..=0x56 => Ok(state.pop(3)?.0),
-        0x50 | 0x52 => Ok(state.pop(4)?.0),
-        0xAC | 0xAE | 0xB0 | 0xBE | 0xC2 | 0xC3 => {
-            let push = if opcode == 0xBE {
-                Some(VType::Integer)
-            } else {
-                None
+        0x4f..=0x56 => {
+            let expected = match opcode {
+                0x50 => VType::Long,
+                0x51 => VType::Float,
+                0x52 => VType::Double,
+                0x53 => VType::Object(JAVA_LANG_OBJECT.to_owned()),
+                _ => VType::Integer,
             };
-            let next = state.pop(1)?.0;
-            Ok(match push {
-                Some(value) => next.push([value]),
-                None => next,
-            })
+            let next = state.pop_typed(&expected)?.pop_typed(&VType::Integer)?;
+            let (next, array) = pop_array(&next)?;
+            array_element_type(opcode - 0x21, &array)?;
+            Ok(next)
         }
-        0xAD | 0xAF => Ok(state.pop(2)?.0),
+        0xAC => state.pop_typed(&VType::Integer),
+        0xAD => state.pop_typed(&VType::Long),
+        0xAE => state.pop_typed(&VType::Float),
+        0xAF => state.pop_typed(&VType::Double),
+        0xB0 | 0xBF | 0xC2 | 0xC3 => state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned())),
+        0xBE => Ok(pop_array(state)?.0.push([VType::Integer])),
         0xB1 => Ok(state.clone()),
-        0xBF => Ok(state.pop(1)?.0),
         0xBC => {
-            let (next, _) = state.pop(1)?;
+            let next = state.pop_typed(&VType::Integer)?;
             let descriptor = match raw {
                 crate::raw::Instruction::NewArray(insn) => newarray_descriptor(insn.atype),
                 _ => "[I".to_owned(),
@@ -1075,6 +1223,43 @@ fn simulate_raw_opcode(
         }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
     }
+}
+
+fn pop_array(state: &FrameState) -> Result<(FrameState, VType), AnalysisError> {
+    let value = state.peek(0)?.clone();
+    if !matches!(&value, VType::Null)
+        && !matches!(&value, VType::Object(name) if name.starts_with('['))
+    {
+        return Err(type_error("array instruction requires an array reference"));
+    }
+    Ok((state.pop(1)?.0, value))
+}
+
+fn array_element_type(opcode: u8, array: &VType) -> Result<VType, AnalysisError> {
+    let (descriptors, value): (&[&str], _) = match opcode {
+        0x2e => (&["[I"], VType::Integer),
+        0x2f => (&["[J"], VType::Long),
+        0x30 => (&["[F"], VType::Float),
+        0x31 => (&["[D"], VType::Double),
+        0x32 => (&[], aaload_type(array)),
+        0x33 => (&["[B", "[Z"], VType::Integer),
+        0x34 => (&["[C"], VType::Integer),
+        0x35 => (&["[S"], VType::Integer),
+        _ => return Err(AnalysisError::UnsupportedInstruction { opcode }),
+    };
+    if let VType::Object(name) = array {
+        let valid = if opcode == 0x32 {
+            name.starts_with("[L") || name.starts_with("[[")
+        } else {
+            descriptors.contains(&name.as_str())
+        };
+        if !valid {
+            return Err(type_error(format!(
+                "array type {name} does not match opcode {opcode:02x}"
+            )));
+        }
+    }
+    Ok(value)
 }
 
 fn initialize_receiver(

@@ -879,7 +879,7 @@ fn build_code_replacement_item(
             CodeItem::Label(label.clone())
         }
         CodeReplacementItem::LdcString { value } => CodeItem::Ldc(LdcInsn {
-            value: LdcValue::String(value.clone()),
+            value: LdcValue::String(value.clone().into()),
         }),
         CodeReplacementItem::Field {
             opcode,

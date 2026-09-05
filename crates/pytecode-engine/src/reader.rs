@@ -1,4 +1,28 @@
 use crate::bytes::ByteReader;
+use std::cell::Cell;
+
+struct ReadDepth<'a>(&'a Cell<usize>);
+
+impl<'a> ReadDepth<'a> {
+    fn enter(depth: &'a Cell<usize>, offset: usize) -> Result<Self> {
+        if depth.get() >= 128 {
+            return Err(EngineError::new(
+                offset,
+                EngineErrorKind::InvalidAttribute {
+                    reason: "attribute/annotation nesting exceeds limit of 128".to_owned(),
+                },
+            ));
+        }
+        depth.set(depth.get() + 1);
+        Ok(Self(depth))
+    }
+}
+
+impl Drop for ReadDepth<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
 use crate::constants::{
     ClassAccessFlags, FieldAccessFlags, MAGIC, MethodAccessFlags, MethodParameterAccessFlag,
     ModuleAccessFlag, ModuleExportsAccessFlag, ModuleOpensAccessFlag, ModuleRequiresAccessFlag,
@@ -43,6 +67,7 @@ use crate::raw::instructions::{
 pub struct ClassReader<'a> {
     reader: ByteReader<'a>,
     constant_pool: Vec<Option<ConstantPoolEntry>>,
+    nesting_depth: Cell<usize>,
 }
 
 impl<'a> ClassReader<'a> {
@@ -50,6 +75,7 @@ impl<'a> ClassReader<'a> {
         Self {
             reader: ByteReader::new(bytes),
             constant_pool: Vec::new(),
+            nesting_depth: Cell::new(0),
         }
     }
 
@@ -112,6 +138,14 @@ impl<'a> ClassReader<'a> {
             .map(|_| self.read_attribute())
             .collect::<Result<Vec<_>>>()?;
 
+        if self.reader.remaining() != 0 {
+            return Err(EngineError::new(
+                self.reader.offset(),
+                EngineErrorKind::InvalidAttribute {
+                    reason: "trailing bytes after classfile".to_owned(),
+                },
+            ));
+        }
         Ok(ClassFile {
             magic,
             minor_version,
@@ -201,6 +235,7 @@ impl<'a> ClassReader<'a> {
         error_offset: usize,
         consume_error_reason: &str,
     ) -> Result<AttributeInfo> {
+        let _depth = ReadDepth::enter(&self.nesting_depth, error_offset)?;
         let mut payload_reader = ByteReader::new(payload);
         let attribute = match name {
             "Synthetic" => AttributeInfo::Synthetic(SyntheticAttribute {
@@ -820,6 +855,7 @@ impl<'a> ClassReader<'a> {
         payload_reader: &mut ByteReader<'_>,
         error_offset: usize,
     ) -> Result<ElementValueInfo> {
+        let _depth = ReadDepth::enter(&self.nesting_depth, error_offset)?;
         let tag = payload_reader.read_u1()?;
         match ElementValueTag::from_tag(tag) {
             Some(
@@ -1193,6 +1229,17 @@ pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                if pairs
+                    .windows(2)
+                    .any(|pair| pair[0].match_value >= pair[1].match_value)
+                {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: "lookupswitch keys must be strictly increasing".to_owned(),
+                        },
+                    ));
+                }
                 Instruction::LookupSwitch(LookupSwitchInsn {
                     offset,
                     default_offset,
@@ -1208,13 +1255,7 @@ pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 let count = high
                     .checked_sub(low)
                     .and_then(|delta| delta.checked_add(1))
-                    .and_then(|c| {
-                        if (0..=65536).contains(&c) {
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
+                    .filter(|c| (1..=65536).contains(c))
                     .ok_or_else(|| {
                         EngineError::new(
                             reader.offset(),

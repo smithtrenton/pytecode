@@ -160,7 +160,7 @@ impl CodeTransformSpec {
                         && let LdcValue::String(value) = &mut insn.value
                         && value == from
                     {
-                        *value = to.clone();
+                        *value = to.clone().into();
                     }
                 }
             }

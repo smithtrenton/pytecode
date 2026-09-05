@@ -710,7 +710,7 @@ def test_rewrite_is_atomic_when_transform_fails(tmp_path: Path):
     assert jar_path.read_bytes() == original_bytes
 
 
-def test_rewrite_preserves_in_memory_state_when_post_write_refresh_fails(
+def test_rewrite_preserves_disk_and_memory_when_staged_refresh_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -722,16 +722,20 @@ def test_rewrite_preserves_in_memory_state_when_post_write_refresh_fails(
     jar = JarFile(jar_path)
     original_filename = jar.filename
     original_keys = list(jar.files)
+    original_bytes = jar_path.read_bytes()
+    original_paths = set(tmp_path.iterdir())
+    jar.add_file("new.txt", b"must not be committed")
+    original_keys = list(jar.files)
 
     real_read_archive_state = jar_module._read_archive_state
     should_fail = True
 
-    def flaky_read_archive_state(filename: str | Path):
+    def flaky_read_archive_state(filename: str | Path, **limits: int):
         nonlocal should_fail
         if should_fail:
             should_fail = False
             raise OSError("refresh failed")
-        return real_read_archive_state(filename)
+        return real_read_archive_state(filename, **limits)
 
     monkeypatch.setattr(jar_module, "_read_archive_state", flaky_read_archive_state)
 
@@ -740,3 +744,5 @@ def test_rewrite_preserves_in_memory_state_when_post_write_refresh_fails(
 
     assert jar.filename == original_filename
     assert list(jar.files) == original_keys
+    assert jar_path.read_bytes() == original_bytes
+    assert set(tmp_path.iterdir()) == original_paths

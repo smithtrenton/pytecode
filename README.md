@@ -8,7 +8,7 @@ It is built for Python tooling that needs direct access to Java bytecode: classf
 
 - Parse `.class` files into typed Python objects backed by the Rust engine.
 - Edit classes, fields, methods, and bytecode through a mutable symbolic model.
-- Rewrite JAR files while preserving non-class resources and ZIP metadata.
+- Rewrite JAR files while preserving non-class resources and supported ZIP metadata.
 - Recompute `max_stack`, `max_locals`, and `StackMapTable` when requested.
 - Validate parsed classfiles and edited models before emission.
 - Work with descriptors, signatures, labels, symbolic operands, constant pools, and debug-info policies.
@@ -32,6 +32,12 @@ If a matching wheel is unavailable, `pip`/`uv` falls back to a source build,
 which requires a working Rust toolchain.
 
 `pytecode` requires Python `3.12+`.
+
+This source supports inspection through Java 26 (classfile major 70), with separate
+runtime rules for preview files. See [compatibility and resource limits](docs/project/compatibility-and-limits.md)
+for tested behavior, Java strings, archive metadata, and thread ownership. Structural
+validation and frame recomputation have targeted JVM-backed coverage; they are not
+a complete JVM verifier.
 
 ## Quick start
 

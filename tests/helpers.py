@@ -7,7 +7,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-TEST_RESOURCES = Path(__file__).resolve().parent / "resources"
+# Share fixture inputs; Python javac/JVM execution remains independent of Rust tests.
+TEST_RESOURCES = Path(__file__).resolve().parents[1] / "crates/pytecode-engine/fixtures/java"
 
 
 def _jdk_tool(name: str) -> str:

@@ -2,7 +2,10 @@ use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule};
 use pyo3::wrap_pyfunction;
-use pytecode_archive::{ArchiveError, JarEntryMetadata, JarFile, JarInfo, RewriteOptions};
+use pytecode_archive::{
+    ArchiveError, ArchiveReadLimits, JarEntryMetadata, JarFile, JarInfo, PreparedRewrite,
+    RewriteOptions,
+};
 use pytecode_engine::error::{EngineError, EngineErrorKind};
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::ApplyClassTransform;
@@ -20,6 +23,33 @@ use crate::transforms::{PyClassTransform, PyCompiledPipeline, PyPipeline};
 const CALLBACK_ABORT_REASON: &str = "__pytecode_archive_python_callback_failed__";
 const PYTHON_TRANSFORM_RETURN_ERROR: &str =
     "JarFile.rewrite() Python transforms must mutate ClassModel in place and return None";
+
+#[pyclass(module = "pytecode._rust", name = "_PreparedArchiveRewrite")]
+struct PyPreparedArchiveRewrite {
+    jar: JarFile,
+    prepared: Option<PreparedRewrite>,
+}
+
+#[pymethods]
+impl PyPreparedArchiveRewrite {
+    #[getter]
+    fn path(&self) -> PyResult<PathBuf> {
+        Ok(self
+            .prepared
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("rewrite already committed"))?
+            .path()
+            .to_path_buf())
+    }
+
+    fn commit(&mut self) -> PyResult<PathBuf> {
+        self.prepared
+            .take()
+            .ok_or_else(|| PyValueError::new_err("rewrite already committed"))?
+            .commit(&mut self.jar)
+            .map_err(archive_error_to_py)
+    }
+}
 
 fn archive_error_to_py(error: ArchiveError) -> PyErr {
     match error {
@@ -160,7 +190,7 @@ impl PyArchiveEntryState {
                 last_modified.minute(),
                 last_modified.second(),
             ),
-            system: 255,
+            system: metadata.system.into(),
             unix_mode: metadata.unix_mode,
             is_dir: metadata.is_dir,
             comment: metadata.comment,
@@ -330,8 +360,8 @@ fn rewrite_with_callback_transform(
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
     callback_error: &Arc<Mutex<Option<PyErr>>>,
-) -> PyResult<PathBuf> {
-    match jar.rewrite(output_path.as_deref(), Some(transform), options) {
+) -> PyResult<PreparedRewrite> {
+    match jar.prepare_rewrite(output_path.as_deref(), Some(transform), options) {
         Ok(path) => {
             if let Some(err) = take_callback_error(callback_error) {
                 return Err(err);
@@ -354,7 +384,7 @@ fn rewrite_with_pipeline(
     pipeline: PyRef<'_, PyPipeline>,
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
-) -> PyResult<PathBuf> {
+) -> PyResult<PreparedRewrite> {
     if pipeline.contains_python_callbacks() {
         let compiled = pipeline.compile_internal();
         let callback_error = Arc::new(Mutex::new(None));
@@ -373,7 +403,7 @@ fn rewrite_with_pipeline(
 
     let compiled = pipeline.spec.compile();
     let mut wrapped = CompiledPipelineArchiveTransform { inner: &compiled };
-    jar.rewrite(output_path.as_deref(), Some(&mut wrapped), options)
+    jar.prepare_rewrite(output_path.as_deref(), Some(&mut wrapped), options)
         .map_err(archive_error_to_py)
 }
 
@@ -382,7 +412,7 @@ fn rewrite_with_compiled_pipeline(
     pipeline: PyRef<'_, PyCompiledPipeline>,
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
-) -> PyResult<PathBuf> {
+) -> PyResult<PreparedRewrite> {
     if pipeline.contains_python_callbacks {
         let callback_error = Arc::new(Mutex::new(None));
         let mut wrapped = CallbackCompiledPipelineArchiveTransform {
@@ -401,7 +431,7 @@ fn rewrite_with_compiled_pipeline(
     let mut wrapped = CompiledPipelineArchiveTransform {
         inner: &pipeline.inner,
     };
-    jar.rewrite(output_path.as_deref(), Some(&mut wrapped), options)
+    jar.prepare_rewrite(output_path.as_deref(), Some(&mut wrapped), options)
         .map_err(archive_error_to_py)
 }
 
@@ -410,7 +440,7 @@ fn rewrite_with_python_callable(
     transform: &Bound<'_, PyAny>,
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
-) -> PyResult<PathBuf> {
+) -> PyResult<PreparedRewrite> {
     let callback_error = Arc::new(Mutex::new(None));
     let mut wrapped = PythonCallableArchiveTransform {
         callback: transform.clone().unbind(),
@@ -439,7 +469,7 @@ fn rewrite_with_transform(
     transform: &Bound<'_, PyAny>,
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
-) -> PyResult<PathBuf> {
+) -> PyResult<PreparedRewrite> {
     if let Ok(owner) = transform.getattr("__self__")
         && !owner.is_none()
     {
@@ -464,7 +494,7 @@ fn rewrite_with_transform(
             inner: &transform.spec,
         };
         return jar
-            .rewrite(output_path.as_deref(), Some(&mut wrapped), options)
+            .prepare_rewrite(output_path.as_deref(), Some(&mut wrapped), options)
             .map_err(archive_error_to_py);
     }
 
@@ -502,11 +532,13 @@ fn rewrite_archive_with_rust_transform(
 ) -> PyResult<PathBuf> {
     let options = rewrite_options(frame_mode, resolver, debug_info)?;
     let mut jar = JarFile::open(&source_path).map_err(archive_error_to_py)?;
-    rewrite_with_transform(&mut jar, transform, output_path, options)
+    rewrite_with_transform(&mut jar, transform, output_path, options)?
+        .commit(&mut jar)
+        .map_err(archive_error_to_py)
 }
 
 #[pyfunction]
-#[pyo3(signature = (source_path, entries, transform=None, output_path=None, frame_mode=None, resolver=None, debug_info="preserve"))]
+#[pyo3(signature = (source_path, entries, transform=None, output_path=None, frame_mode=None, resolver=None, debug_info="preserve", *, max_entries=100_000, max_entry_bytes=268_435_456, max_total_bytes=1_073_741_824))]
 #[allow(clippy::too_many_arguments)]
 fn rewrite_archive_state(
     py: Python<'_>,
@@ -517,20 +549,46 @@ fn rewrite_archive_state(
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: &str,
-) -> PyResult<PathBuf> {
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+) -> PyResult<PyPreparedArchiveRewrite> {
     let options = rewrite_options(frame_mode, resolver, debug_info)?;
     let mut jar = jar_from_state(py, source_path, entries)?;
-    if let Some(transform) = transform {
+    jar.read_limits = ArchiveReadLimits {
+        max_entries,
+        max_entry_bytes,
+        max_total_bytes,
+    };
+    let prepared = if let Some(transform) = transform {
         rewrite_with_transform(&mut jar, transform, output_path, options)
     } else {
-        jar.rewrite(output_path.as_deref(), None, options)
+        jar.prepare_rewrite(output_path.as_deref(), None, options)
             .map_err(archive_error_to_py)
-    }
+    }?;
+    Ok(PyPreparedArchiveRewrite {
+        jar,
+        prepared: Some(prepared),
+    })
 }
 
 #[pyfunction]
-fn read_archive_state(source_path: PathBuf) -> PyResult<Vec<PyArchiveEntryState>> {
-    let jar = JarFile::open(&source_path).map_err(archive_error_to_py)?;
+#[pyo3(signature = (source_path, *, max_entries=100_000, max_entry_bytes=268_435_456, max_total_bytes=1_073_741_824))]
+fn read_archive_state(
+    source_path: PathBuf,
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+) -> PyResult<Vec<PyArchiveEntryState>> {
+    let jar = JarFile::open_with_limits(
+        &source_path,
+        ArchiveReadLimits {
+            max_entries,
+            max_entry_bytes,
+            max_total_bytes,
+        },
+    )
+    .map_err(archive_error_to_py)?;
     jar.entries
         .into_iter()
         .map(PyArchiveEntryState::from_jar_info)
@@ -538,6 +596,7 @@ fn read_archive_state(source_path: PathBuf) -> PyResult<Vec<PyArchiveEntryState>
 }
 
 pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<PyPreparedArchiveRewrite>()?;
     module.add_class::<PyArchiveEntryState>()?;
     module.add_function(wrap_pyfunction!(read_archive_state, module)?)?;
     module.add_function(wrap_pyfunction!(

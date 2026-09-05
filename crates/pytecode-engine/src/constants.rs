@@ -311,18 +311,32 @@ impl TypePathKind {
 }
 
 pub const MIN_SUPPORTED_CLASS_MAJOR: u16 = 45;
-pub const MAX_SUPPORTED_CLASS_MAJOR: u16 = 69;
+pub const MAX_SUPPORTED_CLASS_MAJOR: u16 = 70;
 
-pub const fn class_version_supported_by_java_se_25(major: u16, minor: u16) -> bool {
+/// Versions accepted for inspection, including historical preview classfiles.
+pub const fn class_version_supported(major: u16, minor: u16) -> bool {
     match major {
         45..=55 => true,
-        56..=69 => minor == 0 || minor == u16::MAX,
+        56..=MAX_SUPPORTED_CLASS_MAJOR => minor == 0 || minor == u16::MAX,
         _ => false,
     }
 }
 
+/// Version compatibility only; class structure and bytecode still need verification.
+pub const fn class_version_compatible_with_runtime(
+    major: u16,
+    minor: u16,
+    runtime_major: u16,
+    enable_preview: bool,
+) -> bool {
+    class_version_supported(major, minor)
+        && runtime_major <= MAX_SUPPORTED_CLASS_MAJOR
+        && major <= runtime_major
+        && (major < 56 || minor != u16::MAX || (major == runtime_major && enable_preview))
+}
+
 pub fn validate_class_version(major: u16, minor: u16) -> crate::error::Result<()> {
-    if !class_version_supported_by_java_se_25(major, minor) {
+    if !class_version_supported(major, minor) {
         return Err(crate::error::EngineError::new(
             4,
             crate::error::EngineErrorKind::InvalidVersion { major, minor },

@@ -9,6 +9,10 @@ public class Java25Features {
     private final int value;
     private final String label;
 
+    public Java25Features() {
+        this(0);
+    }
+
     public Java25Features(int value) {
         // Pre-super() validation — allowed in Java 25
         if (value < 0) {

@@ -1,10 +1,14 @@
 # Roadmap status
 
-The original roadmap is complete. This file now serves as a compact record of the delivered milestones and the few areas intentionally left outside the committed scope.
+The original roadmap established the APIs listed below. The September 2026 review
+found correctness and validation gaps in those APIs; feature availability alone
+does not establish conformance. Follow the [improvement plan](improvement-plan-2026-09.md)
+for implementation evidence and [compatibility limits](compatibility-and-limits.md)
+for the supported behavior and remaining boundaries.
 
 ## Current status
 
-`pytecode` now ships the full set of capabilities that the original roadmap was organized around:
+The implemented API areas are:
 
 1. A supported API for parsing and manipulating classfiles.
 2. Analysis and frame recomputation support.
@@ -44,9 +48,11 @@ The original roadmap is complete. This file now serves as a compact record of th
 - Generated API reference coverage enforced by tests and `tools/generate_api_docs.py --check`.
 - Release automation aligned with immutable `v<version>` tags and PyPI Trusted Publishing.
 
-## Intentionally uncommitted areas
+## Further work
 
-These are not active roadmap items, but they remain plausible future directions if concrete use cases appear:
+Independent verification and malformed-input coverage are ongoing work. Current
+tests cover selected JVM behavior, not a complete verifier implementation. The
+following additional API directions depend on concrete use cases and measurements:
 
 - an opt-in javac-style constant-pool ordering mode for from-scratch generation
 - higher-level instruction pattern matching layered on top of the current matcher DSL

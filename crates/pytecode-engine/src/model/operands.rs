@@ -63,7 +63,7 @@ pub enum LdcValue {
     FloatBits(u32),
     Long(u64),
     DoubleBits(u64),
-    String(String),
+    String(crate::modified_utf8::JavaString),
     Class(String),
     MethodType(String),
     MethodHandle(MethodHandleValue),

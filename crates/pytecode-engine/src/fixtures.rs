@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
-const INFRASTRUCTURE_FIXTURES: &[&str] = &["VerifierHarness.java"];
+const INFRASTRUCTURE_FIXTURES: &[&str] = &["VerifierHarness.java", "RuntimeClasses.java"];
 const FOCUSED_BENCHMARK_JAR: &str = "byte-buddy-1.17.5.jar";
 const FIXTURE_CACHE_SCHEMA_VERSION: u8 = 1;
 const FIXTURE_COMPILE_CACHE_DIR: &str = "pytecode-rust-javac";
@@ -226,8 +226,20 @@ fn ensure_compiled_source_cached(
     source_path: &Path,
     release: u8,
 ) -> io::Result<PathBuf> {
-    let entry_dir = cache_entry_dir(cache_root, resource_name, release)?;
     let expected = manifest_inputs(resource_name, source_path, release)?;
+    let entry_dir = cache_entry_dir(cache_root, resource_name, release)?.join(hash_bytes(
+        format!("{FIXTURE_CACHE_SCHEMA_VERSION}:{expected:?}").as_bytes(),
+    ));
+    let parent = entry_dir.parent().expect("cache entry has a parent");
+    fs::create_dir_all(parent)?;
+    // Lock a separate file: readers never observe an entry while it is repaired,
+    // and competing threads/processes cannot remove a just-published entry.
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(entry_dir.with_extension("lock"))?;
+    lock.lock()?;
     if cache_entry_matches(&entry_dir, &expected)? {
         return Ok(cache_entry_classes_dir(&entry_dir));
     }
@@ -505,12 +517,16 @@ fn command_output_text(output: &std::process::Output) -> String {
 
 fn source_hash(source_path: &Path) -> io::Result<String> {
     let bytes = fs::read(source_path)?;
+    Ok(hash_bytes(&bytes))
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
-        hash ^= u64::from(byte);
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    Ok(format!("{hash:016x}"))
+    format!("{hash:016x}")
 }
 
 fn remove_path(path: &Path) -> io::Result<()> {
@@ -526,7 +542,7 @@ fn remove_path(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_entry_classes_dir, cache_entry_dir, ensure_compiled_source_cached};
+    use super::ensure_compiled_source_cached;
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
@@ -581,12 +597,42 @@ mod tests {
             ensure_compiled_source_cached(&cache_root, "CacheFixture.java", &source_path, 8)?;
         let rebuilt_bytes = fs::read(rebuilt_dir.join("CacheFixture.class"))?;
 
-        assert_eq!(classes_dir, rebuilt_dir);
+        assert_ne!(classes_dir, rebuilt_dir);
         assert_ne!(first_bytes, rebuilt_bytes);
-        assert!(
-            cache_entry_classes_dir(&cache_entry_dir(&cache_root, "CacheFixture.java", 8,)?)
-                .is_dir()
-        );
+        assert_eq!(fs::read(class_path)?, first_bytes);
+        assert!(rebuilt_dir.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_fixture_cache_callers_share_complete_entries() -> io::Result<()> {
+        let temp = TestDir::new("fixture-cache-concurrent")?;
+        let cache_root = temp.path().join("cache");
+        let source_path = temp.path().join("CacheFixture.java");
+        fs::write(&source_path, "public class CacheFixture {}")?;
+        let barrier = std::sync::Barrier::new(8);
+        let results = std::thread::scope(|scope| {
+            let threads = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        let dir = ensure_compiled_source_cached(
+                            &cache_root,
+                            "CacheFixture.java",
+                            &source_path,
+                            8,
+                        )?;
+                        fs::read(dir.join("CacheFixture.class"))
+                    })
+                })
+                .collect::<Vec<_>>();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<io::Result<Vec<_>>>()
+        })?;
+        assert!(!results[0].is_empty());
+        assert!(results.iter().all(|bytes| *bytes == results[0]));
         Ok(())
     }
 }

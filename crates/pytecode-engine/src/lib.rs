@@ -9,6 +9,7 @@ pub mod fixtures;
 pub mod indexes;
 pub mod model;
 pub mod modified_utf8;
+mod names;
 pub mod raw;
 pub mod reader;
 pub mod signatures;

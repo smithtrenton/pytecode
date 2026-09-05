@@ -232,7 +232,7 @@ fn install_jsr_subroutine(code: &mut CodeModel) {
         }),
         CodeItem::Var(VarInsn {
             opcode: 0x15,
-            slot: 0,
+            slot: 2,
         }),
         CodeItem::Raw(Instruction::Simple {
             opcode: 0xAC,
@@ -241,11 +241,11 @@ fn install_jsr_subroutine(code: &mut CodeModel) {
         CodeItem::Label(subroutine),
         CodeItem::Var(VarInsn {
             opcode: 0x3A,
-            slot: 1,
+            slot: 3,
         }),
         CodeItem::Var(VarInsn {
             opcode: 0xA9,
-            slot: 1,
+            slot: 3,
         }),
     ];
     code.exception_handlers.clear();

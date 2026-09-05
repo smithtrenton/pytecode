@@ -84,7 +84,7 @@ pub enum ThrowsSignature {
 pub fn parse_type_signature(signature: &str) -> Result<TypeSignature> {
     let bytes = signature.as_bytes();
     let mut index = 0_usize;
-    let parsed = parse_type_signature_at(bytes, &mut index)?;
+    let parsed = parse_type_signature_at(bytes, &mut index, 0)?;
     ensure_consumed(bytes, index)?;
     Ok(parsed)
 }
@@ -92,7 +92,7 @@ pub fn parse_type_signature(signature: &str) -> Result<TypeSignature> {
 pub fn parse_reference_type_signature(signature: &str) -> Result<ReferenceTypeSignature> {
     let bytes = signature.as_bytes();
     let mut index = 0_usize;
-    let parsed = parse_reference_type_signature_at(bytes, &mut index)?;
+    let parsed = parse_reference_type_signature_at(bytes, &mut index, 0)?;
     ensure_consumed(bytes, index)?;
     Ok(parsed)
 }
@@ -104,11 +104,11 @@ pub fn parse_field_signature(signature: &str) -> Result<FieldSignature> {
 pub fn parse_class_signature(signature: &str) -> Result<ClassSignature> {
     let bytes = signature.as_bytes();
     let mut index = 0_usize;
-    let type_parameters = parse_optional_type_parameters_at(bytes, &mut index)?;
-    let superclass_signature = parse_class_type_signature_at(bytes, &mut index)?;
+    let type_parameters = parse_optional_type_parameters_at(bytes, &mut index, 0)?;
+    let superclass_signature = parse_class_type_signature_at(bytes, &mut index, 0)?;
     let mut superinterface_signatures = Vec::new();
     while index < bytes.len() {
-        superinterface_signatures.push(parse_class_type_signature_at(bytes, &mut index)?);
+        superinterface_signatures.push(parse_class_type_signature_at(bytes, &mut index, 0)?);
     }
     Ok(ClassSignature {
         type_parameters,
@@ -120,23 +120,23 @@ pub fn parse_class_signature(signature: &str) -> Result<ClassSignature> {
 pub fn parse_method_signature(signature: &str) -> Result<MethodSignature> {
     let bytes = signature.as_bytes();
     let mut index = 0_usize;
-    let type_parameters = parse_optional_type_parameters_at(bytes, &mut index)?;
+    let type_parameters = parse_optional_type_parameters_at(bytes, &mut index, 0)?;
     expect_byte(bytes, &mut index, b'(')?;
     let mut parameter_types = Vec::new();
     while peek(bytes, index) != Some(b')') {
-        parameter_types.push(parse_type_signature_at(bytes, &mut index)?);
+        parameter_types.push(parse_type_signature_at(bytes, &mut index, 0)?);
     }
     expect_byte(bytes, &mut index, b')')?;
     let result = if peek(bytes, index) == Some(b'V') {
         index += 1;
         ResultSignature::Void
     } else {
-        ResultSignature::Type(parse_type_signature_at(bytes, &mut index)?)
+        ResultSignature::Type(parse_type_signature_at(bytes, &mut index, 0)?)
     };
     let mut throws_signatures = Vec::new();
     while peek(bytes, index) == Some(b'^') {
         index += 1;
-        throws_signatures.push(parse_throws_signature_at(bytes, &mut index)?);
+        throws_signatures.push(parse_throws_signature_at(bytes, &mut index, 0)?);
     }
     ensure_consumed(bytes, index)?;
     Ok(MethodSignature {
@@ -170,18 +170,23 @@ pub fn is_valid_method_signature(signature: &str) -> bool {
 fn parse_optional_type_parameters_at(
     bytes: &[u8],
     index: &mut usize,
+    depth: usize,
 ) -> Result<Vec<TypeParameter>> {
     if peek(bytes, *index) != Some(b'<') {
         return Ok(Vec::new());
     }
-    parse_type_parameters_at(bytes, index)
+    parse_type_parameters_at(bytes, index, depth)
 }
 
-fn parse_type_parameters_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeParameter>> {
+fn parse_type_parameters_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<Vec<TypeParameter>> {
     expect_byte(bytes, index, b'<')?;
     let mut parameters = Vec::new();
     while peek(bytes, *index) != Some(b'>') {
-        parameters.push(parse_type_parameter_at(bytes, index)?);
+        parameters.push(parse_type_parameter_at(bytes, index, depth)?);
     }
     if parameters.is_empty() {
         return Err(signature_error("type parameter list must not be empty"));
@@ -190,18 +195,18 @@ fn parse_type_parameters_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeP
     Ok(parameters)
 }
 
-fn parse_type_parameter_at(bytes: &[u8], index: &mut usize) -> Result<TypeParameter> {
-    let identifier = parse_identifier_at(bytes, index, b":")?;
+fn parse_type_parameter_at(bytes: &[u8], index: &mut usize, depth: usize) -> Result<TypeParameter> {
+    let identifier = parse_identifier_at(bytes, index, b":", depth)?;
     expect_byte(bytes, index, b':')?;
     let class_bound = if starts_reference_type_signature(peek(bytes, *index)) {
-        Some(parse_reference_type_signature_at(bytes, index)?)
+        Some(parse_reference_type_signature_at(bytes, index, depth)?)
     } else {
         None
     };
     let mut interface_bounds = Vec::new();
     while peek(bytes, *index) == Some(b':') {
         *index += 1;
-        interface_bounds.push(parse_reference_type_signature_at(bytes, index)?);
+        interface_bounds.push(parse_reference_type_signature_at(bytes, index, depth)?);
     }
     Ok(TypeParameter {
         identifier,
@@ -210,13 +215,13 @@ fn parse_type_parameter_at(bytes: &[u8], index: &mut usize) -> Result<TypeParame
     })
 }
 
-fn parse_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<TypeSignature> {
+fn parse_type_signature_at(bytes: &[u8], index: &mut usize, depth: usize) -> Result<TypeSignature> {
     if let Some(base_type) = parse_base_type(peek(bytes, *index)) {
         *index += 1;
         Ok(TypeSignature::Base(base_type))
     } else {
         Ok(TypeSignature::Reference(parse_reference_type_signature_at(
-            bytes, index,
+            bytes, index, depth,
         )?))
     }
 }
@@ -224,16 +229,20 @@ fn parse_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<TypeSignat
 fn parse_reference_type_signature_at(
     bytes: &[u8],
     index: &mut usize,
+    depth: usize,
 ) -> Result<ReferenceTypeSignature> {
+    if depth >= 128 {
+        return Err(signature_error("signature nesting exceeds limit of 128"));
+    }
+    let depth = depth + 1;
     match peek(bytes, *index) {
         Some(b'L') => {
-            parse_class_type_signature_at(bytes, index).map(ReferenceTypeSignature::Class)
+            parse_class_type_signature_at(bytes, index, depth).map(ReferenceTypeSignature::Class)
         }
-        Some(b'T') => {
-            parse_type_variable_signature_at(bytes, index).map(ReferenceTypeSignature::TypeVariable)
-        }
+        Some(b'T') => parse_type_variable_signature_at(bytes, index, depth)
+            .map(ReferenceTypeSignature::TypeVariable),
         Some(b'[') => {
-            parse_array_type_signature_at(bytes, index).map(ReferenceTypeSignature::Array)
+            parse_array_type_signature_at(bytes, index, depth).map(ReferenceTypeSignature::Array)
         }
         Some(value) => Err(signature_error(format!(
             "invalid reference type signature character '{}'",
@@ -243,25 +252,29 @@ fn parse_reference_type_signature_at(
     }
 }
 
-fn parse_class_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<ClassTypeSignature> {
+fn parse_class_type_signature_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<ClassTypeSignature> {
     expect_byte(bytes, index, b'L')?;
     let mut package_specifier = Vec::new();
-    let mut current = parse_identifier_at(bytes, index, b"/;<.")?;
+    let mut current = parse_identifier_at(bytes, index, b"/;<.", depth)?;
     while peek(bytes, *index) == Some(b'/') {
         package_specifier.push(current);
         *index += 1;
-        current = parse_identifier_at(bytes, index, b"/;<.")?;
+        current = parse_identifier_at(bytes, index, b"/;<.", depth)?;
     }
     let simple_class = SimpleClassTypeSignature {
         identifier: current,
-        type_arguments: parse_optional_type_arguments_at(bytes, index)?,
+        type_arguments: parse_optional_type_arguments_at(bytes, index, depth)?,
     };
     let mut suffixes = Vec::new();
     while peek(bytes, *index) == Some(b'.') {
         *index += 1;
         suffixes.push(SimpleClassTypeSignature {
-            identifier: parse_identifier_at(bytes, index, b";<.")?,
-            type_arguments: parse_optional_type_arguments_at(bytes, index)?,
+            identifier: parse_identifier_at(bytes, index, b";<.", depth)?,
+            type_arguments: parse_optional_type_arguments_at(bytes, index, depth)?,
         });
     }
     expect_byte(bytes, index, b';')?;
@@ -272,18 +285,26 @@ fn parse_class_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<Clas
     })
 }
 
-fn parse_optional_type_arguments_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeArgument>> {
+fn parse_optional_type_arguments_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<Vec<TypeArgument>> {
     if peek(bytes, *index) != Some(b'<') {
         return Ok(Vec::new());
     }
-    parse_type_arguments_at(bytes, index)
+    parse_type_arguments_at(bytes, index, depth)
 }
 
-fn parse_type_arguments_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeArgument>> {
+fn parse_type_arguments_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<Vec<TypeArgument>> {
     expect_byte(bytes, index, b'<')?;
     let mut arguments = Vec::new();
     while peek(bytes, *index) != Some(b'>') {
-        arguments.push(parse_type_argument_at(bytes, index)?);
+        arguments.push(parse_type_argument_at(bytes, index, depth)?);
     }
     if arguments.is_empty() {
         return Err(signature_error("type argument list must not be empty"));
@@ -292,7 +313,7 @@ fn parse_type_arguments_at(bytes: &[u8], index: &mut usize) -> Result<Vec<TypeAr
     Ok(arguments)
 }
 
-fn parse_type_argument_at(bytes: &[u8], index: &mut usize) -> Result<TypeArgument> {
+fn parse_type_argument_at(bytes: &[u8], index: &mut usize, depth: usize) -> Result<TypeArgument> {
     match peek(bytes, *index) {
         Some(b'*') => {
             *index += 1;
@@ -301,17 +322,17 @@ fn parse_type_argument_at(bytes: &[u8], index: &mut usize) -> Result<TypeArgumen
         Some(b'+') => {
             *index += 1;
             Ok(TypeArgument::Extends(parse_reference_type_signature_at(
-                bytes, index,
+                bytes, index, depth,
             )?))
         }
         Some(b'-') => {
             *index += 1;
             Ok(TypeArgument::Super(parse_reference_type_signature_at(
-                bytes, index,
+                bytes, index, depth,
             )?))
         }
         _ => Ok(TypeArgument::Exact(parse_reference_type_signature_at(
-            bytes, index,
+            bytes, index, depth,
         )?)),
     }
 }
@@ -319,25 +340,51 @@ fn parse_type_argument_at(bytes: &[u8], index: &mut usize) -> Result<TypeArgumen
 fn parse_type_variable_signature_at(
     bytes: &[u8],
     index: &mut usize,
+    depth: usize,
 ) -> Result<TypeVariableSignature> {
     expect_byte(bytes, index, b'T')?;
-    let identifier = parse_identifier_at(bytes, index, b";")?;
+    let identifier = parse_identifier_at(bytes, index, b";", depth)?;
     expect_byte(bytes, index, b';')?;
     Ok(TypeVariableSignature { identifier })
 }
 
-fn parse_array_type_signature_at(bytes: &[u8], index: &mut usize) -> Result<ArrayTypeSignature> {
+fn parse_array_type_signature_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<ArrayTypeSignature> {
     expect_byte(bytes, index, b'[')?;
+    let mut dimensions = 1;
+    while peek(bytes, *index) == Some(b'[') {
+        dimensions += 1;
+        *index += 1;
+        if dimensions > 255 {
+            return Err(signature_error("array signature exceeds 255 dimensions"));
+        }
+    }
+    let mut component_type = parse_type_signature_at(bytes, index, depth)?;
+    for _ in 1..dimensions {
+        component_type =
+            TypeSignature::Reference(ReferenceTypeSignature::Array(ArrayTypeSignature {
+                component_type: Box::new(component_type),
+            }));
+    }
     Ok(ArrayTypeSignature {
-        component_type: Box::new(parse_type_signature_at(bytes, index)?),
+        component_type: Box::new(component_type),
     })
 }
 
-fn parse_throws_signature_at(bytes: &[u8], index: &mut usize) -> Result<ThrowsSignature> {
+fn parse_throws_signature_at(
+    bytes: &[u8],
+    index: &mut usize,
+    depth: usize,
+) -> Result<ThrowsSignature> {
     match peek(bytes, *index) {
-        Some(b'L') => parse_class_type_signature_at(bytes, index).map(ThrowsSignature::Class),
+        Some(b'L') => {
+            parse_class_type_signature_at(bytes, index, depth).map(ThrowsSignature::Class)
+        }
         Some(b'T') => {
-            parse_type_variable_signature_at(bytes, index).map(ThrowsSignature::TypeVariable)
+            parse_type_variable_signature_at(bytes, index, depth).map(ThrowsSignature::TypeVariable)
         }
         Some(value) => Err(signature_error(format!(
             "invalid throws signature character '{}'",
@@ -347,7 +394,12 @@ fn parse_throws_signature_at(bytes: &[u8], index: &mut usize) -> Result<ThrowsSi
     }
 }
 
-fn parse_identifier_at(bytes: &[u8], index: &mut usize, terminators: &[u8]) -> Result<String> {
+fn parse_identifier_at(
+    bytes: &[u8],
+    index: &mut usize,
+    terminators: &[u8],
+    _depth: usize,
+) -> Result<String> {
     let start = *index;
     while let Some(current) = peek(bytes, *index) {
         if terminators.contains(&current) {

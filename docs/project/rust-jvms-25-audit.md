@@ -1,54 +1,37 @@
-# Rust JVMS 25 audit and remediation status
+# Historical JVMS 25 audit
 
-## Scope
+This document records the earlier audit's feature inventory. The September 2026
+review reproduced bugs in unary arithmetic, shifts, frame categories, archive
+mutations, and Java strings despite the earlier completion claim. Feature presence
+and internal roundtrip tests do not establish classfile or verifier conformance.
 
-This audit checks the Rust workspace against the JVM Specification, Java SE 25 Edition, with the focus on the parts this library is expected to implement:
+See [compatibility and limits](compatibility-and-limits.md) for current behavior and
+[the improvement plan](improvement-plan-2026-09.md) for implementation evidence.
 
-- class file structure and version handling (JVMS chapter 4)
-- constant-pool tags, code attributes, and standard predefined attributes
-- bytecode parsing/emission and symbolic editing support
-- structural validation and frame recomputation behavior
+## Implemented areas
 
-It does **not** treat full JVM runtime execution semantics as required scope for `pytecode`; the question here is whether the Rust library can parse, preserve, validate, edit, and re-emit spec-valid class files through Java 25.
+- Raw constant-pool tags, predefined attributes, and unknown-attribute preservation.
+- Instruction parsing, symbolic lift/lower, labels, and debug information policies.
+- Descriptor and generic-signature parsing.
+- Structural diagnostics for constant-pool linkage, access flags, attributes,
+  bootstrap references, and method/class structure.
+- CFG analysis, stack/local simulation, and frame emission, including selected
+  legacy subroutine cases.
 
-## Current status
+The current inspection policy covers majors 45 through 70, including historical
+preview files. Runtime preview compatibility is checked separately. This replaces
+the earlier claim that historical preview minors should always be rejected.
 
-The raw Rust classfile layer is complete for the on-disk class file format features this project scopes to support:
+## Evidence and limits
 
-- `pytecode-engine::raw` covers all standard constant-pool tags through `CONSTANT_Package_info`.
-- `reader.rs` and `writer.rs` cover all predefined JVMS 25 attributes listed in JVMS 4.7, while still preserving unknown attributes.
-- `raw::instructions` recognizes the full valid classfile opcode space, including `invokedynamic`, `multianewarray`, `tableswitch`, `lookupswitch`, `goto_w`, `jsr_w`, and `wide`.
-- `raw_roundtrip.rs` roundtrips the checked-in fixture matrix through `--release 25`, including records, sealed hierarchies, modules, lambdas/bootstrap methods, type annotations, nests, and Java 25 classfile version 69 fixtures.
-- shared Java SE 25 version rules now reject unsupported future majors and historical preview minors while accepting `69.65535`.
-- `analysis::verify_classfile` now checks constant-pool linkage, chapter-4 structure/access rules, owner-aware attribute placement/multiplicity/version rules, bootstrap-linked constant relationships, and generic-signature syntax.
-- subroutine bytecode (`jsr`, `jsr_w`, `ret`) now flows through symbolic lift/lower and CFG/frame recomputation, with recomputed lowering preserving valid older-version behavior instead of rejecting those methods.
-- `pytecode_engine::signatures` now parses and validates class, method, field, reference, and local-variable type signatures.
+Rust fixtures exercise records, sealed hierarchies, modules, lambdas/bootstrap
+methods, type annotations, nests, and classfile versions through Java 25. A separate
+Java 26 lane compiles and runs GA and preview examples. Independent JVM checks force
+method verification and execute selected recomputed methods; generated properties
+and bounded sanitizer fuzzing supplement the fixtures.
 
-That means the Rust implementation now has strong **parse/write, validation, and symbolic-analysis coverage** for the scoped JVMS 25 classfile work.
-
-## Remediation status
-
-| Area | Status | What landed |
-| --- | --- | --- |
-| Classfile version validation | **Implemented** | Shared Java SE 25 rules now back both parse-time validation and verifier diagnostics, including acceptance of current preview `69.65535` and rejection of unsupported future majors or historical preview minors. |
-| JVMS 4.8 format checking | **Implemented for scoped checks** | `verify_classfile` now validates constant-pool linkage and descriptor kinds, class/module structural invariants, field/method/class access-flag rules, `Code` placement/count rules, and owner-aware attribute placement/multiplicity/version gates. |
-| Bootstrap / condy / invokedynamic cross-checks | **Implemented** | The verifier now checks `MethodHandle.reference_kind`, reference target kinds, bootstrap method index bounds, bootstrap method/argument entry kinds, and descriptor shape for `Dynamic` and `InvokeDynamic`. |
-| Attribute semantics beyond parsing | **Implemented for key predefined attributes** | Module, record, nest, code, method-parameter, stack-map, and related predefined attributes now have semantic validation for placement, uniqueness, and minimum-version rules. |
-| `jsr` / `jsr_w` / `ret` bytecode in analysis/edit pipeline | **Implemented** | CFG and frame recomputation now model `returnAddress`, `jsr`/`jsr_w` continuations, and `ret` dispatch. Symbolic lift/lower preserves those instructions, and recomputed lowering avoids producing invalid `StackMapTable` entries on classfile versions that cannot encode them. |
-| Signature grammar support in Rust | **Implemented** | `pytecode_engine::signatures` now parses and validates generic signatures, and verifier checks apply the right grammar to `Signature` and `LocalVariableTypeTable` payloads. |
-
-## Validation and regression coverage
-
-The Rust workspace now carries targeted regression coverage for the work above:
-
-- parser/verifier tests for strict Java SE 25 classfile version handling,
-- structured verifier tests for chapter-4 structure/access/attribute diagnostics,
-- constructed verifier tests for invalid bootstrap, condy, invokedynamic, and generic-signature payloads,
-- CFG/frame and symbolic-roundtrip tests for `jsr` / `jsr_w` / `ret`,
-- fixture-based roundtrip tests for modules, records, sealed hierarchies, type annotations, and bootstrap attributes.
-
-## Bottom line
-
-Within the scope this audit set out to measure, the Rust library now appears **substantially complete for JVMS 25 classfile parsing, deterministic re-emission, structural validation, bootstrap-linked constant checking, subroutine-aware symbolic analysis, and generic-signature validation**.
-
-The one scope note that remains unchanged is the original one from the top of this document: this project does **not** try to implement full JVM runtime execution semantics. The conformance claim here is about classfile/tooling behavior, not a complete virtual machine.
+These checks provide regression evidence for the exercised paths. They do not
+prove every operand, assignability rule, constructor path, exception edge, attribute
+combination, or resource-exhaustion case correct. Continue adding independent JVM
+and malformed-input regressions when changing those areas. The raw structural
+verifier is not a substitute for the JVM's full type verifier.

@@ -4,12 +4,14 @@ use pytecode_engine::raw::RawClassStub;
 use pytecode_engine::transform::ApplyClassTransform;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::NamedTempFile;
 use thiserror::Error;
+use zip::read::HasZipMetadata;
 use zip::write::FullFileOptions;
 use zip::{CompressionMethod, DateTime, System, ZipArchive, ZipWriter};
 
@@ -106,14 +108,60 @@ pub enum ArchiveError {
     InvalidTimestamp(String),
     #[error("archive entry comment must be valid UTF-8 to rewrite natively: {0}")]
     NonUtf8Comment(String),
+    #[error("duplicate normalized archive entry name: {0}")]
+    DuplicateFilename(String),
+    #[error("archive read limit exceeded: {0}")]
+    ReadLimit(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, ArchiveError>;
+
+/// Limits apply to declared sizes and actual decompressed bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveReadLimits {
+    pub max_entries: usize,
+    pub max_entry_bytes: u64,
+    pub max_total_bytes: u64,
+}
+
+impl Default for ArchiveReadLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 100_000,
+            max_entry_bytes: 256 * 1024 * 1024,
+            max_total_bytes: 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// A validated rewrite. Dropping this value removes the temporary archive.
+/// Commit atomically replaces the destination; it does not promise crash durability.
+pub struct PreparedRewrite {
+    temporary: NamedTempFile,
+    destination: PathBuf,
+    entries: Vec<JarInfo>,
+}
+
+impl PreparedRewrite {
+    pub fn path(&self) -> &Path {
+        self.temporary.path()
+    }
+
+    pub fn commit(self, jar: &mut JarFile) -> Result<PathBuf> {
+        self.temporary
+            .persist(&self.destination)
+            .map_err(|error| error.error)?;
+        jar.filename = self.destination;
+        jar.entries = self.entries;
+        Ok(jar.filename.clone())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JarFile {
     pub filename: PathBuf,
     pub entries: Vec<JarInfo>,
+    pub read_limits: ArchiveReadLimits,
 }
 
 impl JarFile {
@@ -121,17 +169,26 @@ impl JarFile {
         Self {
             filename: path.into(),
             entries,
+            read_limits: ArchiveReadLimits::default(),
         }
     }
 
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with_limits(path, ArchiveReadLimits::default())
+    }
+
+    pub fn open_with_limits(path: impl Into<PathBuf>, limits: ArchiveReadLimits) -> Result<Self> {
         let filename = path.into();
-        let entries = read_archive_entries(&filename)?;
-        Ok(Self { filename, entries })
+        let entries = read_archive_entries(&filename, limits)?;
+        Ok(Self {
+            filename,
+            entries,
+            read_limits: limits,
+        })
     }
 
     pub fn read(&mut self) -> Result<()> {
-        self.entries = read_archive_entries(&self.filename)?;
+        self.entries = read_archive_entries(&self.filename, self.read_limits)?;
         Ok(())
     }
 
@@ -239,25 +296,44 @@ impl JarFile {
     pub fn rewrite(
         &mut self,
         output_path: Option<&Path>,
-        mut transform: Option<&mut dyn ApplyClassTransform>,
+        transform: Option<&mut dyn ApplyClassTransform>,
         options: RewriteOptions<'_>,
     ) -> Result<PathBuf> {
+        self.prepare_rewrite(output_path, transform, options)?
+            .commit(self)
+    }
+
+    pub fn prepare_rewrite(
+        &self,
+        output_path: Option<&Path>,
+        mut transform: Option<&mut dyn ApplyClassTransform>,
+        options: RewriteOptions<'_>,
+    ) -> Result<PreparedRewrite> {
         let destination = output_path
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.filename.clone());
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temp_path = temporary_archive_path(&destination);
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let temporary = NamedTempFile::new_in(parent)?;
         let mut source = ZipArchive::new(File::open(&self.filename)?)?;
         let no_transform = transform.is_none();
+        let mut names = HashSet::new();
 
         {
-            let file = File::create(&temp_path)?;
+            let file = temporary.reopen()?;
             let mut writer = ZipWriter::new(file);
+            writer.set_raw_comment(source.comment().to_vec().into_boxed_slice())?;
             for entry in &self.entries {
+                let normalized = normalize_filename(&entry.filename, entry.metadata.is_dir)?;
+                if !names.insert(normalized.clone()) {
+                    return Err(ArchiveError::DuplicateFilename(normalized));
+                }
                 if let Some(index) = entry.original_index
                     && should_raw_copy_entry(entry, no_transform, options)
+                    && source_entry_matches(&mut source, index, entry)?
                 {
                     let source_entry = source.by_index(index)?;
                     let archive_name = archive_name(&entry.filename);
@@ -277,21 +353,13 @@ impl JarFile {
             writer.finish()?;
         }
 
-        let original_filename = self.filename.clone();
-        let original_entries = self.entries.clone();
-        fs::rename(&temp_path, &destination)?;
-        match read_archive_entries(&destination) {
-            Ok(entries) => {
-                self.filename = destination.clone();
-                self.entries = entries;
-                Ok(destination)
-            }
-            Err(error) => {
-                self.filename = original_filename;
-                self.entries = original_entries;
-                Err(error)
-            }
-        }
+        drop(source);
+        let entries = read_archive_entries(temporary.path(), self.read_limits)?;
+        Ok(PreparedRewrite {
+            temporary,
+            destination,
+            entries,
+        })
     }
 }
 
@@ -340,18 +408,37 @@ pub const fn phase0_support() -> ArchiveSupport {
     phase5_support()
 }
 
-fn read_archive_entries(path: &Path) -> Result<Vec<JarInfo>> {
+fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<Vec<JarInfo>> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
     let mut entries = Vec::new();
+    if archive.len() > limits.max_entries {
+        return Err(ArchiveError::ReadLimit("entry count"));
+    }
+    check_central_directory_count(path, archive.central_directory_start(), archive.len())?;
+    let mut names = HashSet::new();
+    let mut total_bytes = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let is_dir = entry.is_dir();
         let filename = normalize_filename(entry.name(), is_dir)?;
-        let mut bytes = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
-        if !is_dir {
-            entry.read_to_end(&mut bytes)?;
+        if !names.insert(filename.clone()) {
+            return Err(ArchiveError::DuplicateFilename(filename));
         }
+        let bound = limits
+            .max_entry_bytes
+            .min(limits.max_total_bytes.saturating_sub(total_bytes));
+        if entry.size() > bound {
+            return Err(ArchiveError::ReadLimit("uncompressed bytes"));
+        }
+        let mut bytes = Vec::new();
+        (&mut entry)
+            .take(bound.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > bound {
+            return Err(ArchiveError::ReadLimit("uncompressed bytes"));
+        }
+        total_bytes += bytes.len() as u64;
         entries.push(JarInfo {
             filename,
             bytes,
@@ -359,7 +446,7 @@ fn read_archive_entries(path: &Path) -> Result<Vec<JarInfo>> {
                 compression_method: entry.compression(),
                 last_modified: entry.last_modified().unwrap_or_default(),
                 unix_mode: entry.unix_mode(),
-                system: System::Unknown,
+                system: entry.get_metadata().system,
                 comment: entry.comment().as_bytes().to_vec(),
                 extra_data: entry
                     .extra_data()
@@ -372,14 +459,77 @@ fn read_archive_entries(path: &Path) -> Result<Vec<JarInfo>> {
     Ok(entries)
 }
 
+// zip stores entries in a name-keyed map and can discard exact duplicates before
+// exposing them. Count the central headers at its validated directory offset so
+// that such archives cannot silently lose entries. ZIP64 uses the same headers.
+fn check_central_directory_count(path: &Path, start: u64, expected: usize) -> Result<()> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    for index in 0..=expected {
+        let mut signature = [0; 4];
+        file.read_exact(&mut signature)?;
+        if signature != *b"PK\x01\x02" {
+            return Ok(());
+        }
+        if index == expected {
+            return Err(ArchiveError::DuplicateFilename(
+                "central directory contains duplicate names".to_owned(),
+            ));
+        }
+        let mut header = [0; 42];
+        file.read_exact(&mut header)?;
+        let variable_length: u64 = [24, 26, 28]
+            .into_iter()
+            .map(|offset| u64::from(u16::from_le_bytes([header[offset], header[offset + 1]])))
+            .sum();
+        file.seek(SeekFrom::Current(variable_length as i64))?;
+    }
+    Ok(())
+}
+
 fn should_raw_copy_entry(entry: &JarInfo, no_transform: bool, options: RewriteOptions<'_>) -> bool {
     no_transform
         && options.frame_mode == FrameComputationMode::Preserve
         && options.debug_info == DebugInfoPolicy::Preserve
         && options.resolver.is_none()
         && entry.original_index.is_some()
-        && entry.metadata.comment.is_empty()
+        // zip's raw-copy API does not retain arbitrary extra fields.
         && entry.metadata.extra_data.is_empty()
+}
+
+fn source_entry_matches(
+    source: &mut ZipArchive<File>,
+    index: usize,
+    entry: &JarInfo,
+) -> Result<bool> {
+    if index >= source.len() {
+        return Ok(false);
+    }
+    let mut original = source.by_index(index)?;
+    if original.size() != entry.bytes.len() as u64
+        || original.compression() != entry.metadata.compression_method
+        || original.last_modified().unwrap_or_default() != entry.metadata.last_modified
+        || original.unix_mode() != entry.metadata.unix_mode
+        || original.get_metadata().system != entry.metadata.system
+        || original.comment().as_bytes() != entry.metadata.comment
+        || original.extra_data().unwrap_or_default() != entry.metadata.extra_data
+        || original.is_dir() != entry.metadata.is_dir
+    {
+        return Ok(false);
+    }
+    // Compare bytes, not a caller-supplied index or a collision-prone fingerprint.
+    let mut offset = 0;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = original.read(&mut buffer)?;
+        if count == 0 {
+            return Ok(offset == entry.bytes.len());
+        }
+        if entry.bytes.get(offset..offset + count) != Some(&buffer[..count]) {
+            return Ok(false);
+        }
+        offset += count;
+    }
 }
 
 fn write_entry(
@@ -473,7 +623,10 @@ fn normalize_filename(filename: &str, force_dir: bool) -> Result<String> {
     if filename.is_empty() {
         return Err(ArchiveError::EmptyFilename);
     }
-    if Path::new(filename).is_absolute() || filename.starts_with('/') || filename.starts_with('\\')
+    if Path::new(filename).is_absolute()
+        || filename.starts_with('/')
+        || filename.starts_with('\\')
+        || filename.as_bytes().get(1) == Some(&b':')
     {
         return Err(ArchiveError::AbsolutePath(filename.to_owned()));
     }
@@ -511,19 +664,4 @@ fn archive_name(filename: &str) -> String {
 
 fn is_class_filename(entry: &JarInfo) -> bool {
     !entry.metadata.is_dir && entry.filename.ends_with(".class")
-}
-
-fn temporary_archive_path(destination: &Path) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let file_name = destination
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("archive.jar");
-    destination
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!("{file_name}.{nanos}.tmp"))
 }

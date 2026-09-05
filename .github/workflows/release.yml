@@ -14,7 +14,7 @@ on:
 env:
   PYTHON_VERSION: "3.12"
   JAVA_VERSION: "25"
-  RUST_TOOLCHAIN: "stable"
+  RUST_TOOLCHAIN: "1.98.1"
 
 jobs:
   prepare:
@@ -66,6 +66,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.1.0
         with:
+          version: "0.12.10"
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-python: true
@@ -82,111 +83,36 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all --check
       - name: Lint Rust workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Sync dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev --python ${{ env.PYTHON_VERSION }}
       - name: Validate release tag
-        run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: uv run --no-sync python tools/validate_release_tag.py --tag "$RELEASE_TAG"
       - name: Lint
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
       - name: Check formatting
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
       - name: Type-check
-        run: uv run basedpyright
+        run: uv run --no-sync basedpyright
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run --no-sync pytest -q
       - name: Validate API docs coverage
-        run: uv run python tools/generate_api_docs.py --check
+        run: uv run --no-sync python tools/generate_api_docs.py --check
 
-  build-wheels:
-    name: Build wheel (${{ matrix.target }})
+  artifacts:
+    name: Build and test distributions
     needs: [prepare, validate]
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact-suffix: linux-x86_64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact-suffix: linux-aarch64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact-suffix: windows-x86_64
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact-suffix: windows-aarch64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact-suffix: macos-aarch64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact-suffix: macos-x86_64
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.prepare.outputs.release_ref }}
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          enable-cache: true
-          cache-python: true
-      - name: Validate release tag
-        run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist
-          manylinux: auto
-      - name: Upload wheel
-        uses: actions/upload-artifact@v7
-        with:
-          name: python-package-wheel-${{ matrix.artifact-suffix }}
-          path: dist/*.whl
-          if-no-files-found: error
-
-  build-sdist:
-    name: Build sdist
-    needs: [prepare, validate]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.prepare.outputs.release_ref }}
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          enable-cache: true
-          cache-python: true
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - name: Validate release tag
-        run: uv run python tools/validate_release_tag.py --tag "${{ needs.prepare.outputs.release_tag }}"
-      - name: Build source distribution
-        run: uv build --sdist
-      - name: Upload sdist
-        uses: actions/upload-artifact@v7
-        with:
-          name: python-package-sdist
-          path: dist/*.tar.gz
-          if-no-files-found: error
+    uses: ./.github/workflows/artifacts.yml
+    with:
+      release_ref: ${{ needs.prepare.outputs.release_ref }}
 
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist]
+    needs: [artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: read

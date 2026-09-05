@@ -1,3 +1,6 @@
+mod stack_map;
+use stack_map::lower_stack_map_table;
+
 mod constant_pool_builder;
 mod debug_info;
 mod labels;
@@ -126,6 +129,31 @@ impl std::fmt::Display for NestedCodeAttributeLayout {
 }
 
 impl CodeModel {
+    /// Parse a complete bytecode body into symbolic instructions using its owner's pool.
+    pub fn from_raw_code(
+        max_stack: u16,
+        max_locals: u16,
+        bytes: &[u8],
+        cp: &ConstantPoolBuilder,
+    ) -> Result<Self> {
+        if bytes.is_empty() || bytes.len() > 65535 {
+            return Err(model_error("Code length must be between 1 and 65535 bytes"));
+        }
+        lift_code_model(
+            &CodeAttribute {
+                attribute_name_index: Utf8Index::from(0),
+                attribute_length: 0,
+                max_stack,
+                max_locals,
+                code_length: bytes.len() as u32,
+                code: crate::parse_instructions(bytes)?,
+                exception_table: Vec::new(),
+                attributes: Vec::new(),
+            },
+            cp,
+        )
+    }
+
     /// Create a new empty `CodeModel` for testing or programmatic construction.
     pub fn new(max_stack: u16, max_locals: u16, debug_info_state: DebugInfoState) -> Self {
         Self {
@@ -821,7 +849,7 @@ fn lift_ldc_value(index: CpIndex, cp: &ConstantPoolBuilder) -> Result<LdcValue> 
             Ok(LdcValue::DoubleBits(raw))
         }
         ConstantPoolEntry::String(info) => {
-            Ok(LdcValue::String(cp.resolve_utf8(info.string_index)?))
+            Ok(LdcValue::String(cp.resolve_java_string(info.string_index)?))
         }
         ConstantPoolEntry::Class(info) => Ok(LdcValue::Class(cp.resolve_utf8(info.name_index)?)),
         ConstantPoolEntry::MethodType(info) => Ok(LdcValue::MethodType(
@@ -1468,7 +1496,7 @@ fn add_ldc_value(cp: &mut ConstantPoolBuilder, value: &LdcValue) -> Result<CpInd
         LdcValue::FloatBits(raw_bits) => cp.add_float_bits(*raw_bits),
         LdcValue::Long(value) => cp.add_long(*value),
         LdcValue::DoubleBits(raw_bits) => cp.add_double_bits(*raw_bits),
-        LdcValue::String(value) => cp.add_string(value),
+        LdcValue::String(value) => cp.add_java_string(value),
         LdcValue::Class(value) => Ok(cp.add_class(value)?.into()),
         LdcValue::MethodType(value) => cp.add_method_type(value),
         LdcValue::MethodHandle(value) => {
@@ -1589,85 +1617,6 @@ fn lower_nested_attributes(
         attributes.push(attribute);
     }
     Ok(attributes)
-}
-
-fn lower_stack_map_table(
-    frames: &FrameComputationResult,
-    cp: &mut ConstantPoolBuilder,
-    item_offsets: &[Option<u32>],
-) -> Result<AttributeInfo> {
-    let mut entries = Vec::with_capacity(frames.frames.len());
-    let mut previous_offset = 0_u32;
-    for (frame_index, frame) in frames.frames.iter().enumerate() {
-        let offset = item_offset(
-            item_offsets,
-            frame.code_index,
-            "stack-map frame instruction offset missing",
-        )?;
-        let offset_delta = if frame_index == 0 {
-            offset
-        } else {
-            offset
-                .checked_sub(previous_offset + 1)
-                .ok_or_else(|| model_error("stack-map frame offsets are not monotonic"))?
-        };
-        previous_offset = offset;
-        let locals = frame
-            .locals
-            .iter()
-            .map(|value| raw_verification_type(value, cp, item_offsets))
-            .collect::<Result<Vec<_>>>()?;
-        let stack = frame
-            .stack
-            .iter()
-            .map(|value| raw_verification_type(value, cp, item_offsets))
-            .collect::<Result<Vec<_>>>()?;
-        entries.push(crate::raw::StackMapFrameInfo::Full {
-            frame_type: 255,
-            offset_delta: offset_delta as u16,
-            locals,
-            stack,
-        });
-    }
-    Ok(AttributeInfo::StackMapTable(
-        crate::raw::StackMapTableAttribute {
-            attribute_name_index: cp.add_utf8("StackMapTable")?,
-            attribute_length: 2,
-            entries,
-        },
-    ))
-}
-
-fn raw_verification_type(
-    value: &VType,
-    cp: &mut ConstantPoolBuilder,
-    item_offsets: &[Option<u32>],
-) -> Result<crate::raw::VerificationTypeInfo> {
-    match value {
-        VType::Top => Ok(crate::raw::VerificationTypeInfo::Top),
-        VType::Integer => Ok(crate::raw::VerificationTypeInfo::Integer),
-        VType::Float => Ok(crate::raw::VerificationTypeInfo::Float),
-        VType::Double => Ok(crate::raw::VerificationTypeInfo::Double),
-        VType::Long => Ok(crate::raw::VerificationTypeInfo::Long),
-        VType::Null => Ok(crate::raw::VerificationTypeInfo::Null),
-        VType::ReturnAddress(_) => Err(model_error(
-            "StackMapTable cannot encode returnAddress verification types",
-        )),
-        VType::UninitializedThis => Ok(crate::raw::VerificationTypeInfo::UninitializedThis),
-        VType::Object(class_name) => Ok(crate::raw::VerificationTypeInfo::Object {
-            cpool_index: cp.add_class(class_name)?,
-        }),
-        VType::Uninitialized { code_index, .. } => {
-            let offset = item_offset(
-                item_offsets,
-                *code_index,
-                "missing offset for uninitialized new instruction",
-            )?;
-            Ok(crate::raw::VerificationTypeInfo::Uninitialized {
-                offset: offset as u16,
-            })
-        }
-    }
 }
 
 fn item_offset(

@@ -281,7 +281,8 @@ fn class_metrics_from_model(model: &ClassModel, byte_len: usize) -> ClassMetrics
             match item {
                 CodeItem::Ldc(insn) => {
                     if let LdcValue::String(value) = &insn.value
-                        && is_readable_string(value)
+                        && let Ok(value) = value.to_unicode()
+                        && is_readable_string(&value)
                         && seen_strings.insert(value.clone())
                     {
                         readable_strings.push(value.clone());

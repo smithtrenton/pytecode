@@ -259,12 +259,55 @@ pub fn common_superclass(
     left_name: &str,
     right_name: &str,
 ) -> Result<String, AnalysisError> {
+    common_reference_type(Some(resolver), left_name, right_name)
+}
+
+pub(crate) fn common_reference_type(
+    resolver: Option<&dyn ClassResolver>,
+    left_name: &str,
+    right_name: &str,
+) -> Result<String, AnalysisError> {
     if left_name == right_name {
         return Ok(left_name.to_owned());
     }
-    if left_name.starts_with('[') || right_name.starts_with('[') {
+    if let (Some(left), Some(right)) = (left_name.strip_prefix('['), right_name.strip_prefix('[')) {
+        let reference_name = |component: &str| {
+            if component.starts_with('[') {
+                Some(component.to_owned())
+            } else {
+                component
+                    .strip_prefix('L')
+                    .and_then(|name| name.strip_suffix(';'))
+                    .map(str::to_owned)
+            }
+        };
+        if let (Some(left), Some(right)) = (reference_name(left), reference_name(right)) {
+            let component = common_reference_type(resolver, &left, &right)?;
+            return Ok(if component.starts_with('[') {
+                format!("[{component}")
+            } else {
+                format!("[L{component};")
+            });
+        }
         return Ok(JAVA_LANG_OBJECT.to_owned());
     }
+    if left_name.starts_with('[') || right_name.starts_with('[') {
+        let other = if left_name.starts_with('[') {
+            right_name
+        } else {
+            left_name
+        };
+        if matches!(other, "java/lang/Cloneable" | "java/io/Serializable") {
+            return Ok(other.to_owned());
+        }
+        return Ok(JAVA_LANG_OBJECT.to_owned());
+    }
+    if left_name == JAVA_LANG_OBJECT || right_name == JAVA_LANG_OBJECT {
+        return Ok(JAVA_LANG_OBJECT.to_owned());
+    }
+    let Some(resolver) = resolver else {
+        return Ok(JAVA_LANG_OBJECT.to_owned());
+    };
     let mut left_ancestors = vec![left_name.to_owned()];
     left_ancestors.extend(
         iter_superclasses(resolver, left_name)?

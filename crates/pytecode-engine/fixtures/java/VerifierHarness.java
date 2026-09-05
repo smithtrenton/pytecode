@@ -99,6 +99,15 @@ public class VerifierHarness {
         try {
             ClassLoader loader = new ClassLoader(VerifierHarness.class.getClassLoader()) {
                 @Override
+                protected synchronized Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                    if (!name.equals(dotClassName)) return super.loadClass(name, resolve);
+                    Class<?> target = findLoadedClass(name);
+                    if (target == null) target = findClass(name);
+                    if (resolve) resolveClass(target);
+                    return target;
+                }
+
+                @Override
                 protected Class<?> findClass(String name) throws ClassNotFoundException {
                     if (name.equals(dotClassName)) {
                         return defineClass(name, classBytes, 0, classBytes.length);
@@ -108,6 +117,9 @@ public class VerifierHarness {
             };
 
             Class<?> clazz = loader.loadClass(dotClassName);
+            // Force method verification; defineClass/loadClass can be lazy.
+            clazz.getDeclaredConstructors();
+            clazz.getDeclaredMethods();
 
             if (executeMode) {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -134,8 +146,7 @@ public class VerifierHarness {
             return resultJson(classFilePath, "VERIFY_FAIL", e.toString(), null, null, includePath);
         } catch (Exception e) {
             if (executeMode) {
-                // Execution failed but class loaded (verification passed)
-                return resultJson(classFilePath, "VERIFY_OK", null, null, e.toString(), includePath);
+                return resultJson(classFilePath, "EXEC_FAIL", null, null, e.toString(), includePath);
             } else {
                 return resultJson(classFilePath, "VERIFY_FAIL", e.toString(), null, null, includePath);
             }

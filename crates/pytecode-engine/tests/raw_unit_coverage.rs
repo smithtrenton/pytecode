@@ -1920,17 +1920,8 @@ fn cp_all_17_types_in_one_classfile() -> TestResult<()> {
 // =========================================================================
 
 #[test]
-fn opcode_breakpoint_parses_as_simple() -> TestResult<()> {
+fn opcode_breakpoint_is_rejected_in_classfiles() {
     let raw = classfile_with_code_only(&[0xCA]);
-    let instructions = parse_instructions(&raw)?;
-    assert!(matches!(
-        instructions[0],
-        Instruction::Simple {
-            opcode: 0xCA,
-            offset: 0,
-        }
-    ));
-    let parsed = parse_class(&raw)?;
-    assert_eq!(write_class(&parsed)?, raw);
-    Ok(())
+    assert!(parse_instructions(&raw).is_err());
+    assert!(parse_class(&raw).is_err());
 }

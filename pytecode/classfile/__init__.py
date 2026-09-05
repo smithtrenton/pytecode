@@ -6,6 +6,8 @@ than the mutable symbolic editing API in :mod:`pytecode.model`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .. import _rust
 from .._utils import document_property as _document_property
 from .bytecode import ArrayType, InsnInfoType
@@ -28,18 +30,19 @@ def _documented_classreader_from_bytes(cls: type[ClassReader], bytes_or_bytearra
     return _classreader_from_bytes.__get__(cls, cls)(bytes_or_bytearray)
 
 
-ClassReader.from_bytes = classmethod(_documented_classreader_from_bytes)
+# Assigning a descriptor dynamically preserves the native classmethod binding.
+ClassReader.from_bytes = classmethod(_documented_classreader_from_bytes)  # pyright: ignore[reportAttributeAccessIssue]
 
 _classreader_from_file = ClassReader.__dict__["from_file"]
 
 
-def _documented_classreader_from_file(cls: type[ClassReader], path: str) -> ClassReader:
+def _documented_classreader_from_file(cls: type[ClassReader], path: str | Path) -> ClassReader:
     """Read a classfile from disk and return a new reader."""
 
     return _classreader_from_file.__get__(cls, cls)(path)
 
 
-ClassReader.from_file = classmethod(_documented_classreader_from_file)
+ClassReader.from_file = classmethod(_documented_classreader_from_file)  # pyright: ignore[reportAttributeAccessIssue]
 
 _document_property(
     ClassReader,

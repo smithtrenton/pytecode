@@ -1,0 +1,43 @@
+name: Fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [class_parse, model_lift, verify_bounded]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2026-09-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo +nightly-2026-09-03 install cargo-fuzz --version 0.13.2 --locked
+      - run: python3 tools/seed_fuzz_corpus.py
+      - name: Run bounded fuzzing
+        env:
+          FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '30' }}
+        run: |
+          cargo +nightly-2026-09-03 metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+          cargo +nightly-2026-09-03 fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_SECONDS -timeout=10 -rss_limit_mb=2048 -max_len=262144
+          git diff --exit-code -- fuzz/Cargo.lock
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-failures-${{ matrix.target }}
+          path: fuzz/artifacts

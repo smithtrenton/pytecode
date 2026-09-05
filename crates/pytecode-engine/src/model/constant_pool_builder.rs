@@ -2,7 +2,7 @@ use crate::indexes::{
     BootstrapMethodIndex, ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex,
     Utf8Index,
 };
-use crate::modified_utf8::{decode_modified_utf8, encode_modified_utf8};
+use crate::modified_utf8::{JavaString, decode_modified_utf8, encode_modified_utf8};
 use crate::raw::{
     ClassInfo, ConstantPoolEntry, DoubleInfo, DynamicInfo, FieldRefInfo, FloatInfo, IntegerInfo,
     InterfaceMethodRefInfo, InvokeDynamicInfo, LongInfo, MethodHandleInfo, MethodRefInfo,
@@ -153,6 +153,18 @@ impl ConstantPoolBuilder {
                 0,
                 EngineErrorKind::InvalidModelState {
                     reason: format!("constant-pool entry {} is not Utf8", index),
+                },
+            )),
+        }
+    }
+
+    pub fn resolve_java_string(&self, index: Utf8Index) -> Result<JavaString> {
+        match self.entry(index.value())? {
+            ConstantPoolEntry::Utf8(info) => JavaString::from_modified_utf8(&info.bytes),
+            _ => Err(EngineError::new(
+                0,
+                EngineErrorKind::InvalidModelState {
+                    reason: format!("constant-pool entry {index} is not Utf8"),
                 },
             )),
         }
@@ -324,6 +336,14 @@ impl ConstantPoolBuilder {
 
     pub fn add_utf8(&mut self, value: &str) -> Result<Utf8Index> {
         let bytes = encode_modified_utf8(value);
+        self.add_utf8_bytes(bytes)
+    }
+
+    pub fn add_utf16(&mut self, value: &JavaString) -> Result<Utf8Index> {
+        self.add_utf8_bytes(value.to_modified_utf8())
+    }
+
+    fn add_utf8_bytes(&mut self, bytes: Vec<u8>) -> Result<Utf8Index> {
         if bytes.len() > UTF8_MAX_BYTES {
             return Err(EngineError::new(
                 0,
@@ -374,6 +394,12 @@ impl ConstantPoolBuilder {
 
     pub fn add_string(&mut self, value: &str) -> Result<CpIndex> {
         let string_index = self.add_utf8(value)?;
+        self.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
+            .map(CpIndex::from)
+    }
+
+    pub fn add_java_string(&mut self, value: &JavaString) -> Result<CpIndex> {
+        let string_index = self.add_utf16(value)?;
         self.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
             .map(CpIndex::from)
     }

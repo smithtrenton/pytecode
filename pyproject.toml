@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.13.1,<2.0.0"]
+requires = ["maturin>=1.15.0,<2.0.0"]
 build-backend = "maturin"
 
 [project]
@@ -34,18 +34,25 @@ Changelog = "https://github.com/smithtrenton/pytecode/releases"
 
 [project.optional-dependencies]
 dev = [
-  "basedpyright>=1.39.0,<2.0.0",
-  "maturin>=1.13.1,<2.0.0",
+  "basedpyright>=1.39.10,<2.0.0",
+  "maturin>=1.15.0,<2.0.0",
   "pdoc>=16.0.0,<17.0.0",
-  "pytest>=9.0.3,<10.0.0",
-  "ruff>=0.15.10,<0.16.0",
+  "pytest>=9.1.1,<10.0.0",
+  "ruff>=0.16.6,<0.17.0",
 ]
 
 [tool.maturin]
+locked = true
+# Preserve all workspace members so the shipped Cargo.lock remains usable.
+sdist-generator = "git"
 manifest-path = "crates/pytecode-python/Cargo.toml"
 python-source = "."
 module-name = "pytecode._rust"
-include = ["pytecode/*.pyi", "pytecode/py.typed"]
+include = [
+  "pytecode/*.pyi",
+  "pytecode/py.typed",
+  { path = "rust-toolchain.toml", format = "sdist" },
+]
 
 [tool.basedpyright]
 pythonVersion = "3.12"
@@ -53,7 +60,6 @@ typeCheckingMode = "strict"
 include = ["pytecode", "run.py", "tools", "tests"]
 exclude = ["output", "venv", ".venv"]
 reportMissingTypeStubs = false
-reportAttributeAccessIssue = false
 reportPrivateUsage = false
 
 [tool.ruff]
@@ -72,4 +78,14 @@ select = ["E", "F", "I", "UP"]
 pythonpath = ["."]
 
 [tool.uv]
-required-version = ">=0.10.12"
+required-version = ">=0.12.10"
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "Cargo.lock" },
+  { file = "rust-toolchain.toml" },
+  { file = "crates/**/Cargo.toml" },
+  { file = "crates/**/*.rs" },
+  { file = "pytecode/**/*.py" },
+  { file = "pytecode/**/*.pyi" },
+]

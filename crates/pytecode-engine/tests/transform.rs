@@ -232,7 +232,7 @@ fn code_transform_spec_replaces_matching_instruction_sequences() -> TestResult<(
             ],
             replacement: vec![
                 CodeItem::Ldc(LdcInsn {
-                    value: LdcValue::String("patched sequence".to_owned()),
+                    value: LdcValue::String("patched sequence".into()),
                 }),
                 CodeItem::Method(MethodInsn {
                     opcode: 0xB6,

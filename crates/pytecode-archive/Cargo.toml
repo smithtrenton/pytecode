@@ -15,6 +15,7 @@ categories = ["parser-implementations", "development-tools"]
 pytecode-engine = { path = "../pytecode-engine" }
 serde.workspace = true
 thiserror.workspace = true
+tempfile.workspace = true
 zip.workspace = true
 
 [dev-dependencies]

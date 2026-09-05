@@ -33,14 +33,14 @@ Both are useful:
 cargo run --release -p pytecode-cli -- bench-smoke --iterations 5
 
 # Python API timing on the same jar
-uv run python tools\benchmark_jar_pipeline.py ^
-  crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar ^
+uv run --no-sync python tools\benchmark_jar_pipeline.py `
+  crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar `
   --iterations 5
 
 # Side-by-side comparison output
-uv run python tools\compare_rust_python_benchmarks.py ^
-  --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar ^
-  --iterations 5 ^
+uv run --no-sync python tools\compare_rust_python_benchmarks.py `
+  --jar crates\pytecode-engine\fixtures\jars\byte-buddy-1.17.5.jar `
+  --iterations 5 `
   --output output\benchmarks\rust-vs-python-byte-buddy.json
 ```
 

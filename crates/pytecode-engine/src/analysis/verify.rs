@@ -1,9 +1,11 @@
 use super::{AnalysisError, ClassResolver, build_cfg, recompute_frames};
 use crate::constants::{
-    ClassAccessFlags, FieldAccessFlags, MAGIC, MethodAccessFlags,
-    class_version_supported_by_java_se_25,
+    ClassAccessFlags, FieldAccessFlags, MAGIC, MethodAccessFlags, class_version_supported,
 };
-use crate::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
+use crate::descriptors::{
+    is_valid_field_descriptor, is_valid_method_descriptor, parameter_slot_count,
+    parse_method_descriptor,
+};
 use crate::error::EngineErrorKind;
 use crate::indexes::{ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex, Utf8Index};
 use crate::model::{
@@ -12,6 +14,14 @@ use crate::model::{
 use crate::raw::{AttributeInfo, ClassFile, ConstantPoolEntry};
 use crate::signatures::{parse_class_signature, parse_field_signature, parse_method_signature};
 use std::collections::{BTreeMap, HashSet};
+
+fn valid_declared_method_descriptor(descriptor: &str, access_flags: MethodAccessFlags) -> bool {
+    parse_method_descriptor(descriptor).is_ok_and(|parsed| {
+        parameter_slot_count(&parsed)
+            + usize::from(!access_flags.contains(MethodAccessFlags::STATIC))
+            <= 255
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -113,29 +123,7 @@ impl AttributeOwner {
 // Name validation helpers (shared between classfile and classmodel verifiers)
 // ---------------------------------------------------------------------------
 
-fn is_valid_internal_name(name: &str) -> bool {
-    if name.is_empty() || name.starts_with('/') || name.ends_with('/') || name.contains("//") {
-        return false;
-    }
-    !name.contains(['.', ';', '['])
-}
-
-fn is_valid_unqualified_name(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    !name.contains(['.', ';', '[', '/'])
-}
-
-fn is_valid_method_name(name: &str) -> bool {
-    if name == "<init>" || name == "<clinit>" {
-        return true;
-    }
-    if name.is_empty() {
-        return false;
-    }
-    !name.contains(['.', ';', '[', '/', '<', '>'])
-}
+use crate::names::{is_valid_internal_name, is_valid_method_name, is_valid_unqualified_name};
 
 // ---------------------------------------------------------------------------
 // Diagnostic collector with optional fail-fast support
@@ -170,6 +158,13 @@ impl DiagnosticCollector {
         Ok(())
     }
 
+    fn extend(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) -> Result<(), ()> {
+        for diagnostic in diagnostics {
+            self.push(diagnostic)?;
+        }
+        Ok(())
+    }
+
     fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
@@ -183,8 +178,16 @@ pub fn verify_classfile_with_options(classfile: &ClassFile, fail_fast: bool) -> 
     verify_classfile_inner(classfile, fail_fast)
 }
 
-fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+fn verify_classfile_inner(classfile: &ClassFile, fail_fast: bool) -> Vec<Diagnostic> {
+    let mut diagnostics = DiagnosticCollector::new(fail_fast);
+    let _ = collect_classfile_diagnostics(classfile, &mut diagnostics);
+    diagnostics.into_diagnostics()
+}
+
+fn collect_classfile_diagnostics(
+    classfile: &ClassFile,
+    diagnostics: &mut DiagnosticCollector,
+) -> Result<(), ()> {
     let class_name = cp_class_name(classfile, classfile.this_class).ok();
     let class_location = Location {
         class_name: class_name.clone(),
@@ -196,9 +199,9 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
             Category::Magic,
             format!("invalid magic 0x{:08x}", classfile.magic),
             class_location.clone(),
-        ));
+        ))?;
     }
-    if !class_version_supported_by_java_se_25(classfile.major_version, classfile.minor_version) {
+    if !class_version_supported(classfile.major_version, classfile.minor_version) {
         diagnostics.push(Diagnostic::error(
             Category::Version,
             format!(
@@ -206,22 +209,22 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 classfile.major_version, classfile.minor_version
             ),
             class_location.clone(),
-        ));
+        ))?;
     }
-    diagnostics.extend(verify_constant_pool(classfile, class_name.as_deref()));
-    diagnostics.extend(verify_class_structure(classfile, class_name.as_deref()));
-    diagnostics.extend(verify_class_access_flags(classfile, class_location.clone()));
+    diagnostics.extend(verify_constant_pool(classfile, class_name.as_deref()))?;
+    diagnostics.extend(verify_class_structure(classfile, class_name.as_deref()))?;
+    diagnostics.extend(verify_class_access_flags(classfile, class_location.clone()))?;
     diagnostics.extend(verify_class_attributes(
         classfile,
         class_name.as_deref(),
         class_location.clone(),
-    ));
+    ))?;
     if classfile.this_class.value() == 0 {
         diagnostics.push(Diagnostic::error(
             Category::ClassStructure,
             "this_class must be non-zero",
             class_location.clone(),
-        ));
+        ))?;
     }
     for field in &classfile.fields {
         let name = cp_utf8(classfile, field.name_index).ok();
@@ -236,7 +239,7 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::ConstantPool,
                 "field name_index must reference Utf8",
                 location.clone(),
-            ));
+            ))?;
         }
         if descriptor
             .as_deref()
@@ -246,14 +249,14 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::Descriptor,
                 "invalid field descriptor",
                 location.clone(),
-            ));
+            ))?;
         }
         if field_visibility_count(field.access_flags) > 1 {
             diagnostics.push(Diagnostic::error(
                 Category::AccessFlags,
                 "field must not be both public/private/protected",
                 location.clone(),
-            ));
+            ))?;
         }
         if field.access_flags.contains(FieldAccessFlags::FINAL)
             && field.access_flags.contains(FieldAccessFlags::VOLATILE)
@@ -262,14 +265,14 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::AccessFlags,
                 "field must not be both final and volatile",
                 location.clone(),
-            ));
+            ))?;
         }
         diagnostics.extend(verify_attributes(
             classfile,
             &field.attributes,
             AttributeOwner::Field,
             &location,
-        ));
+        ))?;
     }
     for method in &classfile.methods {
         let name = cp_utf8(classfile, method.name_index).ok();
@@ -285,31 +288,30 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::ConstantPool,
                 "method name_index must reference Utf8",
                 location.clone(),
-            ));
+            ))?;
         }
-        if descriptor
-            .as_deref()
-            .is_none_or(|descriptor| !is_valid_method_descriptor(descriptor))
-        {
+        if descriptor.as_deref().is_none_or(|descriptor| {
+            !valid_declared_method_descriptor(descriptor, method.access_flags)
+        }) {
             diagnostics.push(Diagnostic::error(
                 Category::Descriptor,
                 "invalid method descriptor",
                 location.clone(),
-            ));
+            ))?;
         }
         if method_visibility_count(method.access_flags) > 1 {
             diagnostics.push(Diagnostic::error(
                 Category::AccessFlags,
                 "method must not be both public/private/protected",
                 location.clone(),
-            ));
+            ))?;
         }
         diagnostics.extend(verify_attributes(
             classfile,
             &method.attributes,
             AttributeOwner::Method,
             &location,
-        ));
+        ))?;
         let code_attributes = method
             .attributes
             .iter()
@@ -324,14 +326,14 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::Method,
                 "abstract method must not carry Code",
                 location.clone(),
-            ));
+            ))?;
         }
         if method.access_flags.contains(MethodAccessFlags::NATIVE) && !code_attributes.is_empty() {
             diagnostics.push(Diagnostic::error(
                 Category::Method,
                 "native method must not carry Code",
                 location.clone(),
-            ));
+            ))?;
         }
         if !method.access_flags.contains(MethodAccessFlags::ABSTRACT)
             && !method.access_flags.contains(MethodAccessFlags::NATIVE)
@@ -341,7 +343,7 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 Category::Method,
                 "concrete method must carry Code",
                 location.clone(),
-            ));
+            ))?;
         }
         if let Some(code) = code_attributes.first() {
             diagnostics.extend(verify_attributes(
@@ -349,19 +351,19 @@ fn verify_classfile_inner(classfile: &ClassFile, _fail_fast: bool) -> Vec<Diagno
                 &code.attributes,
                 AttributeOwner::Code,
                 &location,
-            ));
+            ))?;
             for handler in &code.exception_table {
                 if handler.start_pc >= handler.end_pc || handler.end_pc > code.code_length as u16 {
                     diagnostics.push(Diagnostic::error(
                         Category::Code,
                         "exception handler range is invalid",
                         location.clone(),
-                    ));
+                    ))?;
                 }
             }
         }
     }
-    diagnostics
+    Ok(())
 }
 
 pub fn verify_classmodel(
@@ -686,7 +688,7 @@ fn verify_model_method(
     }
 
     // Descriptor validation
-    if !is_valid_method_descriptor(&method.descriptor) {
+    if !valid_declared_method_descriptor(&method.descriptor, method.access_flags) {
         dc.push(Diagnostic::error(
             Category::Descriptor,
             format!("Invalid method descriptor: {:?}", method.descriptor),
@@ -1052,7 +1054,12 @@ fn verify_constant_pool(classfile: &ClassFile, class_name: Option<&str>) -> Vec<
                     location,
                 ));
             }
-            ConstantPoolEntry::String(info) if cp_utf8(classfile, info.string_index).is_err() => {
+            ConstantPoolEntry::String(info)
+                if !matches!(
+                    classfile.constant_pool.get(usize::from(info.string_index.value())),
+                    Some(Some(ConstantPoolEntry::Utf8(value))) if crate::modified_utf8::JavaString::from_modified_utf8(&value.bytes).is_ok()
+                ) =>
+            {
                 diagnostics.push(Diagnostic::error(
                     Category::ConstantPool,
                     "string entry references invalid Utf8 payload",

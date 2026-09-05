@@ -48,7 +48,7 @@ class JarInfo:
 
     Attributes:
         filename: Normalized, OS-native relative path of the entry.
-        zipinfo: Original ZIP central-directory header for the entry.
+        zipinfo: Supported ZIP metadata; mutations are honored by ``rewrite``.
         bytes: Raw (uninterpreted) byte content of the entry.
     """
 
@@ -65,7 +65,7 @@ def _normalize_filename(
     raw = os.fspath(filename)
     if not raw:
         raise ValueError("JAR entry filename must not be empty")
-    if raw.startswith(("/", "\\")) or Path(raw).is_absolute():
+    if raw.startswith(("/", "\\")) or Path(raw).is_absolute() or raw[1:2] == ":":
         raise ValueError(f"JAR entry filename must be relative: {raw!r}")
 
     posix_path = raw.replace("\\", "/")
@@ -159,8 +159,9 @@ def normalize_debug_info_policy(policy: DebugInfoPolicy | str) -> DebugInfoPolic
 
 def _read_archive_state(
     filename: str | os.PathLike[str],
+    **limits: int,
 ) -> tuple[list[zipfile.ZipInfo], dict[str, JarInfo], dict[str, _rust._ArchiveEntryState]]:
-    states = _rust.read_archive_state(os.fspath(filename))
+    states = _rust.read_archive_state(os.fspath(filename), **limits)
     infolist: list[zipfile.ZipInfo] = []
     files: dict[str, JarInfo] = {}
     entry_states: dict[str, _rust._ArchiveEntryState] = {}
@@ -184,13 +185,28 @@ class JarFile:
     rewritten.
     """
 
-    def __init__(self, filename: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        filename: str | os.PathLike[str],
+        *,
+        max_entries: int = 100_000,
+        max_entry_bytes: int = 256 * 1024 * 1024,
+        max_total_bytes: int = 1024 * 1024 * 1024,
+    ) -> None:
         """Open and read a JAR archive into memory.
 
         Args:
             filename: Path to an existing JAR file on disk.
+            max_entries: Maximum number of ZIP entries.
+            max_entry_bytes: Maximum decompressed size of any entry.
+            max_total_bytes: Maximum total decompressed bytes. Limits also apply to rewrites.
         """
         self.filename = os.fspath(filename)
+        self._read_limits = {
+            "max_entries": max_entries,
+            "max_entry_bytes": max_entry_bytes,
+            "max_total_bytes": max_total_bytes,
+        }
         self.infolist: list[zipfile.ZipInfo] = []
         self.files: dict[str, JarInfo] = {}
         self._entry_states: dict[str, _rust._ArchiveEntryState] = {}
@@ -198,7 +214,7 @@ class JarFile:
 
     def read(self) -> None:
         """Re-read the archive from disk, replacing all in-memory state."""
-        self.infolist, self.files, self._entry_states = _read_archive_state(self.filename)
+        self.infolist, self.files, self._entry_states = _read_archive_state(self.filename, **self._read_limits)
 
     def add_file(
         self,
@@ -288,6 +304,13 @@ class JarFile:
         ``.apply`` methods, and plain Python callables that mutate ``ClassModel``
         in place.
 
+        Entries are written to a temporary file in the destination directory and
+        validated before an atomic replacement. A failed transform, staged read,
+        or replacement leaves the destination intact and removes the temporary
+        file. This guarantees atomic visibility, not durability after a crash.
+        ``files`` and its ``JarInfo`` values are the authoritative mutable view;
+        an entry's ``filename`` determines its output name.
+
         Signed-JAR artifacts under ``META-INF`` are preserved as ordinary
         resources and are **not** re-signed; if class bytes change the
         resulting archive may no longer verify.
@@ -320,30 +343,32 @@ class JarFile:
             )
         destination = Path(self.filename if output_path is None else output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        original_filename = self.filename
-        original_infolist = self.infolist.copy()
-        original_files = self.files.copy()
-        original_entry_states = self._entry_states.copy()
         effective_debug_info = _effective_rust_debug_policy(debug_policy, skip_debug=skip_debug)
-        try:
-            _rust.rewrite_archive_state(
-                self.filename,
-                list(self._entry_states.values()),
-                transform=transform,
-                output_path=destination,
-                frame_mode=frame_mode,
-                resolver=resolver,
-                debug_info=effective_debug_info,
+        states = [
+            _entry_state_from_jarinfo(
+                info,
+                original_index=self._entry_states[key].original_index if key in self._entry_states else None,
             )
-            new_infolist, new_files, new_entry_states = _read_archive_state(destination)
-            self.filename = os.fspath(destination)
+            for key, info in self.files.items()
+        ]
+        prepared = _rust.rewrite_archive_state(
+            self.filename,
+            states,
+            transform=transform,
+            output_path=destination,
+            frame_mode=frame_mode,
+            resolver=resolver,
+            debug_info=effective_debug_info,
+            **self._read_limits,
+        )
+        try:
+            new_infolist, new_files, new_entry_states = _read_archive_state(prepared.path, **self._read_limits)
+            new_filename = os.fspath(destination)
+            prepared.commit()
+            self.filename = new_filename
             self.infolist = new_infolist
             self.files = new_files
             self._entry_states = new_entry_states
             return destination
-        except Exception:
-            self.filename = original_filename
-            self.infolist = original_infolist
-            self.files = original_files
-            self._entry_states = original_entry_states
-            raise
+        finally:
+            del prepared
