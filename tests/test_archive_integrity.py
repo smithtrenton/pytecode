@@ -44,7 +44,9 @@ def test_public_entry_mutations_and_archive_comment_survive(tmp_path: Path):
 
 @pytest.mark.parametrize("names", [("a.txt", "a.txt"), ("a.txt", "./a.txt"), ("a/b", "a\\b")])
 def test_duplicate_names_are_rejected(tmp_path: Path, names: tuple[str, ...]):
-    if names[0].replace("\\", "/") == names[1].replace("\\", "/"):
+    # zipfile normalizes backslashes on Windows when constructing ZipInfo;
+    # POSIX keeps them literal. Its warning concerns its own emitted names.
+    if zipfile.ZipInfo(names[0]).filename == zipfile.ZipInfo(names[1]).filename:
         with pytest.warns(UserWarning, match="Duplicate name"):
             path = archive(tmp_path / "duplicates.jar", names)
     else:
