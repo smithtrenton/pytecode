@@ -116,6 +116,7 @@ jobs:
         with:
           version: "0.12.10"
           python-version: "3.12"
+          enable-cache: false
       - run: cargo +1.94.0 check --workspace --locked
 
   java26:
