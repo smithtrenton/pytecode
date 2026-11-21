@@ -558,7 +558,10 @@ fn ldc_integer_and_long_constants_lift_as_signed_values() {
     };
 
     assert_eq!(single_ldc("negativeInt"), LdcValue::Int(-484_534_915));
-    assert_eq!(single_ldc("negativeLong"), LdcValue::Long(-0x12_34_56_78_90));
+    assert_eq!(
+        single_ldc("negativeLong"),
+        LdcValue::Long(-0x12_34_56_78_90)
+    );
     assert_eq!(single_ldc("maxInt"), LdcValue::Int(i32::MAX));
     assert_eq!(single_ldc("minLong"), LdcValue::Long(i64::MIN));
 
