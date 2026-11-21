@@ -20,11 +20,12 @@ fn read_class_entries(jar_path: &Path) -> io::Result<Vec<RawClassStub>> {
     let mut entries = Vec::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        if entry.name().ends_with(".class") {
+        let name = entry.name()?.into_owned();
+        if name.ends_with(".class") {
             let mut bytes = Vec::with_capacity(entry.size() as usize);
             entry.read_to_end(&mut bytes)?;
             entries.push(RawClassStub {
-                entry_name: entry.name().to_owned(),
+                entry_name: name,
                 bytes,
             });
         }
