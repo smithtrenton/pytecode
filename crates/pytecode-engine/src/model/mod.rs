@@ -992,7 +992,7 @@ fn lower_code_model(
         Some(
             recompute_frames_for_class(code, class, method, resolver).map_err(|error| {
                 model_error(format!(
-                    "frame recomputation failed for {}{}{}: {error}",
+                    "frame recomputation failed for {}.{}{}: {error}",
                     class.name, method.name, method.descriptor
                 ))
             })?,

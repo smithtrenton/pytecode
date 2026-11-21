@@ -99,9 +99,10 @@ fn verbose() -> bool {
 }
 
 fn truncate(value: &str, max: usize) -> &str {
-    if value.len() <= max {
-        value
-    } else {
-        &value[..max]
+    // Never slice mid-UTF-8-codepoint: Debug strings of LDC constants can
+    // carry non-ASCII payloads.
+    match value.char_indices().nth(max) {
+        Some((index, _)) => &value[..index],
+        None => value,
     }
 }

@@ -22,4 +22,14 @@ public class LdcSigns
 	{
 		return Long.MIN_VALUE;
 	}
+
+	public int minInt()
+	{
+		return Integer.MIN_VALUE;
+	}
+
+	public long maxLong()
+	{
+		return Long.MAX_VALUE;
+	}
 }

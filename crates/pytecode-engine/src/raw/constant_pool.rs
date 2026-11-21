@@ -56,29 +56,31 @@ pub struct Utf8Info {
 pub struct IntegerInfo {
     /// Raw 32-bit constant-pool payload. Java integer constants are signed
     /// 32-bit values; the semantic form is available through the model layer
-    /// (`LdcValue::Int`).
+    /// (`LdcValue::Int`). JVMS §4.4.4 calls this `bytes` in prose; the value
+    /// is held here as raw bits.
     pub value_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatInfo {
-    /// Raw IEEE-754 bit pattern.
+    /// Raw IEEE-754 bit pattern (JVMS §4.4.4).
     pub value_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LongInfo {
-    /// Raw high 32 bits of the 64-bit payload.
+    /// Raw high 32 bits of the 64-bit payload. JVMS §4.4.5 names this field
+    /// `high_bytes`; it is held here as raw bits, not bytes.
     pub high_bits: u32,
-    /// Raw low 32 bits of the 64-bit payload.
+    /// Raw low 32 bits of the 64-bit payload (JVMS §4.4.5 `low_bytes`).
     pub low_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoubleInfo {
-    /// Raw high 32 bits of the 64-bit payload.
+    /// Raw high 32 bits of the 64-bit payload (JVMS §4.4.5 `high_bytes`).
     pub high_bits: u32,
-    /// Raw low 32 bits of the 64-bit payload.
+    /// Raw low 32 bits of the 64-bit payload (JVMS §4.4.5 `low_bytes`).
     pub low_bits: u32,
 }
 

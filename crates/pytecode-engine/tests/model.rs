@@ -564,6 +564,8 @@ fn ldc_integer_and_long_constants_lift_as_signed_values() {
     );
     assert_eq!(single_ldc("maxInt"), LdcValue::Int(i32::MAX));
     assert_eq!(single_ldc("minLong"), LdcValue::Long(i64::MIN));
+    assert_eq!(single_ldc("minInt"), LdcValue::Int(i32::MIN));
+    assert_eq!(single_ldc("maxLong"), LdcValue::Long(i64::MAX));
 
     // roundtrip preserves the raw constant-pool encodings byte-for-byte
     let lowered = model.to_bytes().expect("model should lower");
