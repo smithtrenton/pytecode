@@ -59,9 +59,13 @@ pub struct InvokeDynamicInsn {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LdcValue {
-    Int(u32),
+    /// Signed 32-bit integer constant, matching Java `int` semantics.
+    Int(i32),
+    /// Raw IEEE-754 bit pattern of a `float` constant.
     FloatBits(u32),
-    Long(u64),
+    /// Signed 64-bit integer constant, matching Java `long` semantics.
+    Long(i64),
+    /// Raw IEEE-754 bit pattern of a `double` constant.
     DoubleBits(u64),
     String(crate::modified_utf8::JavaString),
     Class(String),

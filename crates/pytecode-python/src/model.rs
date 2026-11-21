@@ -860,7 +860,7 @@ pub struct PyLdcInsn {
 #[pymethods]
 impl PyLdcInsn {
     #[staticmethod]
-    fn int(value: u32) -> Self {
+    fn int(value: i32) -> Self {
         Self {
             inner: LdcInsn {
                 value: LdcValue::Int(value),
@@ -878,7 +878,7 @@ impl PyLdcInsn {
     }
 
     #[staticmethod]
-    fn long(value: u64) -> Self {
+    fn long(value: i64) -> Self {
         Self {
             inner: LdcInsn {
                 value: LdcValue::Long(value),

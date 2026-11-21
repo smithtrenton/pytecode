@@ -845,28 +845,28 @@ define_numeric_cp_wrapper!(
     "IntegerInfo",
     raw::IntegerInfo,
     raw::ConstantPoolTag::Integer,
-    { value_bytes: u32 }
+    { value_bits: u32 }
 );
 define_numeric_cp_wrapper!(
     PyFloatInfo,
     "FloatInfo",
     raw::FloatInfo,
     raw::ConstantPoolTag::Float,
-    { value_bytes: u32 }
+    { value_bits: u32 }
 );
 define_numeric_cp_wrapper!(
     PyLongInfo,
     "LongInfo",
     raw::LongInfo,
     raw::ConstantPoolTag::Long,
-    { high_bytes: u32, low_bytes: u32 }
+    { high_bits: u32, low_bits: u32 }
 );
 define_numeric_cp_wrapper!(
     PyDoubleInfo,
     "DoubleInfo",
     raw::DoubleInfo,
     raw::ConstantPoolTag::Double,
-    { high_bytes: u32, low_bytes: u32 }
+    { high_bits: u32, low_bits: u32 }
 );
 define_numeric_cp_wrapper!(
     PyConstantPoolClassInfo,

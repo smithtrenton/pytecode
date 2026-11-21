@@ -2,7 +2,7 @@ use pytecode_engine::fixtures::compiled_fixture_paths_for;
 use pytecode_engine::indexes::*;
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
-    DebugInfoState, Label, MethodModel, VarInsn, mark_class_debug_info_stale,
+    DebugInfoState, Label, LdcValue, MethodModel, VarInsn, mark_class_debug_info_stale,
     mark_method_debug_info_stale,
 };
 use pytecode_engine::modified_utf8::decode_modified_utf8;
@@ -528,4 +528,41 @@ fn edited_methods_with_stackmaptable_fail_explicitly_before_phase4() {
         }
         other => panic!("unexpected error kind: {other:?}"),
     }
+}
+
+#[test]
+fn ldc_integer_and_long_constants_lift_as_signed_values() {
+    let bytes = fixture_bytes("LdcSigns.java", "LdcSigns.class");
+    let model = ClassModel::from_bytes(&bytes).expect("fixture should lift");
+
+    let single_ldc = |method_name: &str| -> LdcValue {
+        let method = model
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+            .unwrap_or_else(|| panic!("method {method_name} not found"));
+        let code = method
+            .code
+            .as_ref()
+            .unwrap_or_else(|| panic!("method {method_name} should have code"));
+        let values: Vec<_> = code
+            .instructions
+            .iter()
+            .filter_map(|item| match item {
+                CodeItem::Ldc(ldc) => Some(ldc.value.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values.len(), 1, "expected exactly one ldc in {method_name}");
+        values.into_iter().next().unwrap()
+    };
+
+    assert_eq!(single_ldc("negativeInt"), LdcValue::Int(-484_534_915));
+    assert_eq!(single_ldc("negativeLong"), LdcValue::Long(-0x12_34_56_78_90));
+    assert_eq!(single_ldc("maxInt"), LdcValue::Int(i32::MAX));
+    assert_eq!(single_ldc("minLong"), LdcValue::Long(i64::MIN));
+
+    // roundtrip preserves the raw constant-pool encodings byte-for-byte
+    let lowered = model.to_bytes().expect("model should lower");
+    assert_eq!(lowered, bytes);
 }

@@ -832,14 +832,14 @@ fn lower_cp_index_item(opcode: u8, index: CpIndex, cp: &ConstantPoolBuilder) -> 
 fn lift_ldc_value(index: CpIndex, cp: &ConstantPoolBuilder) -> Result<LdcValue> {
     let entry = cp.entry(index.value())?;
     match entry {
-        ConstantPoolEntry::Integer(info) => Ok(LdcValue::Int(info.value_bytes)),
-        ConstantPoolEntry::Float(info) => Ok(LdcValue::FloatBits(info.value_bytes)),
+        ConstantPoolEntry::Integer(info) => Ok(LdcValue::Int(info.value_bits as i32)),
+        ConstantPoolEntry::Float(info) => Ok(LdcValue::FloatBits(info.value_bits)),
         ConstantPoolEntry::Long(info) => {
-            let raw = ((info.high_bytes as u64) << 32) | (info.low_bytes as u64);
-            Ok(LdcValue::Long(raw))
+            let raw = ((info.high_bits as u64) << 32) | (info.low_bits as u64);
+            Ok(LdcValue::Long(raw as i64))
         }
         ConstantPoolEntry::Double(info) => {
-            let raw = ((info.high_bytes as u64) << 32) | (info.low_bytes as u64);
+            let raw = ((info.high_bits as u64) << 32) | (info.low_bits as u64);
             Ok(LdcValue::DoubleBits(raw))
         }
         ConstantPoolEntry::String(info) => {

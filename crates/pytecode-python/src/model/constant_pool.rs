@@ -86,7 +86,7 @@ impl PyConstantPoolBuilder {
         })
     }
 
-    fn add_integer(&mut self, value: u32) -> PyResult<u16> {
+    fn add_integer(&mut self, value: i32) -> PyResult<u16> {
         self.with_builder_mut(|builder| {
             builder
                 .add_integer(value)
@@ -95,8 +95,7 @@ impl PyConstantPoolBuilder {
         })
     }
 
-    fn add_long(&mut self, high: u32, low: u32) -> PyResult<u16> {
-        let value = ((high as u64) << 32) | (low as u64);
+    fn add_long(&mut self, value: i64) -> PyResult<u16> {
         self.with_builder_mut(|builder| {
             builder
                 .add_long(value)
@@ -308,7 +307,7 @@ impl PyConstantPoolBuilder {
         })
     }
 
-    fn find_integer(&self, value: u32) -> PyResult<Option<u16>> {
+    fn find_integer(&self, value: i32) -> PyResult<Option<u16>> {
         self.with_builder(|builder| Ok(builder.find_integer(value).map(|idx| idx.into())))
     }
 
@@ -316,8 +315,8 @@ impl PyConstantPoolBuilder {
         self.with_builder(|builder| Ok(builder.find_float_bits(raw_bits).map(|idx| idx.into())))
     }
 
-    fn find_long(&self, high: u32, low: u32) -> PyResult<Option<u16>> {
-        self.with_builder(|builder| Ok(builder.find_long(high, low).map(|idx| idx.into())))
+    fn find_long(&self, value: i64) -> PyResult<Option<u16>> {
+        self.with_builder(|builder| Ok(builder.find_long(value).map(|idx| idx.into())))
     }
 
     fn find_double(&self, high: u32, low: u32) -> PyResult<Option<u16>> {

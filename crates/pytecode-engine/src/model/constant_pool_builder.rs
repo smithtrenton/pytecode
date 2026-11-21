@@ -356,32 +356,33 @@ impl ConstantPoolBuilder {
             .map(Utf8Index::from)
     }
 
-    pub fn add_integer(&mut self, value: u32) -> Result<CpIndex> {
+    pub fn add_integer(&mut self, value: i32) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Integer(IntegerInfo {
-            value_bytes: value,
+            value_bits: value as u32,
         }))
         .map(CpIndex::from)
     }
 
     pub fn add_float_bits(&mut self, raw_bits: u32) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Float(FloatInfo {
-            value_bytes: raw_bits,
+            value_bits: raw_bits,
         }))
         .map(CpIndex::from)
     }
 
-    pub fn add_long(&mut self, value: u64) -> Result<CpIndex> {
+    pub fn add_long(&mut self, value: i64) -> Result<CpIndex> {
+        let raw = value as u64;
         self.add_entry(ConstantPoolEntry::Long(LongInfo {
-            high_bytes: (value >> 32) as u32,
-            low_bytes: value as u32,
+            high_bits: (raw >> 32) as u32,
+            low_bits: raw as u32,
         }))
         .map(CpIndex::from)
     }
 
     pub fn add_double_bits(&mut self, raw_bits: u64) -> Result<CpIndex> {
         self.add_entry(ConstantPoolEntry::Double(DoubleInfo {
-            high_bytes: (raw_bits >> 32) as u32,
-            low_bytes: raw_bits as u32,
+            high_bits: (raw_bits >> 32) as u32,
+            low_bits: raw_bits as u32,
         }))
         .map(CpIndex::from)
     }
@@ -526,9 +527,9 @@ impl ConstantPoolBuilder {
             .map(Utf8Index::from)
     }
 
-    pub fn find_integer(&self, value: u32) -> Option<CpIndex> {
+    pub fn find_integer(&self, value: i32) -> Option<CpIndex> {
         self.key_to_index
-            .get(&PoolKey::Integer(value))
+            .get(&PoolKey::Integer(value as u32))
             .copied()
             .map(CpIndex::from)
     }
@@ -540,9 +541,10 @@ impl ConstantPoolBuilder {
             .map(CpIndex::from)
     }
 
-    pub fn find_long(&self, high: u32, low: u32) -> Option<CpIndex> {
+    pub fn find_long(&self, value: i64) -> Option<CpIndex> {
+        let raw = value as u64;
         self.key_to_index
-            .get(&PoolKey::Long(high, low))
+            .get(&PoolKey::Long((raw >> 32) as u32, raw as u32))
             .copied()
             .map(CpIndex::from)
     }
@@ -683,10 +685,10 @@ impl PoolKey {
     fn from_entry(entry: &ConstantPoolEntry) -> Self {
         match entry {
             ConstantPoolEntry::Utf8(info) => Self::Utf8(info.bytes.clone().into_boxed_slice()),
-            ConstantPoolEntry::Integer(info) => Self::Integer(info.value_bytes),
-            ConstantPoolEntry::Float(info) => Self::Float(info.value_bytes),
-            ConstantPoolEntry::Long(info) => Self::Long(info.high_bytes, info.low_bytes),
-            ConstantPoolEntry::Double(info) => Self::Double(info.high_bytes, info.low_bytes),
+            ConstantPoolEntry::Integer(info) => Self::Integer(info.value_bits),
+            ConstantPoolEntry::Float(info) => Self::Float(info.value_bits),
+            ConstantPoolEntry::Long(info) => Self::Long(info.high_bits, info.low_bits),
+            ConstantPoolEntry::Double(info) => Self::Double(info.high_bits, info.low_bits),
             ConstantPoolEntry::Class(info) => Self::Class(info.name_index.value()),
             ConstantPoolEntry::String(info) => Self::String(info.string_index.value()),
             ConstantPoolEntry::FieldRef(info) => {
