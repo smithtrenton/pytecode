@@ -261,7 +261,7 @@ fn cp_integer_values() -> TestResult<()> {
         });
         let parsed = parse_class(&raw)?;
         match &parsed.constant_pool[5] {
-            Some(ConstantPoolEntry::Integer(info)) => assert_eq!(info.value_bytes, value),
+            Some(ConstantPoolEntry::Integer(info)) => assert_eq!(info.value_bits, value),
             other => panic!("expected Integer, got {other:?}"),
         }
         assert_eq!(write_class(&parsed)?, raw);
@@ -285,7 +285,7 @@ fn cp_float_values() -> TestResult<()> {
         });
         let parsed = parse_class(&raw)?;
         match &parsed.constant_pool[5] {
-            Some(ConstantPoolEntry::Float(info)) => assert_eq!(info.value_bytes, bits),
+            Some(ConstantPoolEntry::Float(info)) => assert_eq!(info.value_bits, bits),
             other => panic!("expected Float, got {other:?}"),
         }
         assert_eq!(write_class(&parsed)?, raw);
@@ -306,8 +306,8 @@ fn cp_long_two_slots() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[5] {
         Some(ConstantPoolEntry::Long(info)) => {
-            assert_eq!(info.high_bytes, 0x11111111);
-            assert_eq!(info.low_bytes, 0x22222222);
+            assert_eq!(info.high_bits, 0x11111111);
+            assert_eq!(info.low_bits, 0x22222222);
         }
         other => panic!("expected Long, got {other:?}"),
     }
@@ -329,8 +329,8 @@ fn cp_double_two_slots() -> TestResult<()> {
     let parsed = parse_class(&raw)?;
     match &parsed.constant_pool[5] {
         Some(ConstantPoolEntry::Double(info)) => {
-            assert_eq!(info.high_bytes, 0xAAAA_BBBB);
-            assert_eq!(info.low_bytes, 0xCCCC_DDDD);
+            assert_eq!(info.high_bits, 0xAAAA_BBBB);
+            assert_eq!(info.low_bits, 0xCCCC_DDDD);
         }
         other => panic!("expected Double, got {other:?}"),
     }

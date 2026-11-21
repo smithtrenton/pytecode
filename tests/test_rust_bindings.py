@@ -489,3 +489,34 @@ def test_hierarchy_unresolved_class_raises_error(tmp_path: Path) -> None:
     resolver = analysis.MappingClassResolver.from_bytes([hello.read_bytes()])
     with pytest.raises(RuntimeError):
         iter_superclasses(resolver, "nonexistent/Class")
+
+
+# --- Signed LDC integer semantics ---
+
+
+def test_ldc_int_and_long_use_java_signed_semantics() -> None:
+    """LdcInsn int/long constants must behave like Java's signed int32/int64."""
+    negative = model_api.LdcInsn.int(-484_534_915)
+    assert negative.value_type == "int"
+    assert negative.value == -484_534_915
+
+    overflow = model_api.LdcInsn.long(-(2**62))
+    assert overflow.value_type == "long"
+    assert overflow.value == -(2**62)
+
+    # values outside the signed 32-bit range are rejected at construction
+    with pytest.raises(OverflowError):
+        model_api.LdcInsn.int(0x8000_0000)
+    with pytest.raises(OverflowError):
+        model_api.LdcInsn.int(-0x8000_0001)
+
+
+def test_constant_pool_integer_and_long_helpers_are_signed() -> None:
+    """add_integer/add_long/find_integer/find_long take signed Java values."""
+    builder = model_api.ConstantPoolBuilder()
+
+    integer_index = builder.add_integer(-1)
+    assert builder.find_integer(-1) == integer_index
+
+    long_index = builder.add_long(-(2**40))
+    assert builder.find_long(-(2**40)) == long_index

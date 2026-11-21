@@ -1003,18 +1003,18 @@ impl<'a> ClassReader<'a> {
                 })
             }
             ConstantPoolTag::Integer => ConstantPoolEntry::Integer(IntegerInfo {
-                value_bytes: self.reader.read_u4()?,
+                value_bits: self.reader.read_u4()?,
             }),
             ConstantPoolTag::Float => ConstantPoolEntry::Float(FloatInfo {
-                value_bytes: self.reader.read_u4()?,
+                value_bits: self.reader.read_u4()?,
             }),
             ConstantPoolTag::Long => ConstantPoolEntry::Long(LongInfo {
-                high_bytes: self.reader.read_u4()?,
-                low_bytes: self.reader.read_u4()?,
+                high_bits: self.reader.read_u4()?,
+                low_bits: self.reader.read_u4()?,
             }),
             ConstantPoolTag::Double => ConstantPoolEntry::Double(DoubleInfo {
-                high_bytes: self.reader.read_u4()?,
-                low_bytes: self.reader.read_u4()?,
+                high_bits: self.reader.read_u4()?,
+                low_bits: self.reader.read_u4()?,
             }),
             ConstantPoolTag::Class => ConstantPoolEntry::Class(ClassInfo {
                 name_index: Utf8Index::from(self.reader.read_u2()?),

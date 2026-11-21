@@ -1,6 +1,6 @@
 [package]
 name = "pytecode-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI helpers for benchmarking and validating the pytecode Rust workspace"
 edition.workspace = true
 rust-version.workspace = true

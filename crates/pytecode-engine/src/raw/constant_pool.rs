@@ -54,24 +54,34 @@ pub struct Utf8Info {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegerInfo {
-    pub value_bytes: u32,
+    /// Raw 32-bit constant-pool payload. Java integer constants are signed
+    /// 32-bit values; the semantic form is available through the model layer
+    /// (`LdcValue::Int`). JVMS §4.4.4 calls this `bytes` in prose; the value
+    /// is held here as raw bits.
+    pub value_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FloatInfo {
-    pub value_bytes: u32,
+    /// Raw IEEE-754 bit pattern (JVMS §4.4.4).
+    pub value_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LongInfo {
-    pub high_bytes: u32,
-    pub low_bytes: u32,
+    /// Raw high 32 bits of the 64-bit payload. JVMS §4.4.5 names this field
+    /// `high_bytes`; it is held here as raw bits, not bytes.
+    pub high_bits: u32,
+    /// Raw low 32 bits of the 64-bit payload (JVMS §4.4.5 `low_bytes`).
+    pub low_bits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoubleInfo {
-    pub high_bytes: u32,
-    pub low_bytes: u32,
+    /// Raw high 32 bits of the 64-bit payload (JVMS §4.4.5 `high_bytes`).
+    pub high_bits: u32,
+    /// Raw low 32 bits of the 64-bit payload (JVMS §4.4.5 `low_bytes`).
+    pub low_bits: u32,
 }
 
 use crate::indexes::{BootstrapMethodIndex, ClassIndex, CpIndex, NameAndTypeIndex, Utf8Index};

@@ -159,15 +159,15 @@ fn write_constant_pool_entry(writer: &mut ByteWriter, entry: &ConstantPoolEntry)
             writer.write_u2(checked_count::<u16>(info.bytes.len(), "info.bytes")?);
             writer.write_bytes(&info.bytes);
         }
-        ConstantPoolEntry::Integer(info) => writer.write_u4(info.value_bytes),
-        ConstantPoolEntry::Float(info) => writer.write_u4(info.value_bytes),
+        ConstantPoolEntry::Integer(info) => writer.write_u4(info.value_bits),
+        ConstantPoolEntry::Float(info) => writer.write_u4(info.value_bits),
         ConstantPoolEntry::Long(info) => {
-            writer.write_u4(info.high_bytes);
-            writer.write_u4(info.low_bytes);
+            writer.write_u4(info.high_bits);
+            writer.write_u4(info.low_bits);
         }
         ConstantPoolEntry::Double(info) => {
-            writer.write_u4(info.high_bytes);
-            writer.write_u4(info.low_bytes);
+            writer.write_u4(info.high_bits);
+            writer.write_u4(info.low_bits);
         }
         ConstantPoolEntry::Class(info) => writer.write_u2(info.name_index.into()),
         ConstantPoolEntry::String(info) => writer.write_u2(info.string_index.into()),
