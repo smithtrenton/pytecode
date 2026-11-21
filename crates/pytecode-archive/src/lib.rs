@@ -342,7 +342,11 @@ impl JarFile {
                 {
                     let source_entry = source.by_index(index)?;
                     let archive_name = archive_name(&entry.filename);
-                    if source_entry.name() == archive_name {
+                    if source_entry
+                        .name()
+                        .map(|name| name.as_ref() == archive_name)
+                        .unwrap_or(false)
+                    {
                         writer.raw_copy_file(source_entry)?;
                     } else {
                         writer.raw_copy_file_rename(source_entry, archive_name)?;
@@ -426,7 +430,7 @@ fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<Vec<Ja
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let is_dir = entry.is_dir();
-        let filename = normalize_filename(entry.name(), is_dir)?;
+        let filename = normalize_filename(&entry.name().map_err(ArchiveError::Zip)?, is_dir)?;
         if !names.insert(filename.clone()) {
             return Err(ArchiveError::DuplicateFilename(filename));
         }
@@ -453,9 +457,7 @@ fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<Vec<Ja
                 unix_mode: entry.unix_mode(),
                 system: entry.get_metadata().system,
                 comment: entry.comment().as_bytes().to_vec(),
-                extra_data: entry
-                    .extra_data()
-                    .map_or_else(Vec::new, std::borrow::ToOwned::to_owned),
+                extra_data: entry.extra_data().unwrap_or_default(),
                 is_dir,
             },
             original_index: Some(index),
@@ -577,7 +579,7 @@ fn write_entry(
     Ok(())
 }
 
-fn file_options(entry: &JarInfo) -> Result<FullFileOptions<'static>> {
+fn file_options(entry: &JarInfo) -> Result<FullFileOptions<'static, 'static>> {
     let mut options = FullFileOptions::default()
         .compression_method(entry.metadata.compression_method)
         .last_modified_time(entry.metadata.last_modified)
@@ -596,7 +598,10 @@ fn file_options(entry: &JarInfo) -> Result<FullFileOptions<'static>> {
     Ok(options)
 }
 
-fn copy_extra_data(options: &mut FullFileOptions<'static>, extra_data: &[u8]) -> Result<()> {
+fn copy_extra_data(
+    options: &mut FullFileOptions<'static, 'static>,
+    extra_data: &[u8],
+) -> Result<()> {
     let mut offset = 0_usize;
     while offset < extra_data.len() {
         if extra_data.len().saturating_sub(offset) < 4 {
@@ -617,7 +622,7 @@ fn copy_extra_data(options: &mut FullFileOptions<'static>, extra_data: &[u8]) ->
             )));
         }
         options
-            .add_extra_data(header_id, &extra_data[value_start..value_end], false)
+            .add_extra_field(header_id, &extra_data[value_start..value_end], false)
             .map_err(ArchiveError::Zip)?;
         offset = value_end;
     }

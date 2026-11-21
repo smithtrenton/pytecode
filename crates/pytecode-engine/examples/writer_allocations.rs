@@ -65,7 +65,8 @@ fn main() {
     let mut classes = Vec::new();
     for index in 0..jar.len() {
         let mut entry = jar.by_index(index).unwrap();
-        if entry.name().ends_with(".class") {
+        let name = entry.name().unwrap().into_owned();
+        if name.ends_with(".class") {
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).unwrap();
             classes.push(parse_class(&bytes).unwrap());
