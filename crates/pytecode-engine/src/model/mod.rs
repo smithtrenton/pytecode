@@ -990,8 +990,12 @@ fn lower_code_model(
     let layout = compute_code_layout(code, cp)?;
     let frame_result = if frame_mode == FrameComputationMode::Recompute {
         Some(
-            recompute_frames_for_class(code, class, method, resolver)
-                .map_err(|error| model_error(error.to_string()))?,
+            recompute_frames_for_class(code, class, method, resolver).map_err(|error| {
+                model_error(format!(
+                    "frame recomputation failed for {}{}{}: {error}",
+                    class.name, method.name, method.descriptor
+                ))
+            })?,
         )
     } else {
         None
