@@ -394,7 +394,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
 git commit -am "Bump version to X.Y.Z"
-git push origin master
+git push origin main
 git tag -a vX.Y.Z -m "pytecode X.Y.Z"
 git push origin vX.Y.Z
 ```
