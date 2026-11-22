@@ -666,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "pytecode-archive"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "criterion",
  "pytecode-engine",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "pytecode-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "clap",
  "pytecode-archive",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "pytecode-engine"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitflags",
  "criterion",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "pytecode-python"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "pyo3",
  "pytecode-archive",
