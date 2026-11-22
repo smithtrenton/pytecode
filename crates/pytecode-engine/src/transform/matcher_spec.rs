@@ -433,6 +433,8 @@ pub enum InsnMatcherSpec {
     TypeDescriptor(String),
     /// Match string LDC values exactly.
     LdcString(String),
+    /// Match class LDC values exactly (internal JVM name).
+    LdcClass(String),
     /// Match variable slot exactly.
     VarSlot(u16),
     /// Match field owner by regex.
@@ -531,6 +533,10 @@ impl InsnMatcherSpec {
                 item,
                 CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(value) if value == expected)
             ),
+            Self::LdcClass(expected) => matches!(
+                item,
+                CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == expected)
+            ),
             Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
             Self::FieldOwnerMatches(pattern) => match item {
                 CodeItem::Field(insn) => fullmatch_regex(pattern)
@@ -604,6 +610,7 @@ impl fmt::Display for InsnMatcherSpec {
             } => write!(f, "insn_method({owner:?}, {name:?}, {descriptor:?})"),
             Self::TypeDescriptor(descriptor) => write!(f, "insn_type_descriptor({descriptor:?})"),
             Self::LdcString(value) => write!(f, "insn_ldc_string({value:?})"),
+            Self::LdcClass(value) => write!(f, "insn_ldc_class({value:?})"),
             Self::VarSlot(slot) => write!(f, "insn_var_slot({slot})"),
             Self::FieldOwnerMatches(pattern) => write!(f, "insn_field_owner_matches({pattern:?})"),
             Self::MethodOwnerMatches(pattern) => {
@@ -886,6 +893,7 @@ pub enum CompiledInsnMatcher {
     },
     TypeDescriptor(String),
     LdcString(String),
+    LdcClass(String),
     VarSlot(u16),
     FieldOwnerMatches(Regex),
     MethodOwnerMatches(Regex),
@@ -938,6 +946,7 @@ impl CompiledInsnMatcher {
             },
             InsnMatcherSpec::TypeDescriptor(descriptor) => Self::TypeDescriptor(descriptor.clone()),
             InsnMatcherSpec::LdcString(value) => Self::LdcString(value.clone()),
+            InsnMatcherSpec::LdcClass(value) => Self::LdcClass(value.clone()),
             InsnMatcherSpec::VarSlot(slot) => Self::VarSlot(*slot),
             InsnMatcherSpec::FieldOwnerMatches(pattern) => Self::FieldOwnerMatches(
                 fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
@@ -1033,6 +1042,10 @@ impl CompiledInsnMatcher {
             Self::LdcString(expected) => matches!(
                 item,
                 CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(value) if value == expected)
+            ),
+            Self::LdcClass(expected) => matches!(
+                item,
+                CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == expected)
             ),
             Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
             Self::FieldOwnerMatches(regex) => {
@@ -1356,6 +1369,38 @@ mod tests {
         let spec = MethodMatcherSpec::Not(Box::new(MethodMatcherSpec::HasCode));
         assert!(!spec.matches(&model.methods[0])); // has code
         assert!(spec.matches(&model.methods[3])); // abstract, no code
+    }
+
+    // -----------------------------------------------------------------------
+    // InsnMatcherSpec
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn insn_ldc_class_matches_exactly() {
+        use crate::model::{LdcInsn, LdcValue};
+
+        let class_item = CodeItem::Ldc(LdcInsn {
+            value: LdcValue::Class("test/Sample".into()),
+        });
+        let other_class = CodeItem::Ldc(LdcInsn {
+            value: LdcValue::Class("test/Other".into()),
+        });
+
+        let spec = InsnMatcherSpec::LdcClass("test/Sample".into());
+        assert!(spec.matches(&class_item));
+        assert!(!spec.matches(&other_class));
+        assert!(
+            !spec.matches(&CodeItem::Raw(crate::raw::Instruction::Simple {
+                opcode: 0x00,
+                offset: 0,
+            }))
+        );
+
+        let compiled = spec.compile();
+        assert!(compiled.matches(&class_item));
+        assert!(!compiled.matches(&other_class));
+
+        assert_eq!(format!("{spec}"), "insn_ldc_class(\"test/Sample\")");
     }
 
     // -----------------------------------------------------------------------

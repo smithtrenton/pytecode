@@ -795,6 +795,15 @@ pub fn insn_ldc_string(value: &str) -> InsnMatcher {
     )
 }
 
+pub fn insn_ldc_class(value: &str) -> InsnMatcher {
+    let value = value.to_owned();
+    let expected = value.clone();
+    Matcher::of(
+        move |item: &CodeItem| matches!(item, CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(found) if found == &expected)),
+        format!("insn_ldc_class({value:?})"),
+    )
+}
+
 pub fn insn_var_slot(slot: u16) -> InsnMatcher {
     Matcher::of(
         move |item: &CodeItem| matches!(item, CodeItem::Var(insn) if insn.slot == slot),

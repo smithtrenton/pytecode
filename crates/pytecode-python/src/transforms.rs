@@ -184,6 +184,13 @@ impl PyInsnMatcher {
     }
 
     #[staticmethod]
+    fn ldc_class(value: String) -> Self {
+        Self {
+            spec: InsnMatcherSpec::LdcClass(value),
+        }
+    }
+
+    #[staticmethod]
     fn var_slot(slot: u16) -> Self {
         Self {
             spec: InsnMatcherSpec::VarSlot(slot),
