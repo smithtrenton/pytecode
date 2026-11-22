@@ -1385,20 +1385,22 @@ mod tests {
         let other_class = CodeItem::Ldc(LdcInsn {
             value: LdcValue::Class("test/Other".into()),
         });
+        let raw_item = CodeItem::Raw(crate::raw::Instruction::Simple {
+            opcode: 0x00,
+            offset: 0,
+        });
 
         let spec = InsnMatcherSpec::LdcClass("test/Sample".into());
         assert!(spec.matches(&class_item));
         assert!(!spec.matches(&other_class));
-        assert!(
-            !spec.matches(&CodeItem::Raw(crate::raw::Instruction::Simple {
-                opcode: 0x00,
-                offset: 0,
-            }))
-        );
+        assert!(!spec.matches(&raw_item));
+        // value types are disjoint: a string ldc never matches by class name
+        assert!(!InsnMatcherSpec::LdcString("test/Sample".into()).matches(&class_item));
 
         let compiled = spec.compile();
         assert!(compiled.matches(&class_item));
         assert!(!compiled.matches(&other_class));
+        assert!(!compiled.matches(&raw_item));
 
         assert_eq!(format!("{spec}"), "insn_ldc_class(\"test/Sample\")");
     }
