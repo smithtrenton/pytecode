@@ -48,6 +48,27 @@ the modified-UTF-8 **encoded byte** limit of 65,535. Code bodies must contain
 limited to 128 parser levels. Array signatures are read iteratively up to 255
 dimensions. These are library resource limits, distinct from JVM type verification.
 
+## Member lists
+
+`ClassModel.fields` and `ClassModel.methods` are live, read-only views: they index,
+slice, and iterate, but do not support item assignment or `del`. Edit a member list
+by assigning a new list, which may reorder members, drop them, or add new
+`FieldModel` / `MethodModel` objects:
+
+```python
+model.methods = [method for method in model.methods if method.name != "unused"]
+model.fields = sorted(model.fields, key=lambda field: field.name)
+```
+
+Assignment copies the members into the class, so `FieldModel` / `MethodModel`
+handles taken from the view before the assignment become stale (using one raises
+`RuntimeError`); read the view again afterwards. Each method keeps its own code,
+frames, and attributes, so reordering needs no frame recomputation, and
+reassigning unchanged lists round-trips byte-for-byte. Deleting a member does not
+touch references to it: removing a field or method that code still uses still
+lowers, but the class fails at run time (`NoSuchFieldError` /
+`NoSuchMethodError`), so check for references first.
+
 ## Exception-handler tables
 
 `CodeModel.exception_handlers` (Rust: `CodeModel::exception_handlers`) is the

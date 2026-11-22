@@ -4519,7 +4519,12 @@ impl PyClassModel {
         })
     }
 
-    /// Live view of the class's field models.
+    /// Live view of the class's field models, in declaration order.
+    ///
+    /// The view is read-only (no item assignment or ``del``). Edit the member
+    /// list by assigning a new list: reordered, filtered to delete fields, or
+    /// extended with new ``FieldModel`` objects. Assignment copies the fields
+    /// in; field handles taken from the view before it become stale.
     #[getter]
     fn fields(&self) -> PyResult<PyFieldListView> {
         with_live_model(&self.state, |model_state| {
@@ -4530,7 +4535,12 @@ impl PyClassModel {
         })
     }
 
-    /// Live view of the class's method models.
+    /// Live view of the class's method models, in declaration order.
+    ///
+    /// The view is read-only (no item assignment or ``del``). Edit the member
+    /// list by assigning a new list: reordered, filtered to delete methods, or
+    /// extended with new ``MethodModel`` objects. Assignment copies the
+    /// methods in; method handles taken from the view before it become stale.
     #[getter]
     fn methods(&self) -> PyResult<PyMethodListView> {
         with_live_model(&self.state, |model_state| {

@@ -1513,13 +1513,25 @@ class ClassModel:
     def interfaces(self, value: list[str]) -> None: ...
     @property
     def fields(self) -> FieldListView:
-        """Live view of the class's field models."""
+        """Live view of the class's field models, in declaration order.
+
+        The view is read-only (no item assignment or ``del``). Edit the member
+        list by assigning a new list: reordered, filtered to delete fields, or
+        extended with new ``FieldModel`` objects. Assignment copies the fields
+        in; field handles taken from the view before it become stale.
+        """
         ...
     @fields.setter
     def fields(self, value: list[FieldModel]) -> None: ...
     @property
     def methods(self) -> MethodListView:
-        """Live view of the class's method models."""
+        """Live view of the class's method models, in declaration order.
+
+        The view is read-only (no item assignment or ``del``). Edit the member
+        list by assigning a new list: reordered, filtered to delete methods, or
+        extended with new ``MethodModel`` objects. Assignment copies the
+        methods in; method handles taken from the view before it become stale.
+        """
         ...
     @methods.setter
     def methods(self, value: list[MethodModel]) -> None: ...

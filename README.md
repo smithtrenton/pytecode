@@ -79,6 +79,8 @@ Recomputation merges reference types at control-flow joins. Pass `resolver=Mappi
 
 `ClassModel.bootstrap_methods` reads and rewrites the `BootstrapMethods` attribute (bootstrap method handles and their static arguments), which renames must update along with the instructions. `invokedynamic` call-site descriptors are writable too (`InvokeDynamicInsn.descriptor`, and `DynamicValue.descriptor` for dynamic constants); see [call-site descriptors](docs/project/compatibility-and-limits.md#call-site-and-dynamic-constant-descriptors).
 
+`model.methods` and `model.fields` are read-only views; reorder or delete members by assigning a new list (`model.methods = [m for m in model.methods if m.name != "unused"]`). See [member lists](docs/project/compatibility-and-limits.md#member-lists).
+
 Exception tables are edited the same way: assign `code.exception_handlers` a list of `ExceptionHandler(start, end, handler, catch_type)` entries rebuilt from the existing labels, with `catch_type=None` for a catch-all; filter the list to delete entries. See [exception-handler tables](docs/project/compatibility-and-limits.md#exception-handler-tables).
 
 ## JAR rewriting example
