@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pytecode"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python library for parsing, manipulating, and emitting JVM class files"
 readme = "README.md"
 authors = [{ name = "Trenton Smith" }]
