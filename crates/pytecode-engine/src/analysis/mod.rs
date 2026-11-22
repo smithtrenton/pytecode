@@ -9,9 +9,9 @@ pub(crate) use simulation::{
 pub use simulation::{recompute_frames, simulate};
 
 pub use hierarchy::{
-    ClassResolver, InheritedMethod, JAVA_LANG_OBJECT, MappingClassResolver, ResolvedClass,
-    ResolvedMethod, common_superclass, find_overridden_methods, is_subtype, iter_superclasses,
-    iter_supertypes,
+    ClassResolver, DuplicateClassPolicy, InheritedMethod, JAVA_LANG_OBJECT, MappingClassResolver,
+    ResolvedClass, ResolvedMethod, common_superclass, find_overridden_methods, is_subtype,
+    iter_superclasses, iter_supertypes,
 };
 pub use verify::{
     Category, Diagnostic, FailFastError, Location, Severity, verify_classfile,
@@ -207,15 +207,11 @@ impl FrameState {
         ))
     }
 
-    fn pop_typed(
-        &self,
-        expected: &VType,
-        resolver: Option<&dyn ClassResolver>,
-    ) -> Result<Self, AnalysisError> {
+    fn pop_typed(&self, expected: &VType, env: &TypeEnv<'_>) -> Result<Self, AnalysisError> {
         let width = if is_category2(expected) { 2 } else { 1 };
         self.check_stack_groups(&[width])?;
         let actual = &self.stack[self.stack.len() - width];
-        require_type(actual, expected, resolver)?;
+        require_type(actual, expected, env)?;
         Ok(Self {
             stack: self.stack[..self.stack.len() - width].to_vec(),
             locals: self.locals.clone(),
@@ -229,11 +225,447 @@ fn type_error(reason: impl Into<String>) -> AnalysisError {
     }
 }
 
-fn require_type(
-    actual: &VType,
-    expected: &VType,
-    resolver: Option<&dyn ClassResolver>,
-) -> Result<(), AnalysisError> {
+/// A type the recomputed frames could not prove verifiable, and why.
+///
+/// Frame computation needs the class hierarchy to merge reference types at
+/// join points. When the hierarchy of a merged class is unavailable (no
+/// resolver, or a class missing from it), the merge falls back to
+/// `java/lang/Object`. That is harmless unless the merged value later
+/// reaches an instruction that requires a more specific class — then the
+/// JVM verifier will most likely reject the frames. Each warning records
+/// one method where that happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameWarning {
+    pub class_name: String,
+    pub method_name: String,
+    pub method_descriptor: String,
+    /// Code-item indices of the instructions that received the imprecise type.
+    pub code_indices: Vec<usize>,
+    /// The types those instructions require, sorted and deduplicated.
+    pub required_types: Vec<String>,
+    /// Classes whose ancestry the merges needed but could not resolve,
+    /// sorted and deduplicated. Supplying them to the resolver fixes the
+    /// warning.
+    pub unresolved_classes: Vec<String>,
+    /// Whether a class resolver was supplied to the computation at all.
+    pub resolver_supplied: bool,
+}
+
+impl std::fmt::Display for FrameWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn listed(items: &[impl std::fmt::Display], limit: usize) -> String {
+            let mut out = items
+                .iter()
+                .take(limit)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            if items.len() > limit {
+                out.push_str(&format!(", ... ({} more)", items.len() - limit));
+            }
+            out
+        }
+        write!(
+            f,
+            "frames for {}.{}{} may fail JVM verification: a merged reference type fell back to \
+             java/lang/Object and reaches instruction(s) {} that require {}; ",
+            self.class_name,
+            self.method_name,
+            self.method_descriptor,
+            listed(&self.code_indices, 5),
+            listed(&self.required_types, 5),
+        )?;
+        if self.resolver_supplied {
+            write!(
+                f,
+                "the resolver could not provide the hierarchy of {}",
+                listed(&self.unresolved_classes, 8)
+            )
+        } else {
+            write!(
+                f,
+                "no class resolver was supplied (merges needed the hierarchy of {})",
+                listed(&self.unresolved_classes, 8)
+            )
+        }
+    }
+}
+
+/// An operand whose type fell back to `java/lang/Object` for lack of
+/// hierarchy data and reached an instruction requiring a specific class.
+#[derive(Debug, Clone)]
+struct UnprovenUse {
+    code_index: usize,
+    required: String,
+}
+
+/// Most dataflow passes one method may take while learning hierarchy facts.
+pub(crate) const MAX_INFERENCE_PASSES: usize = 4;
+
+/// Hierarchy context for one method's frame computation.
+///
+/// Combines the caller's resolver with what the class being analyzed
+/// declares about itself, and with facts deduced from the code.
+///
+/// When a merge needs the ancestry of a class nobody can resolve, the
+/// merged value is tracked as a *degraded* type: internally it remembers
+/// which classes were merged (see [`DegradedType`]); externally it is
+/// `java/lang/Object`. If a degraded value reaches an instruction that
+/// requires class `T`, then — because the input is assumed to verify with
+/// *some* frames — every merged class must be a subtype of `T`. Those facts
+/// are recorded as deduced superclass edges and the dataflow runs again,
+/// which then merges to `T` instead of `Object`. Whatever is still unproven
+/// after the last pass is reported as a [`FrameWarning`].
+pub(crate) struct TypeEnv<'a> {
+    resolver: Option<&'a dyn ClassResolver>,
+    current: Option<ResolvedClass>,
+    /// Deduced superclass edges: class whose ancestry ran out -> an ancestor.
+    facts: std::cell::RefCell<std::collections::BTreeMap<String, String>>,
+    learned: std::cell::Cell<bool>,
+    code_index: std::cell::Cell<usize>,
+    degraded: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    unproven: std::cell::RefCell<Vec<UnprovenUse>>,
+}
+
+impl<'a> TypeEnv<'a> {
+    pub(crate) fn new(
+        resolver: Option<&'a dyn ClassResolver>,
+        current_class: Option<&ClassModel>,
+    ) -> Self {
+        Self {
+            resolver,
+            // Only the hierarchy matters here; skip the per-method snapshot.
+            current: current_class.map(|model| ResolvedClass {
+                name: model.name.clone(),
+                super_name: model.super_name.clone(),
+                interfaces: model.interfaces.clone(),
+                access_flags: model.access_flags,
+                methods: Vec::new(),
+            }),
+            facts: std::cell::RefCell::default(),
+            learned: std::cell::Cell::new(false),
+            code_index: std::cell::Cell::new(0),
+            degraded: std::cell::RefCell::default(),
+            unproven: std::cell::RefCell::default(),
+        }
+    }
+
+    /// Reset per-pass state, keeping the facts learned so far.
+    pub(crate) fn begin_pass(&self) {
+        self.learned.set(false);
+        self.degraded.borrow_mut().clear();
+        self.unproven.borrow_mut().clear();
+    }
+
+    /// Whether another pass could make the frames more precise.
+    pub(crate) fn wants_another_pass(&self) -> bool {
+        self.learned.get() && !self.unproven.borrow().is_empty()
+    }
+
+    pub(crate) fn set_code_index(&self, code_index: usize) {
+        self.code_index.set(code_index);
+    }
+
+    /// Resolution from real sources only (the current class, the resolver,
+    /// and the implicit `java/lang/Object`), never from deduced facts.
+    fn resolve_known(&self, class_name: &str) -> Option<ResolvedClass> {
+        // The model being lowered is authoritative for its own declaration,
+        // even when the resolver holds an older snapshot of it.
+        if let Some(current) = &self.current
+            && current.name == class_name
+        {
+            return Some(current.clone());
+        }
+        if let Some(resolved) = self
+            .resolver
+            .and_then(|resolver| resolver.resolve_class(class_name))
+        {
+            return Some(resolved);
+        }
+        (class_name == JAVA_LANG_OBJECT).then(|| synthetic_class(JAVA_LANG_OBJECT, None))
+    }
+
+    /// Whether `class_name` is known (not deduced) to be a class rather
+    /// than an interface.
+    fn is_known_class(&self, class_name: &str) -> bool {
+        self.resolve_known(class_name)
+            .is_some_and(|resolved| !resolved.is_interface())
+    }
+
+    fn is_known_interface(&self, class_name: &str) -> bool {
+        self.resolve_known(class_name)
+            .is_some_and(|resolved| resolved.is_interface())
+    }
+
+    /// Merge two reference types (internal names or array descriptors).
+    pub(crate) fn merge_references(
+        &self,
+        left: &str,
+        right: &str,
+    ) -> Result<String, AnalysisError> {
+        // Peel matching reference-array dimensions so a fallback is tracked
+        // at the element level: `[LA;` + `[LB;` degrades to an array of a
+        // degraded element rather than to a plain `[Ljava/lang/Object;`.
+        let mut dims = 0_usize;
+        let (mut left_base, mut right_base) = (left, right);
+        while dims <= 255 {
+            let (Some(left_component), Some(right_component)) =
+                (left_base.strip_prefix('['), right_base.strip_prefix('['))
+            else {
+                break;
+            };
+            match (
+                hierarchy::peel_array_component_reference(left_component),
+                hierarchy::peel_array_component_reference(right_component),
+            ) {
+                (Some(next_left), Some(next_right)) => {
+                    left_base = next_left;
+                    right_base = next_right;
+                    dims += 1;
+                }
+                _ => break,
+            }
+        }
+        let base = self.merge_base(left_base, right_base)?;
+        Ok(array_of(dims, base))
+    }
+
+    fn merge_base(&self, left: &str, right: &str) -> Result<String, AnalysisError> {
+        if left == right {
+            return Ok(left.to_owned());
+        }
+        let left_degraded = DegradedType::parse(left).filter(|degraded| degraded.dims == 0);
+        let right_degraded = DegradedType::parse(right).filter(|degraded| degraded.dims == 0);
+        if left_degraded.is_none() && right_degraded.is_none() {
+            let common = hierarchy::common_reference_type_lenient(self, left, right)?;
+            if common.unresolved.is_empty() {
+                return Ok(common.name);
+            }
+            self.degraded.borrow_mut().extend(common.unresolved);
+            return Ok(DegradedType::encode([left, right]));
+        }
+        // A degraded side stands for plain class instances; merging those
+        // with Object, an array, or an array-shaped degraded type is Object.
+        for (degraded, other) in [(&left_degraded, right), (&right_degraded, left)] {
+            if degraded.is_some() && (other == JAVA_LANG_OBJECT || other.starts_with('[')) {
+                return Ok(JAVA_LANG_OBJECT.to_owned());
+            }
+        }
+        let mut members = std::collections::BTreeSet::new();
+        for (degraded, plain) in [(&left_degraded, left), (&right_degraded, right)] {
+            match degraded {
+                Some(degraded) => members.extend(degraded.members.iter().copied()),
+                None => {
+                    members.insert(plain);
+                }
+            }
+        }
+        let mut members_iter = members.iter();
+        let mut acc = members_iter
+            .next()
+            .map(|name| (*name).to_owned())
+            .unwrap_or_else(|| JAVA_LANG_OBJECT.to_owned());
+        for member in members_iter {
+            let common = hierarchy::common_reference_type_lenient(self, &acc, member)?;
+            if !common.unresolved.is_empty() {
+                self.degraded.borrow_mut().extend(common.unresolved);
+                return Ok(DegradedType::encode(members.iter().copied()));
+            }
+            acc = common.name;
+        }
+        Ok(acc)
+    }
+
+    /// Record that a degraded value reached a use requiring `required`, and
+    /// deduce that each merged class is a subtype of it.
+    fn degraded_use(&self, members: &[&str], required: &str) -> Result<(), AnalysisError> {
+        // A member whose superclass chain is fully known (without deduced
+        // edges) and lacks `required` can only flow into that use if
+        // `required` is an interface the resolver lacks — and the verifier
+        // accepts any reference for an interface. Nothing is imprecise then.
+        // If `required` is known to be a class, the use cannot verify with
+        // any frames; report it rather than deduce anything.
+        let required_is_known_class = self.is_known_class(required);
+        for member in members {
+            let (chain, stop) = hierarchy::partial_superclass_chain(&KnownOnly(self), member)?;
+            if stop.is_none() && !chain.iter().any(|name| name == required) {
+                if required_is_known_class {
+                    self.unproven.borrow_mut().push(UnprovenUse {
+                        code_index: self.code_index.get(),
+                        required: required.to_owned(),
+                    });
+                }
+                return Ok(());
+            }
+        }
+        for member in members {
+            let (chain, stop) = hierarchy::partial_superclass_chain(self, member)?;
+            if chain.iter().any(|name| name == required) {
+                continue;
+            }
+            let Some(stop) = stop else {
+                continue;
+            };
+            if stop == required || self.facts.borrow().contains_key(&stop) {
+                continue;
+            }
+            // Never close a cycle with a deduced edge.
+            let (required_chain, _) = hierarchy::partial_superclass_chain(self, required)?;
+            if required_chain.contains(&stop) {
+                continue;
+            }
+            self.facts.borrow_mut().insert(stop, required.to_owned());
+            self.learned.set(true);
+        }
+        self.unproven.borrow_mut().push(UnprovenUse {
+            code_index: self.code_index.get(),
+            required: required.to_owned(),
+        });
+        Ok(())
+    }
+
+    /// Report what stayed imprecise after the last pass.
+    pub(crate) fn finish(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        method_descriptor: &str,
+    ) -> Option<FrameWarning> {
+        let unproven = self.unproven.take();
+        if unproven.is_empty() {
+            return None;
+        }
+        let mut code_indices = unproven
+            .iter()
+            .map(|use_| use_.code_index)
+            .collect::<Vec<_>>();
+        code_indices.sort_unstable();
+        code_indices.dedup();
+        let required_types = unproven
+            .into_iter()
+            .map(|use_| use_.required)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Some(FrameWarning {
+            class_name: class_name.to_owned(),
+            method_name: method_name.to_owned(),
+            method_descriptor: method_descriptor.to_owned(),
+            code_indices,
+            required_types,
+            unresolved_classes: self.degraded.borrow().iter().cloned().collect(),
+            resolver_supplied: self.resolver.is_some(),
+        })
+    }
+}
+
+impl ClassResolver for TypeEnv<'_> {
+    fn resolve_class(&self, class_name: &str) -> Option<ResolvedClass> {
+        self.resolve_known(class_name).or_else(|| {
+            self.facts
+                .borrow()
+                .get(class_name)
+                .map(|ancestor| synthetic_class(class_name, Some(ancestor)))
+        })
+    }
+}
+
+/// A view of a [`TypeEnv`] without its deduced facts.
+struct KnownOnly<'e, 'a>(&'e TypeEnv<'a>);
+
+impl ClassResolver for KnownOnly<'_, '_> {
+    fn resolve_class(&self, class_name: &str) -> Option<ResolvedClass> {
+        self.0.resolve_known(class_name)
+    }
+}
+
+fn synthetic_class(name: &str, super_name: Option<&str>) -> ResolvedClass {
+    ResolvedClass {
+        name: name.to_owned(),
+        super_name: super_name.map(ToOwned::to_owned),
+        interfaces: Vec::new(),
+        access_flags: crate::constants::ClassAccessFlags::PUBLIC
+            | crate::constants::ClassAccessFlags::SUPER,
+        methods: Vec::new(),
+    }
+}
+
+fn array_of(dims: usize, element: String) -> String {
+    if dims == 0 {
+        element
+    } else if element.starts_with('[') {
+        format!("{}{element}", "[".repeat(dims))
+    } else {
+        format!("{}L{element};", "[".repeat(dims))
+    }
+}
+
+/// The internal form of a merge that fell back for lack of hierarchy data.
+///
+/// Encoded as `.` followed by the merged class names joined with `.` —
+/// never a valid internal name, since `.` is illegal in one — optionally
+/// wrapped in array dimensions (`[L.A.B;`). It exists only inside one
+/// method's dataflow: every frame or state handed out goes through
+/// [`public_vtype`], which turns it into the `java/lang/Object` it stands for.
+struct DegradedType<'s> {
+    dims: usize,
+    members: Vec<&'s str>,
+}
+
+impl<'s> DegradedType<'s> {
+    fn parse(name: &'s str) -> Option<Self> {
+        let element = name.trim_start_matches('[');
+        let dims = name.len() - element.len();
+        let base = if dims == 0 {
+            element
+        } else {
+            element.strip_prefix('L')?.strip_suffix(';')?
+        };
+        let members = base.strip_prefix('.')?;
+        Some(Self {
+            dims,
+            members: members.split('.').collect(),
+        })
+    }
+
+    fn encode<'n>(members: impl IntoIterator<Item = &'n str>) -> String {
+        let mut names = std::collections::BTreeSet::new();
+        for member in members {
+            match DegradedType::parse(member) {
+                Some(degraded) => names.extend(degraded.members),
+                None => {
+                    names.insert(member);
+                }
+            }
+        }
+        let mut out = String::new();
+        for name in names {
+            out.push('.');
+            out.push_str(name);
+        }
+        out
+    }
+}
+
+/// Replace internal degraded types with the `java/lang/Object` they stand for.
+pub(crate) fn public_vtype(value: &VType) -> VType {
+    match value {
+        VType::Object(name) => match DegradedType::parse(name) {
+            Some(degraded) => VType::Object(array_of(degraded.dims, JAVA_LANG_OBJECT.to_owned())),
+            None => value.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
+pub(crate) fn public_frame(frame: &FrameState) -> FrameState {
+    FrameState {
+        stack: frame.stack.iter().map(public_vtype).collect(),
+        locals: frame.locals.iter().map(public_vtype).collect(),
+    }
+}
+
+fn require_type(actual: &VType, expected: &VType, env: &TypeEnv<'_>) -> Result<(), AnalysisError> {
     if actual == expected {
         return Ok(());
     }
@@ -243,15 +675,14 @@ fn require_type(
             if expected_name == JAVA_LANG_OBJECT {
                 return Ok(());
             }
+            if let Some(degraded) = DegradedType::parse(actual_name) {
+                return require_degraded(&degraded, actual, expected, expected_name, env);
+            }
             if actual_name.starts_with('[') {
                 if expected_name.starts_with('[') {
-                    let fallback = MappingClassResolver::default();
-                    let effective = resolver.unwrap_or(&fallback);
-                    return match hierarchy::is_subtype(effective, actual_name, expected_name) {
+                    return match hierarchy::is_subtype(env, actual_name, expected_name) {
                         Ok(true) | Err(AnalysisError::UnresolvedClass { .. }) => Ok(()),
-                        Ok(false) => Err(type_error(format!(
-                            "expected {expected:?}, found {actual:?}"
-                        ))),
+                        Ok(false) => unassignable(actual, expected, expected_name, env),
                         Err(error) => Err(error),
                     };
                 }
@@ -270,26 +701,88 @@ fn require_type(
                     "expected {expected:?}, found {actual:?}"
                 )));
             }
-            let Some(resolver) = resolver else {
-                return Ok(());
-            };
-            if let Some(resolved_expected) = resolver.resolve_class(expected_name)
-                && resolved_expected.is_interface()
-            {
+            // The verifier accepts any reference where an interface is required.
+            if env.is_known_interface(expected_name) {
                 return Ok(());
             }
-            match hierarchy::is_subtype(resolver, actual_name, expected_name) {
+            match hierarchy::is_subtype(env, actual_name, expected_name) {
                 Ok(true) | Err(AnalysisError::UnresolvedClass { .. }) => Ok(()),
-                Ok(false) => Err(type_error(format!(
-                    "expected {expected:?}, found {actual:?}"
-                ))),
+                Ok(false) => unassignable(actual, expected, expected_name, env),
                 Err(error) => Err(error),
             }
         }
         _ => Err(type_error(format!(
-            "expected {expected:?}, found {actual:?}"
+            "expected {}, found {}",
+            debug_public(expected),
+            debug_public(actual)
         ))),
     }
+}
+
+/// A reference the known hierarchy shows is not a subtype of the required
+/// type. That is certain only when the required element type is primitive
+/// or known to be a class; an unknown one may be an interface, which
+/// accepts any reference.
+fn unassignable(
+    actual: &VType,
+    expected: &VType,
+    expected_name: &str,
+    env: &TypeEnv<'_>,
+) -> Result<(), AnalysisError> {
+    let trimmed = expected_name.trim_start_matches('[');
+    let (primitive_element, element) = if trimmed.len() == expected_name.len() {
+        (false, trimmed)
+    } else {
+        match trimmed
+            .strip_prefix('L')
+            .and_then(|rest| rest.strip_suffix(';'))
+        {
+            Some(element) => (false, element),
+            None => (true, trimmed),
+        }
+    };
+    if primitive_element || env.is_known_class(element) {
+        return Err(type_error(format!(
+            "expected {expected:?}, found {actual:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// A degraded value used where `expected` is required.
+fn require_degraded(
+    degraded: &DegradedType<'_>,
+    actual: &VType,
+    expected: &VType,
+    expected_name: &str,
+    env: &TypeEnv<'_>,
+) -> Result<(), AnalysisError> {
+    let mismatch = || {
+        type_error(format!(
+            "expected {}, found {}",
+            debug_public(expected),
+            debug_public(actual)
+        ))
+    };
+    let mut required = expected_name;
+    for _ in 0..degraded.dims {
+        required = required
+            .strip_prefix('[')
+            .and_then(hierarchy::peel_array_component_reference)
+            .ok_or_else(mismatch)?;
+    }
+    if required == JAVA_LANG_OBJECT || env.is_known_interface(required) {
+        return Ok(());
+    }
+    if required.starts_with('[') {
+        // The merged values are class instances, never arrays.
+        return Err(mismatch());
+    }
+    env.degraded_use(&degraded.members, required)
+}
+
+fn debug_public(value: &VType) -> String {
+    format!("{:?}", public_vtype(value))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,6 +829,10 @@ pub struct FrameComputationResult {
     pub max_stack: u16,
     pub max_locals: u16,
     pub frames: Vec<StackMapFrameState>,
+    /// Places where missing hierarchy data made the frames imprecise enough
+    /// that the JVM verifier will likely reject them. Empty when the frames
+    /// are as precise as the code allows.
+    pub warnings: Vec<FrameWarning>,
 }
 
 pub fn is_category2(value: &VType) -> bool {
@@ -608,29 +1105,24 @@ fn simulate_item(
     code_index: usize,
     next_node: Option<usize>,
     expected_return: Option<&VType>,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     match item {
-        CodeItem::Raw(raw) => simulate_raw_opcode(
-            raw.opcode(),
-            state,
-            raw,
-            code_index,
-            expected_return,
-            resolver,
-        ),
-        CodeItem::Var(var) => simulate_var(var, state, resolver),
+        CodeItem::Raw(raw) => {
+            simulate_raw_opcode(raw.opcode(), state, raw, code_index, expected_return, env)
+        }
+        CodeItem::Var(var) => simulate_var(var, state, env),
         CodeItem::IInc(iinc) => simulate_iinc(iinc, state),
-        CodeItem::Field(field) => simulate_field(field, state, class, resolver),
-        CodeItem::Method(method) => simulate_method(method, state, class, resolver),
-        CodeItem::InterfaceMethod(method) => simulate_interface_method(method, state, resolver),
-        CodeItem::InvokeDynamic(insn) => simulate_invokedynamic(insn, state, resolver),
-        CodeItem::Type(insn) => simulate_type(insn, state, code_index, resolver),
+        CodeItem::Field(field) => simulate_field(field, state, class, env),
+        CodeItem::Method(method) => simulate_method(method, state, class, env),
+        CodeItem::InterfaceMethod(method) => simulate_interface_method(method, state, env),
+        CodeItem::InvokeDynamic(insn) => simulate_invokedynamic(insn, state, env),
+        CodeItem::Type(insn) => simulate_type(insn, state, code_index, env),
         CodeItem::Ldc(insn) => simulate_ldc(insn, state),
-        CodeItem::MultiANewArray(insn) => simulate_multianewarray(insn, state, resolver),
-        CodeItem::Branch(branch) => simulate_branch(branch, state, next_node, resolver),
+        CodeItem::MultiANewArray(insn) => simulate_multianewarray(insn, state, env),
+        CodeItem::Branch(branch) => simulate_branch(branch, state, next_node, env),
         CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_) => {
-            state.pop_typed(&VType::Integer, resolver)
+            state.pop_typed(&VType::Integer, env)
         }
         CodeItem::Label(_) => Err(AnalysisError::InvalidControlFlow {
             reason: "labels do not execute".to_owned(),
@@ -641,7 +1133,7 @@ fn simulate_item(
 fn simulate_var(
     var: &VarInsn,
     state: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     let primitive = match var.opcode {
         0x15 | 0x36 => Some(VType::Integer),
@@ -653,7 +1145,7 @@ fn simulate_var(
     if let Some(expected) = primitive {
         if var.opcode <= 0x18 {
             let actual = state.get_local(var.slot as usize)?;
-            require_type(actual, &expected, resolver)?;
+            require_type(actual, &expected, env)?;
             if is_category2(actual) && state.locals.get(var.slot as usize + 1) != Some(&VType::Top)
             {
                 return Err(type_error("category-2 local is missing its second slot"));
@@ -661,7 +1153,7 @@ fn simulate_var(
             return Ok(state.push([expected]));
         }
         return Ok(state
-            .pop_typed(&expected, resolver)?
+            .pop_typed(&expected, env)?
             .set_local(var.slot as usize, expected));
     }
     match var.opcode {
@@ -716,7 +1208,7 @@ fn simulate_field(
     field: &FieldInsn,
     state: &FrameState,
     class: ClassContext<'_>,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     let descriptor = parse_field_descriptor(&field.descriptor).map_err(|error| {
         AnalysisError::InvalidControlFlow {
@@ -726,13 +1218,13 @@ fn simulate_field(
     let field_type = vtype_from_descriptor(&descriptor);
     match field.opcode {
         0xB2 => Ok(state.push([field_type])),
-        0xB3 => state.pop_typed(&field_type, resolver),
+        0xB3 => state.pop_typed(&field_type, env),
         0xB4 => {
-            let next = state.pop_typed(&VType::Object(field.owner.clone()), resolver)?;
+            let next = state.pop_typed(&VType::Object(field.owner.clone()), env)?;
             Ok(next.push([field_type]))
         }
         0xB5 => {
-            let next = state.pop_typed(&field_type, resolver)?;
+            let next = state.pop_typed(&field_type, env)?;
             // A constructor may assign its own instance fields before invoking super.
             if next.peek(0)? == &VType::UninitializedThis {
                 if field.owner != class.name
@@ -750,7 +1242,7 @@ fn simulate_field(
                 }
                 Ok(next.pop(1)?.0)
             } else {
-                next.pop_typed(&VType::Object(field.owner.clone()), resolver)
+                next.pop_typed(&VType::Object(field.owner.clone()), env)
             }
         }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
@@ -761,7 +1253,7 @@ fn simulate_method(
     method: &MethodInsn,
     state: &FrameState,
     class: ClassContext<'_>,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     if !matches!(method.opcode, 0xB6..=0xB8) {
         return Err(AnalysisError::UnsupportedInstruction {
@@ -794,7 +1286,7 @@ fn simulate_method(
             "method invocation parameter slots exceed JVMS maximum",
         ));
     }
-    let after_args = pop_arguments(state, &parsed.parameter_types, resolver)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types, env)?;
     let receiver_state = if method.opcode == 0xB8 {
         after_args
     } else {
@@ -824,7 +1316,7 @@ fn simulate_method(
             };
             initialize_receiver(&after_receiver, receiver.first().cloned(), replacement)
         } else {
-            require_type(&receiver[0], &VType::Object(method.owner.clone()), resolver)?;
+            require_type(&receiver[0], &VType::Object(method.owner.clone()), env)?;
             after_receiver
         }
     };
@@ -837,7 +1329,7 @@ fn simulate_method(
 fn simulate_interface_method(
     method: &InterfaceMethodInsn,
     state: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     if matches!(method.name.as_str(), "<init>" | "<clinit>") {
         return Err(type_error(
@@ -854,8 +1346,8 @@ fn simulate_interface_method(
             "invokeinterface parameter slots exceed 254 (count limit 255)",
         ));
     }
-    let after_args = pop_arguments(state, &parsed.parameter_types, resolver)?;
-    let after_receiver = after_args.pop_typed(&VType::Object(method.owner.clone()), resolver)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types, env)?;
+    let after_receiver = after_args.pop_typed(&VType::Object(method.owner.clone()), env)?;
     match &parsed.return_type {
         ReturnType::Void => Ok(after_receiver),
         ReturnType::Field(field) => Ok(after_receiver.push([vtype_from_descriptor(field)])),
@@ -865,7 +1357,7 @@ fn simulate_interface_method(
 fn simulate_invokedynamic(
     insn: &InvokeDynamicInsn,
     state: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     if matches!(insn.name.as_str(), "<init>" | "<clinit>") {
         return Err(type_error("invokedynamic cannot invoke <init> or <clinit>"));
@@ -878,7 +1370,7 @@ fn simulate_invokedynamic(
     if parameter_slot_count(&parsed) > 255 {
         return Err(type_error("invokedynamic parameter slots exceed 255"));
     }
-    let after_args = pop_arguments(state, &parsed.parameter_types, resolver)?;
+    let after_args = pop_arguments(state, &parsed.parameter_types, env)?;
     match &parsed.return_type {
         ReturnType::Void => Ok(after_args),
         ReturnType::Field(field) => Ok(after_args.push([vtype_from_descriptor(field)])),
@@ -888,11 +1380,11 @@ fn simulate_invokedynamic(
 fn pop_arguments(
     state: &FrameState,
     parameters: &[FieldDescriptor],
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     let mut next = state.clone();
     for parameter in parameters.iter().rev() {
-        next = next.pop_typed(&vtype_from_descriptor(parameter), resolver)?;
+        next = next.pop_typed(&vtype_from_descriptor(parameter), env)?;
     }
     Ok(next)
 }
@@ -901,7 +1393,7 @@ fn simulate_type(
     insn: &TypeInsn,
     state: &FrameState,
     code_index: usize,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     match insn.opcode {
         0xBB => {
@@ -942,7 +1434,7 @@ fn simulate_type(
             }]))
         }
         0xBD => {
-            let next = state.pop_typed(&VType::Integer, resolver)?;
+            let next = state.pop_typed(&VType::Integer, env)?;
             let array_descriptor = anewarray_descriptor(&insn.descriptor);
             let array_dims = array_descriptor.bytes().take_while(|&b| b == b'[').count();
             if array_dims > 255 || parse_field_descriptor(&array_descriptor).is_err() {
@@ -953,11 +1445,11 @@ fn simulate_type(
             Ok(next.push([VType::Object(array_descriptor)]))
         }
         0xC0 => {
-            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()), resolver)?;
+            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()), env)?;
             Ok(next.push([VType::Object(insn.descriptor.clone())]))
         }
         0xC1 => {
-            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()), resolver)?;
+            let next = state.pop_typed(&VType::Object(JAVA_LANG_OBJECT.to_owned()), env)?;
             Ok(next.push([VType::Integer]))
         }
         opcode => Err(AnalysisError::UnsupportedInstruction { opcode }),
@@ -989,7 +1481,7 @@ fn simulate_ldc(insn: &LdcInsn, state: &FrameState) -> Result<FrameState, Analys
 fn simulate_multianewarray(
     insn: &MultiANewArrayInsn,
     state: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     if insn.dimensions == 0 {
         return Err(type_error("multianewarray dimensions must be at least 1"));
@@ -1006,7 +1498,7 @@ fn simulate_multianewarray(
     }
     let mut next = state.clone();
     for _ in 0..insn.dimensions {
-        next = next.pop_typed(&VType::Integer, resolver)?;
+        next = next.pop_typed(&VType::Integer, env)?;
     }
     Ok(next.push([VType::Object(insn.descriptor.clone())]))
 }
@@ -1015,14 +1507,14 @@ fn simulate_branch(
     branch: &BranchInsn,
     state: &FrameState,
     next_node: Option<usize>,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     match branch.opcode {
-        0x99..=0x9E => state.pop_typed(&VType::Integer, resolver),
+        0x99..=0x9E => state.pop_typed(&VType::Integer, env),
         0xC6 | 0xC7 => Ok(state.pop_reference()?.0),
         0x9F..=0xA4 => state
-            .pop_typed(&VType::Integer, resolver)?
-            .pop_typed(&VType::Integer, resolver),
+            .pop_typed(&VType::Integer, env)?
+            .pop_typed(&VType::Integer, env),
         0xA5 | 0xA6 => Ok(state.pop_reference()?.0.pop_reference()?.0),
         0xA7 | 0xC8 => Ok(state.clone()),
         0xA8 | 0xC9 => simulate_jsr(state, next_node),
@@ -1053,7 +1545,7 @@ fn simulate_raw_opcode(
     raw: &crate::raw::Instruction,
     _code_index: usize,
     expected_return: Option<&VType>,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     match opcode {
         0x59 => state.check_stack_groups(&[1])?,
@@ -1149,74 +1641,46 @@ fn simulate_raw_opcode(
             })
         }
         0x74 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
+            .pop_typed(&VType::Integer, env)?
             .push([VType::Integer])),
-        0x75 => Ok(state.pop_typed(&VType::Long, resolver)?.push([VType::Long])),
-        0x76 => Ok(state
-            .pop_typed(&VType::Float, resolver)?
-            .push([VType::Float])),
-        0x77 => Ok(state
-            .pop_typed(&VType::Double, resolver)?
-            .push([VType::Double])),
+        0x75 => Ok(state.pop_typed(&VType::Long, env)?.push([VType::Long])),
+        0x76 => Ok(state.pop_typed(&VType::Float, env)?.push([VType::Float])),
+        0x77 => Ok(state.pop_typed(&VType::Double, env)?.push([VType::Double])),
         0x79 | 0x7b | 0x7d => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
-            .pop_typed(&VType::Long, resolver)?
+            .pop_typed(&VType::Integer, env)?
+            .pop_typed(&VType::Long, env)?
             .push([VType::Long])),
         0x60 | 0x64 | 0x68 | 0x6C | 0x70 | 0x78 | 0x7A | 0x7C | 0x7E | 0x80 | 0x82 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
-            .pop_typed(&VType::Integer, resolver)?
+            .pop_typed(&VType::Integer, env)?
+            .pop_typed(&VType::Integer, env)?
             .push([VType::Integer])),
         0x61 | 0x65 | 0x69 | 0x6D | 0x71 | 0x7F | 0x81 | 0x83 => Ok(state
-            .pop_typed(&VType::Long, resolver)?
-            .pop_typed(&VType::Long, resolver)?
+            .pop_typed(&VType::Long, env)?
+            .pop_typed(&VType::Long, env)?
             .push([VType::Long])),
         0x62 | 0x66 | 0x6A | 0x6E | 0x72 => Ok(state
-            .pop_typed(&VType::Float, resolver)?
-            .pop_typed(&VType::Float, resolver)?
+            .pop_typed(&VType::Float, env)?
+            .pop_typed(&VType::Float, env)?
             .push([VType::Float])),
         0x63 | 0x67 | 0x6B | 0x6F | 0x73 => Ok(state
-            .pop_typed(&VType::Double, resolver)?
-            .pop_typed(&VType::Double, resolver)?
+            .pop_typed(&VType::Double, env)?
+            .pop_typed(&VType::Double, env)?
             .push([VType::Double])),
-        0x85 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
-            .push([VType::Long])),
-        0x86 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
-            .push([VType::Float])),
-        0x87 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
-            .push([VType::Double])),
-        0x88 => Ok(state
-            .pop_typed(&VType::Long, resolver)?
-            .push([VType::Integer])),
-        0x89 => Ok(state
-            .pop_typed(&VType::Long, resolver)?
-            .push([VType::Float])),
-        0x8A => Ok(state
-            .pop_typed(&VType::Long, resolver)?
-            .push([VType::Double])),
-        0x8B => Ok(state
-            .pop_typed(&VType::Float, resolver)?
-            .push([VType::Integer])),
+        0x85 => Ok(state.pop_typed(&VType::Integer, env)?.push([VType::Long])),
+        0x86 => Ok(state.pop_typed(&VType::Integer, env)?.push([VType::Float])),
+        0x87 => Ok(state.pop_typed(&VType::Integer, env)?.push([VType::Double])),
+        0x88 => Ok(state.pop_typed(&VType::Long, env)?.push([VType::Integer])),
+        0x89 => Ok(state.pop_typed(&VType::Long, env)?.push([VType::Float])),
+        0x8A => Ok(state.pop_typed(&VType::Long, env)?.push([VType::Double])),
+        0x8B => Ok(state.pop_typed(&VType::Float, env)?.push([VType::Integer])),
         0x91..=0x93 => Ok(state
-            .pop_typed(&VType::Integer, resolver)?
+            .pop_typed(&VType::Integer, env)?
             .push([VType::Integer])),
-        0x8C => Ok(state
-            .pop_typed(&VType::Float, resolver)?
-            .push([VType::Long])),
-        0x8D => Ok(state
-            .pop_typed(&VType::Float, resolver)?
-            .push([VType::Double])),
-        0x8E => Ok(state
-            .pop_typed(&VType::Double, resolver)?
-            .push([VType::Integer])),
-        0x8F => Ok(state
-            .pop_typed(&VType::Double, resolver)?
-            .push([VType::Long])),
-        0x90 => Ok(state
-            .pop_typed(&VType::Double, resolver)?
-            .push([VType::Float])),
+        0x8C => Ok(state.pop_typed(&VType::Float, env)?.push([VType::Long])),
+        0x8D => Ok(state.pop_typed(&VType::Float, env)?.push([VType::Double])),
+        0x8E => Ok(state.pop_typed(&VType::Double, env)?.push([VType::Integer])),
+        0x8F => Ok(state.pop_typed(&VType::Double, env)?.push([VType::Long])),
+        0x90 => Ok(state.pop_typed(&VType::Double, env)?.push([VType::Float])),
         0x94..=0x98 => {
             let expected = match opcode {
                 0x94 => VType::Long,
@@ -1224,12 +1688,12 @@ fn simulate_raw_opcode(
                 _ => VType::Double,
             };
             Ok(state
-                .pop_typed(&expected, resolver)?
-                .pop_typed(&expected, resolver)?
+                .pop_typed(&expected, env)?
+                .pop_typed(&expected, env)?
                 .push([VType::Integer]))
         }
         0x2e..=0x35 => {
-            let next = state.pop_typed(&VType::Integer, resolver)?;
+            let next = state.pop_typed(&VType::Integer, env)?;
             let (next, array) = pop_array(&next)?;
             Ok(next.push([array_element_type(opcode, &array)?]))
         }
@@ -1242,26 +1706,26 @@ fn simulate_raw_opcode(
                 _ => VType::Integer,
             };
             let next = state
-                .pop_typed(&expected, resolver)?
-                .pop_typed(&VType::Integer, resolver)?;
+                .pop_typed(&expected, env)?
+                .pop_typed(&VType::Integer, env)?;
             let (next, array) = pop_array(&next)?;
             array_element_type(opcode - 0x21, &array)?;
             Ok(next)
         }
-        0xAC => state.pop_typed(&VType::Integer, resolver),
-        0xAD => state.pop_typed(&VType::Long, resolver),
-        0xAE => state.pop_typed(&VType::Float, resolver),
-        0xAF => state.pop_typed(&VType::Double, resolver),
+        0xAC => state.pop_typed(&VType::Integer, env),
+        0xAD => state.pop_typed(&VType::Long, env),
+        0xAE => state.pop_typed(&VType::Float, env),
+        0xAF => state.pop_typed(&VType::Double, env),
         0xB0 => state.pop_typed(
             expected_return.unwrap_or(&VType::Object(JAVA_LANG_OBJECT.to_owned())),
-            resolver,
+            env,
         ),
-        0xBF => state.pop_typed(&VType::Object("java/lang/Throwable".to_owned()), resolver),
+        0xBF => state.pop_typed(&VType::Object("java/lang/Throwable".to_owned()), env),
         0xC2 | 0xC3 => Ok(state.pop_reference()?.0),
         0xBE => Ok(pop_array(state)?.0.push([VType::Integer])),
         0xB1 => Ok(state.clone()),
         0xBC => {
-            let next = state.pop_typed(&VType::Integer, resolver)?;
+            let next = state.pop_typed(&VType::Integer, env)?;
             let descriptor = match raw {
                 crate::raw::Instruction::NewArray(insn) => newarray_descriptor(insn.atype),
                 _ => return Err(AnalysisError::UnsupportedInstruction { opcode }),

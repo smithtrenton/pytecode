@@ -1302,37 +1302,264 @@ impl PyLdcInsn {
     /// Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.).
     #[getter]
     fn value_type(&self) -> &'static str {
-        match &self.inner.value {
-            LdcValue::Int(_) => "int",
-            LdcValue::FloatBits(_) => "float",
-            LdcValue::Long(_) => "long",
-            LdcValue::DoubleBits(_) => "double",
-            LdcValue::String(_) => "string",
-            LdcValue::Class(_) => "class",
-            LdcValue::MethodType(_) => "method_type",
-            LdcValue::MethodHandle(_) => "method_handle",
-            LdcValue::Dynamic(_) => "dynamic",
-        }
+        ldc_value_type(&self.inner.value)
     }
 
     /// Payload decoded according to ``value_type``.
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        match &self.inner.value {
-            LdcValue::Int(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::FloatBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::Long(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::DoubleBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::String(value) => crate::java_string::to_python(py, value),
-            LdcValue::Class(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::MethodType(value) => Ok(value.into_pyobject(py)?.unbind().into()),
-            LdcValue::MethodHandle(value) => wrap_method_handle_value(py, value),
-            LdcValue::Dynamic(value) => wrap_dynamic_value(py, value),
-        }
+        ldc_value_to_py(py, &self.inner.value)
     }
 
     fn __repr__(&self) -> String {
         format!("LdcInsn(value_type={:?})", self.value_type())
+    }
+}
+
+fn ldc_value_type(value: &LdcValue) -> &'static str {
+    match value {
+        LdcValue::Int(_) => "int",
+        LdcValue::FloatBits(_) => "float",
+        LdcValue::Long(_) => "long",
+        LdcValue::DoubleBits(_) => "double",
+        LdcValue::String(_) => "string",
+        LdcValue::Class(_) => "class",
+        LdcValue::MethodType(_) => "method_type",
+        LdcValue::MethodHandle(_) => "method_handle",
+        LdcValue::Dynamic(_) => "dynamic",
+    }
+}
+
+fn ldc_value_to_py(py: Python<'_>, value: &LdcValue) -> PyResult<PyObject> {
+    match value {
+        LdcValue::Int(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::FloatBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::Long(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::DoubleBits(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::String(value) => crate::java_string::to_python(py, value),
+        LdcValue::Class(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::MethodType(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+        LdcValue::MethodHandle(value) => wrap_method_handle_value(py, value),
+        LdcValue::Dynamic(value) => wrap_dynamic_value(py, value),
+    }
+}
+
+/// One static argument of a bootstrap method: a loadable constant.
+///
+/// Construct with the same factories as ``LdcInsn``; ``value_type`` and
+/// ``value`` decode it the same way.
+#[pyclass(
+    from_py_object,
+    name = "BootstrapArgument",
+    module = "pytecode._rust",
+    eq
+)]
+#[derive(Clone, PartialEq)]
+pub struct PyBootstrapArgument {
+    inner: LdcValue,
+}
+
+#[pymethods]
+impl PyBootstrapArgument {
+    /// A signed 32-bit integer constant.
+    #[staticmethod]
+    fn int(value: i32) -> Self {
+        Self {
+            inner: LdcValue::Int(value),
+        }
+    }
+
+    /// A float constant from raw IEEE 754 bits.
+    #[staticmethod]
+    fn float_bits(value: u32) -> Self {
+        Self {
+            inner: LdcValue::FloatBits(value),
+        }
+    }
+
+    /// A signed 64-bit integer constant.
+    #[staticmethod]
+    fn long(value: i64) -> Self {
+        Self {
+            inner: LdcValue::Long(value),
+        }
+    }
+
+    /// A double constant from raw 64-bit IEEE 754 bits.
+    #[staticmethod]
+    fn double_bits(value: u64) -> Self {
+        Self {
+            inner: LdcValue::DoubleBits(value),
+        }
+    }
+
+    /// A string constant (preserving lone surrogates).
+    #[staticmethod]
+    fn string(value: &Bound<'_, PyString>) -> PyResult<Self> {
+        Ok(Self {
+            inner: LdcValue::String(crate::java_string::from_python(value)?),
+        })
+    }
+
+    /// A class literal in internal JVM form.
+    #[staticmethod]
+    fn class_value(value: String) -> Self {
+        Self {
+            inner: LdcValue::Class(value),
+        }
+    }
+
+    /// A ``MethodType`` descriptor constant.
+    #[staticmethod]
+    fn method_type(value: String) -> Self {
+        Self {
+            inner: LdcValue::MethodType(value),
+        }
+    }
+
+    /// A ``MethodHandle`` constant.
+    #[staticmethod]
+    fn method_handle(
+        reference_kind: u8,
+        owner: String,
+        name: String,
+        descriptor: String,
+        is_interface: bool,
+    ) -> PyResult<Self> {
+        validate_reference_kind(reference_kind)?;
+        Ok(Self {
+            inner: LdcValue::MethodHandle(MethodHandleValue {
+                reference_kind,
+                owner,
+                name,
+                descriptor,
+                is_interface,
+            }),
+        })
+    }
+
+    /// A dynamic constant (``CONSTANT_Dynamic``).
+    #[staticmethod]
+    fn dynamic(bootstrap_method_attr_index: u16, name: String, descriptor: String) -> Self {
+        Self {
+            inner: LdcValue::Dynamic(DynamicValue {
+                bootstrap_method_attr_index: BootstrapMethodIndex::new(bootstrap_method_attr_index),
+                name,
+                descriptor,
+            }),
+        }
+    }
+
+    /// Wrap an existing ``MethodHandleValue``.
+    #[staticmethod]
+    fn from_method_handle(value: &PyMethodHandleValue) -> Self {
+        Self {
+            inner: LdcValue::MethodHandle(value.inner.clone()),
+        }
+    }
+
+    /// Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.).
+    #[getter]
+    fn value_type(&self) -> &'static str {
+        ldc_value_type(&self.inner)
+    }
+
+    /// Payload decoded according to ``value_type``.
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<PyObject> {
+        ldc_value_to_py(py, &self.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.inner {
+            LdcValue::Class(value) | LdcValue::MethodType(value) => format!(
+                "BootstrapArgument(value_type={:?}, value={value:?})",
+                self.value_type()
+            ),
+            LdcValue::MethodHandle(handle) => format!(
+                "BootstrapArgument(value_type=\"method_handle\", owner={:?}, name={:?}, descriptor={:?})",
+                handle.owner, handle.name, handle.descriptor
+            ),
+            _ => format!("BootstrapArgument(value_type={:?})", self.value_type()),
+        }
+    }
+}
+
+/// One entry of a class's ``BootstrapMethods`` attribute.
+///
+/// ``invokedynamic`` instructions and dynamic constants refer to entries by
+/// position, so edit entries in place rather than reordering them.
+#[pyclass(
+    from_py_object,
+    name = "BootstrapMethod",
+    module = "pytecode._rust",
+    eq
+)]
+#[derive(Clone, PartialEq)]
+pub struct PyBootstrapMethod {
+    method: MethodHandleValue,
+    arguments: Vec<LdcValue>,
+}
+
+#[pymethods]
+impl PyBootstrapMethod {
+    #[new]
+    #[pyo3(signature = (method, arguments = None))]
+    fn new(method: &PyMethodHandleValue, arguments: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let mut values = Vec::new();
+        if let Some(arguments) = arguments {
+            for argument in arguments.try_iter()? {
+                let argument: PyRef<'_, PyBootstrapArgument> = argument?.extract()?;
+                values.push(argument.inner.clone());
+            }
+        }
+        Ok(Self {
+            method: method.inner.clone(),
+            arguments: values,
+        })
+    }
+
+    /// The bootstrap method handle (normally ``REF_invokeStatic``).
+    #[getter]
+    fn method(&self, py: Python<'_>) -> PyResult<PyObject> {
+        wrap_method_handle_value(py, &self.method)
+    }
+
+    /// The static arguments passed to the bootstrap method.
+    #[getter]
+    fn arguments(&self) -> Vec<PyBootstrapArgument> {
+        self.arguments
+            .iter()
+            .map(|value| PyBootstrapArgument {
+                inner: value.clone(),
+            })
+            .collect()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BootstrapMethod(method={}.{}{}, arguments={})",
+            self.method.owner,
+            self.method.name,
+            self.method.descriptor,
+            self.arguments.len()
+        )
+    }
+}
+
+impl PyBootstrapMethod {
+    fn to_model(&self) -> pytecode_engine::model::BootstrapMethodModel {
+        pytecode_engine::model::BootstrapMethodModel {
+            method: self.method.clone(),
+            arguments: self.arguments.clone(),
+        }
+    }
+
+    fn from_model(model: pytecode_engine::model::BootstrapMethodModel) -> Self {
+        Self {
+            method: model.method,
+            arguments: model.arguments,
+        }
     }
 }
 
@@ -3609,8 +3836,18 @@ impl PyMappingClassResolver {
     }
 
     /// Build a resolver from an iterable of raw classfile ``bytes`` or ``bytearray`` payloads.
+    ///
+    /// ``duplicates`` decides what happens when two payloads declare the same
+    /// class: ``"error"`` (default) rejects the input, ``"first"`` keeps the
+    /// earliest definition, and ``"last"`` keeps the latest.
     #[staticmethod]
-    fn from_bytes(py: Python<'_>, class_bytes_list: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (class_bytes_list, *, duplicates = "error"))]
+    fn from_bytes(
+        py: Python<'_>,
+        class_bytes_list: &Bound<'_, PyAny>,
+        duplicates: &str,
+    ) -> PyResult<Self> {
+        let policy = parse_duplicate_policy(duplicates)?;
         let mut resolved = Vec::new();
         for item in class_bytes_list.try_iter()? {
             let item = item?;
@@ -3620,36 +3857,76 @@ impl PyMappingClassResolver {
             })?;
             resolved.push(rc);
         }
-        let resolver =
-            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
+        let resolver = MappingClassResolver::with_duplicate_policy(resolved, policy)
+            .map_err(|e| analysis_error_to_py(py, e))?;
         Ok(Self { inner: resolver })
     }
 
     /// Build a resolver from an iterable of mutable ``ClassModel`` instances.
+    ///
+    /// See ``from_bytes`` for ``duplicates``.
     #[staticmethod]
-    fn from_models(py: Python<'_>, models: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (models, *, duplicates = "error"))]
+    fn from_models(py: Python<'_>, models: &Bound<'_, PyAny>, duplicates: &str) -> PyResult<Self> {
+        let policy = parse_duplicate_policy(duplicates)?;
         let mut resolved = Vec::new();
         for item in models.try_iter()? {
             let model: PyRef<'_, PyClassModel> = item?.extract()?;
             resolved.push(model.with_class_model(|inner| Ok(ResolvedClass::from_model(inner)))?);
         }
-        let resolver =
-            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
+        let resolver = MappingClassResolver::with_duplicate_policy(resolved, policy)
+            .map_err(|e| analysis_error_to_py(py, e))?;
         Ok(Self { inner: resolver })
     }
 
     /// Build a resolver from an iterable of raw ``ClassFile`` instances.
+    ///
+    /// See ``from_bytes`` for ``duplicates``.
     #[staticmethod]
-    fn from_classfiles(py: Python<'_>, classfiles: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (classfiles, *, duplicates = "error"))]
+    fn from_classfiles(
+        py: Python<'_>,
+        classfiles: &Bound<'_, PyAny>,
+        duplicates: &str,
+    ) -> PyResult<Self> {
+        let policy = parse_duplicate_policy(duplicates)?;
         let mut resolved = Vec::new();
         for item in classfiles.try_iter()? {
             let cf: PyRef<'_, PyClassFile> = item?.extract()?;
             resolved
                 .push(ResolvedClass::from_classfile(&cf.inner).map_err(crate::engine_error_to_py)?);
         }
-        let resolver =
-            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
+        let resolver = MappingClassResolver::with_duplicate_policy(resolved, policy)
+            .map_err(|e| analysis_error_to_py(py, e))?;
         Ok(Self { inner: resolver })
+    }
+
+    /// Return a resolver holding the classes of both resolvers.
+    ///
+    /// Classes in ``self`` come first, so ``duplicates="first"`` prefers them.
+    #[pyo3(signature = (other, *, duplicates = "error"))]
+    fn merged(
+        &self,
+        py: Python<'_>,
+        other: &PyMappingClassResolver,
+        duplicates: &str,
+    ) -> PyResult<Self> {
+        let policy = parse_duplicate_policy(duplicates)?;
+        Ok(Self {
+            inner: self
+                .inner
+                .merged(&other.inner, policy)
+                .map_err(|e| analysis_error_to_py(py, e))?,
+        })
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn __contains__(&self, name: &Bound<'_, PyAny>) -> bool {
+        name.extract::<String>()
+            .is_ok_and(|name| self.inner.contains(&name))
     }
 
     /// Resolve a class snapshot dictionary by internal JVM name, or ``None``.
@@ -3663,6 +3940,20 @@ impl PyMappingClassResolver {
 
     fn __repr__(&self) -> &'static str {
         "MappingClassResolver()"
+    }
+}
+
+fn parse_duplicate_policy(
+    value: &str,
+) -> PyResult<pytecode_engine::analysis::DuplicateClassPolicy> {
+    use pytecode_engine::analysis::DuplicateClassPolicy;
+    match value {
+        "error" => Ok(DuplicateClassPolicy::Error),
+        "first" => Ok(DuplicateClassPolicy::KeepFirst),
+        "last" => Ok(DuplicateClassPolicy::KeepLast),
+        other => Err(PyValueError::new_err(format!(
+            "duplicates must be 'error', 'first', or 'last', got {other:?}"
+        ))),
     }
 }
 
@@ -3732,7 +4023,28 @@ pub(crate) fn parse_frame_computation_mode(
     }
 }
 
+/// Emit one ``pytecode.model.FrameComputationWarning`` per method whose
+/// recomputed frames are likely to fail JVM verification.
+pub(crate) fn emit_frame_warnings(
+    py: Python<'_>,
+    warnings: &[pytecode_engine::analysis::FrameWarning],
+) -> PyResult<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+    static CATEGORY: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let category =
+        crate::cached_py_attr(&CATEGORY, py, "pytecode.model", "FrameComputationWarning")?;
+    for warning in warnings {
+        let message = std::ffi::CString::new(warning.to_string().replace(' ', " "))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        PyErr::warn(py, category.bind(py), &message, 1)?;
+    }
+    Ok(())
+}
+
 fn lower_class_model_bytes(
+    py: Python<'_>,
     model: &PyClassModel,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
@@ -3752,30 +4064,36 @@ fn lower_class_model_bytes(
         });
     }
 
-    write_class(&lower_class_model(model, debug_info, frame_mode, resolver)?)
-        .map_err(crate::engine_error_to_py)
+    write_class(&lower_class_model(
+        py, model, debug_info, frame_mode, resolver,
+    )?)
+    .map_err(crate::engine_error_to_py)
 }
 
 fn lower_class_model(
+    py: Python<'_>,
     model: &PyClassModel,
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn pytecode_engine::analysis::ClassResolver>,
 ) -> PyResult<ClassFile> {
-    with_live_model(&model.state, |model_state| {
+    let (classfile, warnings) = with_live_model(&model.state, |model_state| {
         model_state
             .inner
             .as_ref()
             .unwrap()
-            .to_classfile_with_options(debug_info, frame_mode, resolver)
+            .to_classfile_with_report(debug_info, frame_mode, resolver)
             .map_err(crate::engine_error_to_py)
-    })
+    })?;
+    emit_frame_warnings(py, &warnings)?;
+    Ok(classfile)
 }
 
 /// Lower an iterable of ``ClassModel`` objects into raw ``ClassFile`` structures.
 #[pyfunction]
 #[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None))]
 fn rust_lower_classmodels(
+    py: Python<'_>,
     models: &Bound<'_, PyAny>,
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
@@ -3790,7 +4108,7 @@ fn rust_lower_classmodels(
     for item in models.try_iter()? {
         let model: PyRef<'_, PyClassModel> = item?.extract()?;
         out.push(PyClassFile {
-            inner: Arc::new(lower_class_model(&model, policy, frame_mode, resolver)?),
+            inner: Arc::new(lower_class_model(py, &model, policy, frame_mode, resolver)?),
         });
     }
     Ok(out)
@@ -3814,7 +4132,7 @@ fn rust_lower_classmodels_to_bytes<'py>(
     let mut out = Vec::new();
     for item in models.try_iter()? {
         let model: PyRef<'_, PyClassModel> = item?.extract()?;
-        let bytes = lower_class_model_bytes(&model, policy, frame_mode, resolver)?;
+        let bytes = lower_class_model_bytes(py, &model, policy, frame_mode, resolver)?;
         out.push(PyBytes::new(py, &bytes).unbind());
     }
     Ok(out)
@@ -3969,6 +4287,7 @@ impl PyClassModel {
     /// Lower the current model to classfile bytes with default options.
     fn to_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
         let bytes = lower_class_model_bytes(
+            py,
             self,
             DebugInfoPolicy::Preserve,
             FrameComputationMode::Preserve,
@@ -3978,9 +4297,10 @@ impl PyClassModel {
     }
 
     /// Lower the current model to a raw ``ClassFile`` object.
-    fn to_classfile(&self) -> PyResult<PyClassFile> {
+    fn to_classfile(&self, py: Python<'_>) -> PyResult<PyClassFile> {
         Ok(PyClassFile {
             inner: Arc::new(lower_class_model(
+                py,
                 self,
                 DebugInfoPolicy::Preserve,
                 FrameComputationMode::Preserve,
@@ -4001,6 +4321,7 @@ impl PyClassModel {
         let policy = parse_debug_info_policy(debug_info)?;
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
         let bytes = lower_class_model_bytes(
+            py,
             self,
             policy,
             frame_mode,
@@ -4013,6 +4334,7 @@ impl PyClassModel {
     #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None))]
     fn to_classfile_with_options(
         &self,
+        py: Python<'_>,
         frame_mode: Option<&Bound<'_, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
         debug_info: Option<&Bound<'_, PyAny>>,
@@ -4021,6 +4343,7 @@ impl PyClassModel {
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
         Ok(PyClassFile {
             inner: Arc::new(lower_class_model(
+                py,
                 self,
                 policy,
                 frame_mode,
@@ -4155,6 +4478,48 @@ impl PyClassModel {
         })
     }
 
+    /// Symbolic entries of the class's ``BootstrapMethods`` attribute.
+    ///
+    /// Assigning a list re-encodes the attribute in place through the
+    /// constant pool (existing entries are reused, so unchanged entries
+    /// round-trip byte-for-byte); an empty list removes it. Entries are
+    /// addressed by position from ``invokedynamic`` instructions and dynamic
+    /// constants, so keep existing entries at their index. Rewrite the
+    /// arguments here when renaming classes: method handles, method types,
+    /// and class literals among them name classes the JVM resolves when the
+    /// call site links.
+    #[getter]
+    fn bootstrap_methods(&self) -> PyResult<Vec<PyBootstrapMethod>> {
+        let methods = with_live_model(&self.state, |model_state| {
+            model_state
+                .inner
+                .as_ref()
+                .unwrap()
+                .bootstrap_methods()
+                .map_err(crate::engine_error_to_py)
+        })?;
+        Ok(methods
+            .into_iter()
+            .map(PyBootstrapMethod::from_model)
+            .collect())
+    }
+
+    #[setter]
+    fn set_bootstrap_methods(&mut self, value: Vec<PyBootstrapMethod>) -> PyResult<()> {
+        let methods = value
+            .iter()
+            .map(PyBootstrapMethod::to_model)
+            .collect::<Vec<_>>();
+        with_live_model_mut(&self.state, |model_state| {
+            model_state
+                .inner
+                .as_mut()
+                .unwrap()
+                .set_bootstrap_methods(&methods)
+                .map_err(crate::engine_error_to_py)
+        })
+    }
+
     #[setter]
     fn set_interfaces(&mut self, value: Vec<String>) -> PyResult<()> {
         with_live_model_mut(&self.state, |model_state| {
@@ -4252,6 +4617,8 @@ pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResul
     module.add_class::<PyVarInsn>()?;
     module.add_class::<PyIIncInsn>()?;
     module.add_class::<PyLdcInsn>()?;
+    module.add_class::<PyBootstrapArgument>()?;
+    module.add_class::<PyBootstrapMethod>()?;
     module.add_class::<PyInvokeDynamicInsn>()?;
     module.add_class::<PyMultiANewArrayInsn>()?;
     module.add_class::<PyBranchInsn>()?;

@@ -1663,6 +1663,19 @@ fn verify_code_model(
             ))?;
         }
         Ok(result) => {
+            // Without a resolver every cross-class merge is imprecise, so the
+            // report would only restate that no hierarchy was supplied.
+            for warning in result
+                .warnings
+                .iter()
+                .filter(|warning| warning.resolver_supplied)
+            {
+                dc.push(Diagnostic::warning(
+                    Category::Code,
+                    warning.to_string(),
+                    location.clone(),
+                ))?;
+            }
             if code.max_stack < result.max_stack {
                 dc.push(Diagnostic::error(
                     Category::Code,

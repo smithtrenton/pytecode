@@ -110,6 +110,24 @@ pub trait ClassResolver {
     fn resolve_class(&self, class_name: &str) -> Option<ResolvedClass>;
 }
 
+/// What [`MappingClassResolver::with_duplicate_policy`] does when two inputs
+/// share a class name.
+///
+/// Real class universes overlap: an application jar and one of its
+/// dependencies can both ship the same class. `Error` is the strict
+/// default; the other variants pick a winner without the caller having to
+/// deduplicate first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DuplicateClassPolicy {
+    /// Reject the input (the behavior of [`MappingClassResolver::new`]).
+    #[default]
+    Error,
+    /// Keep the first definition seen and ignore later ones.
+    KeepFirst,
+    /// Let later definitions replace earlier ones.
+    KeepLast,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MappingClassResolver {
     classes: HashMap<String, ResolvedClass>,
@@ -117,15 +135,63 @@ pub struct MappingClassResolver {
 
 impl MappingClassResolver {
     pub fn new(classes: impl IntoIterator<Item = ResolvedClass>) -> Result<Self, AnalysisError> {
-        let mut mapping = HashMap::new();
+        Self::with_duplicate_policy(classes, DuplicateClassPolicy::Error)
+    }
+
+    /// Build a resolver, resolving duplicate class names with `policy`.
+    pub fn with_duplicate_policy(
+        classes: impl IntoIterator<Item = ResolvedClass>,
+        policy: DuplicateClassPolicy,
+    ) -> Result<Self, AnalysisError> {
+        let mut mapping: HashMap<String, ResolvedClass> = HashMap::new();
         for resolved in classes {
-            if mapping.insert(resolved.name.clone(), resolved).is_some() {
-                return Err(AnalysisError::InvalidControlFlow {
-                    reason: "duplicate resolved class name".to_owned(),
-                });
+            match mapping.entry(resolved.name.clone()) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(resolved);
+                }
+                std::collections::hash_map::Entry::Occupied(mut slot) => match policy {
+                    DuplicateClassPolicy::Error => {
+                        return Err(AnalysisError::InvalidControlFlow {
+                            reason: format!("duplicate resolved class name {}", resolved.name),
+                        });
+                    }
+                    DuplicateClassPolicy::KeepFirst => {}
+                    DuplicateClassPolicy::KeepLast => {
+                        slot.insert(resolved);
+                    }
+                },
             }
         }
         Ok(Self { classes: mapping })
+    }
+
+    /// Number of classes the resolver knows (excluding the implicit `java/lang/Object`).
+    pub fn len(&self) -> usize {
+        self.classes.len()
+    }
+
+    /// Whether the resolver holds no classes.
+    pub fn is_empty(&self) -> bool {
+        self.classes.is_empty()
+    }
+
+    /// Whether `class_name` was supplied to the resolver.
+    pub fn contains(&self, class_name: &str) -> bool {
+        self.classes.contains_key(class_name)
+    }
+
+    /// The supplied classes, in no particular order.
+    pub fn classes(&self) -> impl Iterator<Item = &ResolvedClass> {
+        self.classes.values()
+    }
+
+    /// A resolver holding the classes of `self` followed by those of `other`.
+    pub fn merged(
+        &self,
+        other: &Self,
+        policy: DuplicateClassPolicy,
+    ) -> Result<Self, AnalysisError> {
+        Self::with_duplicate_policy(self.classes().chain(other.classes()).cloned(), policy)
     }
 
     pub fn from_models(
@@ -290,7 +356,7 @@ pub fn iter_supertypes(
     Ok(out)
 }
 
-fn peel_array_component_reference(component: &str) -> Option<&str> {
+pub(crate) fn peel_array_component_reference(component: &str) -> Option<&str> {
     if component.starts_with('[') {
         Some(component)
     } else {
@@ -442,6 +508,130 @@ pub(crate) fn common_reference_type(
     } else {
         Ok(format!("{}L{base_common};", "[".repeat(dims)))
     }
+}
+
+/// Result of a common-supertype query that tolerates missing hierarchy data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommonType {
+    /// The merged type (internal name or array descriptor).
+    pub(crate) name: String,
+    /// Classes whose ancestry was needed but unavailable. When non-empty,
+    /// `name` is a sound but imprecise `java/lang/Object` (or array of it).
+    pub(crate) unresolved: Vec<String>,
+}
+
+/// Superclass chain of `class_name`, walked as far as `resolver` allows.
+///
+/// The chain starts with `class_name` itself. The second value names the
+/// first class the walk could not resolve (the chain then ends with that
+/// name); `None` means the chain reached `java/lang/Object`.
+pub(crate) fn partial_superclass_chain(
+    resolver: &dyn ClassResolver,
+    class_name: &str,
+) -> Result<(Vec<String>, Option<String>), AnalysisError> {
+    let mut chain = vec![class_name.to_owned()];
+    let mut seen = HashSet::from([class_name.to_owned()]);
+    let mut current = class_name.to_owned();
+    loop {
+        if current == JAVA_LANG_OBJECT {
+            return Ok((chain, None));
+        }
+        let Some(resolved) = resolver.resolve_class(&current) else {
+            return Ok((chain, Some(current)));
+        };
+        let next = resolved
+            .super_name
+            .unwrap_or_else(|| JAVA_LANG_OBJECT.to_owned());
+        if !seen.insert(next.clone()) {
+            chain.push(next);
+            return Err(AnalysisError::HierarchyCycle { cycle: chain });
+        }
+        chain.push(next.clone());
+        current = next;
+    }
+}
+
+/// Common supertype of two reference types, using whatever hierarchy facts
+/// `resolver` has.
+///
+/// Superclass chains are linear, so the first entry of one chain that also
+/// appears in the other is the exact least common superclass whenever both
+/// chains are known that far — even if neither reaches `java/lang/Object`.
+/// Only when the known parts do not meet does the result fall back to
+/// `java/lang/Object`, and then the classes that stopped the walk are
+/// reported in [`CommonType::unresolved`].
+pub(crate) fn common_reference_type_lenient(
+    resolver: &dyn ClassResolver,
+    left_name: &str,
+    right_name: &str,
+) -> Result<CommonType, AnalysisError> {
+    let mut dims = 0_usize;
+    let mut left = left_name;
+    let mut right = right_name;
+    let mut unresolved = Vec::new();
+    let base_common = loop {
+        if left == right {
+            break left.to_owned();
+        }
+        if dims > 255 {
+            return Err(AnalysisError::InvalidControlFlow {
+                reason: "array nesting exceeds 255 dimensions".to_owned(),
+            });
+        }
+        if let (Some(left_component), Some(right_component)) =
+            (left.strip_prefix('['), right.strip_prefix('['))
+        {
+            if let (Some(next_left), Some(next_right)) = (
+                peel_array_component_reference(left_component),
+                peel_array_component_reference(right_component),
+            ) {
+                dims += 1;
+                left = next_left;
+                right = next_right;
+                continue;
+            }
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        if left.starts_with('[') || right.starts_with('[') {
+            let other = if left.starts_with('[') { right } else { left };
+            if matches!(other, "java/lang/Cloneable" | "java/io/Serializable") {
+                break other.to_owned();
+            }
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        if left == JAVA_LANG_OBJECT || right == JAVA_LANG_OBJECT {
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        // The verifier merges any interface with anything else to Object.
+        if resolver
+            .resolve_class(left)
+            .is_some_and(|resolved| resolved.is_interface())
+            || resolver
+                .resolve_class(right)
+                .is_some_and(|resolved| resolved.is_interface())
+        {
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        let (left_chain, left_missing) = partial_superclass_chain(resolver, left)?;
+        let (right_chain, right_missing) = partial_superclass_chain(resolver, right)?;
+        if let Some(found) = left_chain
+            .iter()
+            .find(|name| right_chain.iter().any(|candidate| candidate == *name))
+        {
+            break found.clone();
+        }
+        unresolved.extend(left_missing);
+        unresolved.extend(right_missing);
+        break JAVA_LANG_OBJECT.to_owned();
+    };
+    let name = if dims == 0 {
+        base_common
+    } else if base_common.starts_with('[') {
+        format!("{}{base_common}", "[".repeat(dims))
+    } else {
+        format!("{}L{base_common};", "[".repeat(dims))
+    };
+    Ok(CommonType { name, unresolved })
 }
 
 pub fn find_overridden_methods(

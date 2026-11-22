@@ -55,6 +55,20 @@ impl PyPreparedArchiveRewrite {
             .collect()
     }
 
+    /// Messages for every method whose recomputed frames are likely to fail
+    /// JVM verification.
+    fn frame_warnings(&self) -> PyResult<Vec<String>> {
+        let prepared = self
+            .prepared
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("rewrite already committed"))?;
+        Ok(prepared
+            .frame_warnings()
+            .iter()
+            .map(ToString::to_string)
+            .collect())
+    }
+
     fn commit(&mut self) -> PyResult<PathBuf> {
         self.prepared
             .take()

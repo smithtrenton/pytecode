@@ -1,4 +1,4 @@
-use pytecode_engine::analysis::ClassResolver;
+use pytecode_engine::analysis::{ClassResolver, FrameWarning};
 use pytecode_engine::model::{DebugInfoPolicy, FrameComputationMode};
 use pytecode_engine::raw::RawClassStub;
 use pytecode_engine::transform::ApplyClassTransform;
@@ -148,11 +148,21 @@ pub struct PreparedRewrite {
     destination: PathBuf,
     entries: Vec<JarInfo>,
     comment: Vec<u8>,
+    frame_warnings: Vec<FrameWarning>,
 }
 
 impl PreparedRewrite {
     pub fn path(&self) -> &Path {
         self.temporary.path()
+    }
+
+    /// Frame-computation warnings raised while relowering classes.
+    ///
+    /// Each one names a method whose recomputed frames will likely fail JVM
+    /// verification because the resolver lacked part of the class hierarchy
+    /// (see `pytecode_engine::analysis::FrameWarning`).
+    pub fn frame_warnings(&self) -> &[FrameWarning] {
+        &self.frame_warnings
     }
 
     pub fn entries(&self) -> &[JarInfo] {
@@ -352,6 +362,7 @@ impl JarFile {
         fs::create_dir_all(parent)?;
         let temporary = NamedTempFile::new_in(parent)?;
         let no_transform = transform.is_none();
+        let mut frame_warnings = Vec::new();
         let mut source: Option<ZipArchive<File>> = None;
         let mut source_missing = false;
         let mut names = HashSet::new();
@@ -401,9 +412,17 @@ impl JarFile {
                         &normalized,
                         Some(transform_ref),
                         options,
+                        &mut frame_warnings,
                     )?;
                 } else {
-                    write_entry(&mut writer, entry, &normalized, None, options)?;
+                    write_entry(
+                        &mut writer,
+                        entry,
+                        &normalized,
+                        None,
+                        options,
+                        &mut frame_warnings,
+                    )?;
                 }
             }
             writer.finish()?;
@@ -416,6 +435,7 @@ impl JarFile {
             destination,
             entries,
             comment,
+            frame_warnings,
         })
     }
 }
@@ -595,6 +615,7 @@ fn write_entry(
     entry_name: &str,
     transform: Option<&mut dyn ApplyClassTransform>,
     options: RewriteOptions<'_>,
+    frame_warnings: &mut Vec<FrameWarning>,
 ) -> Result<()> {
     if entry.metadata.is_dir {
         writer.add_directory(archive_name(entry_name), file_options(entry, 0)?)?;
@@ -612,11 +633,12 @@ fn write_entry(
             if let Some(transform) = transform {
                 transform.apply(&mut model)?;
             }
-            let classfile = model.to_classfile_with_options(
+            let (classfile, mut warnings) = model.to_classfile_with_report(
                 options.debug_info,
                 options.frame_mode,
                 options.resolver,
             )?;
+            frame_warnings.append(&mut warnings);
             Cow::Owned(pytecode_engine::write_class(&classfile)?)
         } else {
             Cow::Borrowed(&entry.bytes)

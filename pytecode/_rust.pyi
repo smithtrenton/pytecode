@@ -801,6 +801,61 @@ class MethodHandleValue:
     @property
     def is_interface(self) -> bool: ...
 
+class BootstrapArgument:
+    """One static argument of a bootstrap method: a loadable constant."""
+
+    @staticmethod
+    def int(value: int) -> BootstrapArgument: ...
+    @staticmethod
+    def float_bits(value: int) -> BootstrapArgument: ...
+    @staticmethod
+    def long(value: int) -> BootstrapArgument: ...
+    @staticmethod
+    def double_bits(value: int) -> BootstrapArgument: ...
+    @staticmethod
+    def string(value: str) -> BootstrapArgument: ...
+    @staticmethod
+    def class_value(value: str) -> BootstrapArgument: ...
+    @staticmethod
+    def method_type(value: str) -> BootstrapArgument: ...
+    @staticmethod
+    def method_handle(
+        reference_kind: int,
+        owner: str,
+        name: str,
+        descriptor: str,
+        is_interface: bool,
+    ) -> BootstrapArgument: ...
+    @staticmethod
+    def dynamic(bootstrap_method_attr_index: int, name: str, descriptor: str) -> BootstrapArgument: ...
+    @staticmethod
+    def from_method_handle(value: MethodHandleValue) -> BootstrapArgument: ...
+    @property
+    def value_type(self) -> str:
+        """Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.)."""
+        ...
+    @property
+    def value(self) -> int | str | MethodHandleValue | DynamicValue:
+        """Payload decoded according to ``value_type``."""
+        ...
+
+class BootstrapMethod:
+    """One entry of a class's ``BootstrapMethods`` attribute."""
+
+    def __init__(
+        self,
+        method: MethodHandleValue,
+        arguments: Iterable[BootstrapArgument] | None = None,
+    ) -> None: ...
+    @property
+    def method(self) -> MethodHandleValue:
+        """The bootstrap method handle (normally ``REF_invokeStatic``)."""
+        ...
+    @property
+    def arguments(self) -> list[BootstrapArgument]:
+        """The static arguments passed to the bootstrap method."""
+        ...
+
 class DynamicValue:
     def __init__(self, bootstrap_method_attr_index: int, name: str, descriptor: str) -> None: ...
     @property
@@ -1287,11 +1342,47 @@ class ConstantPoolBuilder:
 class MappingClassResolver:
     def __init__(self) -> None: ...
     @staticmethod
-    def from_bytes(class_bytes_list: Iterable[bytes | bytearray]) -> MappingClassResolver: ...
+    def from_bytes(
+        class_bytes_list: Iterable[bytes | bytearray],
+        *,
+        duplicates: Literal["error", "first", "last"] = "error",
+    ) -> MappingClassResolver:
+        """Build a resolver from raw classfile payloads.
+
+        ``duplicates`` decides what happens when two payloads declare the same
+        class: ``"error"`` rejects the input, ``"first"`` keeps the earliest
+        definition, ``"last"`` keeps the latest.
+        """
+        ...
     @staticmethod
-    def from_models(models: Iterable[ClassModel]) -> MappingClassResolver: ...
+    def from_models(
+        models: Iterable[ClassModel],
+        *,
+        duplicates: Literal["error", "first", "last"] = "error",
+    ) -> MappingClassResolver:
+        """Build a resolver from class models (see ``from_bytes`` for ``duplicates``)."""
+        ...
     @staticmethod
-    def from_classfiles(classfiles: Iterable[ClassFile]) -> MappingClassResolver: ...
+    def from_classfiles(
+        classfiles: Iterable[ClassFile],
+        *,
+        duplicates: Literal["error", "first", "last"] = "error",
+    ) -> MappingClassResolver:
+        """Build a resolver from raw classfiles (see ``from_bytes`` for ``duplicates``)."""
+        ...
+    def merged(
+        self,
+        other: MappingClassResolver,
+        *,
+        duplicates: Literal["error", "first", "last"] = "error",
+    ) -> MappingClassResolver:
+        """Return a resolver holding the classes of both resolvers.
+
+        Classes in ``self`` come first, so ``duplicates="first"`` prefers them.
+        """
+        ...
+    def __len__(self) -> int: ...
+    def __contains__(self, name: object) -> bool: ...
     def resolve_class(self, name: str) -> _RustResolvedClassData | None: ...
 
 class ClassModel:
@@ -1396,6 +1487,17 @@ class ClassModel:
     def constant_pool(self) -> ConstantPoolBuilder:
         """Mutable constant-pool builder used when lowering edited models."""
         ...
+    @property
+    def bootstrap_methods(self) -> list[BootstrapMethod]:
+        """Symbolic entries of the ``BootstrapMethods`` attribute.
+
+        Assigning a list re-encodes the attribute in place (unchanged entries
+        round-trip byte-for-byte); an empty list removes it. Entries are
+        addressed by position, so keep existing entries at their index.
+        """
+        ...
+    @bootstrap_methods.setter
+    def bootstrap_methods(self, value: list[BootstrapMethod]) -> None: ...
     @property
     def debug_info_state(self) -> str:
         """Debug-info freshness marker, typically ``fresh`` or ``stale``."""
@@ -1692,6 +1794,7 @@ class _PreparedArchiveRewrite:
     @property
     def path(self) -> Path: ...
     def entries(self) -> list[_ArchiveEntryState]: ...
+    def frame_warnings(self) -> list[str]: ...
     def commit(self) -> Path: ...
 
 def read_archive_state(

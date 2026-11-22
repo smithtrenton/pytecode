@@ -26,6 +26,22 @@ class FrameComputationMode(Enum):
     RECOMPUTE = "recompute"
 
 
+class FrameComputationWarning(UserWarning):
+    """Recomputed stack map frames are likely to fail JVM verification.
+
+    ``FrameComputationMode.RECOMPUTE`` merges reference types at control-flow
+    joins, which needs the class hierarchy. When a merged class is unknown —
+    no ``resolver`` was passed, or the resolver lacks the class or one of its
+    ancestors — the merge falls back to ``java/lang/Object``. That is only
+    reported when the merged value later reaches an instruction requiring a
+    more specific type, because only then will the JVM reject the frames.
+    The message names the method and the classes to add to the resolver.
+
+    Lowering still returns bytes; turn the warning into an error with
+    ``warnings.simplefilter("error", FrameComputationWarning)``.
+    """
+
+
 MalformedClassException = _rust.MalformedClassException
 
 ClassModel = _rust.ClassModel
@@ -48,6 +64,8 @@ LocalVariableTypeEntry = _rust.LocalVariableTypeEntry
 
 MethodHandleValue = _rust.MethodHandleValue
 DynamicValue = _rust.DynamicValue
+BootstrapArgument = _rust.BootstrapArgument
+BootstrapMethod = _rust.BootstrapMethod
 
 RawInsn = _rust.RawInsn
 ByteInsn = _rust.ByteInsn
@@ -68,6 +86,8 @@ TableSwitchInsn = _rust.TableSwitchInsn
 
 __all__ = [
     "AttributeListView",
+    "BootstrapArgument",
+    "BootstrapMethod",
     "BranchInsn",
     "ByteInsn",
     "ClassModel",
@@ -81,6 +101,7 @@ __all__ = [
     "FieldListView",
     "FieldModel",
     "FrameComputationMode",
+    "FrameComputationWarning",
     "IIncInsn",
     "InterfaceMethodInsn",
     "InvokeDynamicInsn",

@@ -100,7 +100,7 @@ struct MethodSimContext<'a> {
     descriptor: &'a str,
     return_type: &'a ReturnType,
     expected_return: Option<&'a VType>,
-    resolver: Option<&'a dyn ClassResolver>,
+    env: &'a TypeEnv<'a>,
 }
 
 fn step_node(
@@ -137,6 +137,7 @@ fn step_node(
         }
     }
 
+    ctx.env.set_code_index(code_index);
     let next_state = simulate_item(
         item,
         state,
@@ -144,7 +145,7 @@ fn step_node(
         code_index,
         (node_index + 1 < cfg.nodes.len()).then_some(node_index + 1),
         ctx.expected_return,
-        ctx.resolver,
+        ctx.env,
     )
     .map_err(|error| {
         type_error(format!(
@@ -173,6 +174,34 @@ fn simulate_in_class(
     descriptor: &str,
     access_flags: MethodAccessFlags,
     resolver: Option<&dyn ClassResolver>,
+) -> Result<(SimulationResult, Vec<bool>, Option<FrameWarning>), AnalysisError> {
+    let env = TypeEnv::new(resolver, class.model);
+    let mut pass = 0;
+    loop {
+        pass += 1;
+        env.begin_pass();
+        let (mut simulation, flags) =
+            simulate_with_env(code, class, method_name, descriptor, access_flags, &env)?;
+        // Each extra pass runs with the hierarchy facts the previous one
+        // deduced, so merges that fell back to Object can become precise.
+        if env.wants_another_pass() && pass < MAX_INFERENCE_PASSES {
+            continue;
+        }
+        let warning = env.finish(class.name, method_name, descriptor);
+        for frame in simulation.entry_frames.iter_mut().flatten() {
+            *frame = public_frame(frame);
+        }
+        return Ok((simulation, flags, warning));
+    }
+}
+
+fn simulate_with_env(
+    code: &CodeModel,
+    class: ClassContext<'_>,
+    method_name: &str,
+    descriptor: &str,
+    access_flags: MethodAccessFlags,
+    env: &TypeEnv<'_>,
 ) -> Result<(SimulationResult, Vec<bool>), AnalysisError> {
     let class_name = class.name;
     check_jsr_allowed(code, class)?;
@@ -197,7 +226,7 @@ fn simulate_in_class(
         descriptor,
         return_type: &return_type,
         expected_return: expected_return.as_ref(),
-        resolver,
+        env,
     };
     let initial = initial_frame(class_name, method_name, descriptor, access_flags)?;
     let has_jsr = code.instructions.iter().any(|item| {
@@ -262,7 +291,7 @@ fn simulate_in_class(
                 },
                 &mut entry_frames,
                 &mut worklist,
-                resolver,
+                env,
             )?;
         }
 
@@ -278,7 +307,7 @@ fn simulate_in_class(
                 },
                 &mut entry_frames,
                 &mut worklist,
-                resolver,
+                env,
             )?;
         }
     }
@@ -339,7 +368,7 @@ fn simulate_polymorphic_jsr(
      -> Result<(), AnalysisError> {
         let changed = match frames_by_key.get(&key) {
             Some(existing) => {
-                let merged = merge_frames(&existing.frame, &candidate.frame, ctx.resolver)?;
+                let merged = merge_frames(&existing.frame, &candidate.frame, ctx.env)?;
                 let flag = existing.this_uninitialized || candidate.this_uninitialized;
                 if merged != existing.frame || flag != existing.this_uninitialized {
                     frames_by_key.insert(
@@ -498,7 +527,7 @@ fn simulate_polymorphic_jsr(
         entries.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut acc = entries[0].1.clone();
         for (_, candidate) in entries.iter().skip(1) {
-            if let Ok(merged) = merge_frames(&acc.frame, &candidate.frame, ctx.resolver) {
+            if let Ok(merged) = merge_frames(&acc.frame, &candidate.frame, ctx.env) {
                 acc = PendingFrame {
                     frame: merged,
                     this_uninitialized: acc.this_uninitialized || candidate.this_uninitialized,
@@ -585,10 +614,14 @@ pub(crate) fn recompute_frames_for_class(
     )
 }
 
+/// Normalized code, its frames, the exception-handler remap, and the
+/// optional frames for conditional-branch fall-throughs (see
+/// [`frames_from_simulation`]).
 type NormalizedCodeResult<'a> = (
     Cow<'a, CodeModel>,
     FrameComputationResult,
     Option<Vec<Option<usize>>>,
+    Vec<StackMapFrameState>,
 );
 
 pub(crate) fn recompute_and_normalize_code<'a>(
@@ -601,7 +634,7 @@ pub(crate) fn recompute_and_normalize_code<'a>(
         name: &class.name,
         model: Some(class),
     };
-    let (simulation, flags) = simulate_in_class(
+    let (simulation, flags, warning) = simulate_in_class(
         code,
         class_ctx,
         &method.name,
@@ -609,7 +642,9 @@ pub(crate) fn recompute_and_normalize_code<'a>(
         method.access_flags,
         resolver,
     )?;
-    let mut frames_result = frames_from_simulation(&simulation, &flags, Some(class))?;
+    let (mut frames_result, fallthrough_frames) =
+        frames_from_simulation(code, &simulation, &flags, Some(class))?;
+    frames_result.warnings.extend(warning);
 
     let dead_nodes: Vec<bool> = simulation
         .entry_frames
@@ -617,7 +652,7 @@ pub(crate) fn recompute_and_normalize_code<'a>(
         .map(Option::is_none)
         .collect();
     if dead_nodes.iter().all(|&is_dead| !is_dead) {
-        return Ok((Cow::Borrowed(code), frames_result, None));
+        return Ok((Cow::Borrowed(code), frames_result, None, fallthrough_frames));
     }
 
     let mut normalized = code.clone();
@@ -683,21 +718,46 @@ pub(crate) fn recompute_and_normalize_code<'a>(
     frames_result.frames.dedup_by_key(|frame| frame.code_index);
     frames_result.max_stack = frames_result.max_stack.max(1);
 
-    Ok((Cow::Owned(normalized), frames_result, Some(catch_remap)))
+    Ok((
+        Cow::Owned(normalized),
+        frames_result,
+        Some(catch_remap),
+        fallthrough_frames,
+    ))
 }
 
+/// Required frames, plus optional frames for the other block starts.
+///
+/// The type checker needs a frame only where control arrives other than by
+/// falling through: branch targets and exception handlers. Every reachable
+/// instruction after an unconditional transfer is one of those, and
+/// unreachable runs get their own frame during normalization. The
+/// fall-through successor of a conditional branch needs none, unless
+/// lowering has to invert the branch around a `goto_w` because its target is
+/// out of range, which turns the fall-through into a branch target. Those
+/// frames are returned separately so lowering can add them only where that
+/// happens. Subroutine return points are reached through `ret`, which the
+/// CFG does not record as a jump, so methods using jsr/ret keep a frame at
+/// every block start.
 fn frames_from_simulation(
+    code: &CodeModel,
     simulation: &SimulationResult,
     flags: &[bool],
     class_model: Option<&ClassModel>,
-) -> Result<FrameComputationResult, AnalysisError> {
+) -> Result<(FrameComputationResult, Vec<StackMapFrameState>), AnalysisError> {
+    let has_subroutines = code.instructions.iter().any(|item| {
+        matches!(item, CodeItem::Branch(branch) if matches!(branch.opcode, 0xA8 | 0xC9))
+            || matches!(item, CodeItem::Var(var) if var.opcode == 0xA9)
+    });
     let mut frames = Vec::new();
+    let mut optional_frames = Vec::new();
     for node in &simulation.cfg.nodes {
         if (node.node_index == simulation.cfg.entry_node && !node.is_jump_target)
             || !node.is_block_start
         {
             continue;
         }
+        let required = has_subroutines || node.is_jump_target;
         if let Some(frame) = &simulation.entry_frames[node.node_index] {
             if class_model.is_none_or(|model| model.version.0 >= 50)
                 && flags[node.node_index]
@@ -708,18 +768,27 @@ fn frames_from_simulation(
                     node.code_index
                 )));
             }
-            frames.push(StackMapFrameState {
+            let state = StackMapFrameState {
                 code_index: node.code_index,
                 locals: frame.locals.clone(),
                 stack: frame.stack.clone(),
-            });
+            };
+            if required {
+                frames.push(state);
+            } else {
+                optional_frames.push(state);
+            }
         }
     }
-    Ok(FrameComputationResult {
-        max_stack: simulation.max_stack,
-        max_locals: simulation.max_locals,
-        frames,
-    })
+    Ok((
+        FrameComputationResult {
+            max_stack: simulation.max_stack,
+            max_locals: simulation.max_locals,
+            frames,
+            warnings: Vec::new(),
+        },
+        optional_frames,
+    ))
 }
 
 fn compute_frames(
@@ -730,9 +799,11 @@ fn compute_frames(
     access_flags: MethodAccessFlags,
     resolver: Option<&dyn ClassResolver>,
 ) -> Result<FrameComputationResult, AnalysisError> {
-    let (simulation, flags) =
+    let (simulation, flags, warning) =
         simulate_in_class(code, class, method_name, descriptor, access_flags, resolver)?;
-    frames_from_simulation(&simulation, &flags, class.model)
+    let (mut result, _) = frames_from_simulation(code, &simulation, &flags, class.model)?;
+    result.warnings.extend(warning);
+    Ok(result)
 }
 
 pub(crate) fn initial_method_locals(
@@ -780,11 +851,11 @@ fn propagate(
     candidate: PendingFrame,
     entry_frames: &mut [Option<PendingFrame>],
     worklist: &mut Worklist,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<(), AnalysisError> {
     let changed = match &entry_frames[target] {
         Some(existing) => {
-            let merged = merge_frames(&existing.frame, &candidate.frame, resolver)?;
+            let merged = merge_frames(&existing.frame, &candidate.frame, env)?;
             let flag = existing.this_uninitialized || candidate.this_uninitialized;
             if merged != existing.frame || flag != existing.this_uninitialized {
                 entry_frames[target] = Some(PendingFrame {
@@ -810,7 +881,7 @@ fn propagate(
 fn merge_frames(
     left: &FrameState,
     right: &FrameState,
-    resolver: Option<&dyn ClassResolver>,
+    env: &TypeEnv<'_>,
 ) -> Result<FrameState, AnalysisError> {
     if left.stack.len() != right.stack.len() {
         return Err(AnalysisError::TypeMerge {
@@ -823,9 +894,9 @@ fn merge_frames(
     }
     let merge = |left: &VType, right: &VType| -> Result<VType, AnalysisError> {
         if let (VType::Object(left), VType::Object(right)) = (left, right) {
-            return hierarchy::common_reference_type(resolver, left, right).map(VType::Object);
+            return env.merge_references(left, right).map(VType::Object);
         }
-        Ok(merge_vtypes(left, right, resolver))
+        Ok(merge_vtypes(left, right, Some(env)))
     };
     let stack = left
         .stack

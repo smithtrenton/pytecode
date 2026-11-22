@@ -58,6 +58,10 @@ pub struct DeobfuscationRewriteReport {
     pub nops_removed: usize,
     pub noop_gotos_removed: usize,
     pub goto_redirects: usize,
+    /// Methods whose recomputed frames will likely fail JVM verification
+    /// because part of the class hierarchy was unavailable.
+    #[serde(default)]
+    pub frame_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -242,7 +246,7 @@ pub fn rewrite_deobfuscation(jar: &Path, output: &Path) -> CliResult<Deobfuscati
         }
         Ok(())
     };
-    jar_file.rewrite(
+    let prepared = jar_file.prepare_rewrite(
         Some(output),
         Some(&mut transform as &mut dyn ApplyClassTransform),
         RewriteOptions {
@@ -251,6 +255,12 @@ pub fn rewrite_deobfuscation(jar: &Path, output: &Path) -> CliResult<Deobfuscati
             debug_info: DebugInfoPolicy::Preserve,
         },
     )?;
+    let frame_warnings = prepared
+        .frame_warnings()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    prepared.commit(&mut jar_file)?;
 
     Ok(DeobfuscationRewriteReport {
         input_jar: relative_to_repo(jar),
@@ -261,6 +271,7 @@ pub fn rewrite_deobfuscation(jar: &Path, output: &Path) -> CliResult<Deobfuscati
         nops_removed: rewrite_stats.nops_removed,
         noop_gotos_removed: rewrite_stats.noop_gotos_removed,
         goto_redirects: rewrite_stats.goto_redirects,
+        frame_warnings,
     })
 }
 

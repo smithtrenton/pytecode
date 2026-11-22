@@ -7,8 +7,8 @@ mod labels;
 mod operands;
 
 use crate::analysis::{
-    ClassResolver, FrameComputationResult, VType, initial_method_locals,
-    recompute_and_normalize_code,
+    ClassResolver, FrameComputationResult, FrameWarning, StackMapFrameState, VType,
+    initial_method_locals, recompute_and_normalize_code,
 };
 pub use constant_pool_builder::ConstantPoolBuilder;
 pub use debug_info::{DebugInfoPolicy, DebugInfoState};
@@ -116,6 +116,22 @@ impl Default for ClassModel {
             debug_info_state: DebugInfoState::default(),
         }
     }
+}
+
+/// One entry of a class's `BootstrapMethods` attribute, in symbolic form.
+///
+/// `invokedynamic` instructions and dynamic constants refer to entries by
+/// position (their `bootstrap_method_attr_index`), so editing an entry in
+/// place keeps every such reference valid. The static `arguments` are
+/// loadable constants — exactly the values an `ldc` can push — and can name
+/// classes through method handles, method types, and class literals, which
+/// a class rename has to rewrite along with the instructions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapMethodModel {
+    /// The bootstrap method itself (normally `REF_invokeStatic`).
+    pub method: MethodHandleValue,
+    /// The static arguments passed to the bootstrap method.
+    pub arguments: Vec<LdcValue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,6 +599,131 @@ impl ClassModel {
         })
     }
 
+    /// Decode the `BootstrapMethods` attribute into symbolic entries.
+    ///
+    /// Returns an empty list when the class has no such attribute.
+    pub fn bootstrap_methods(&self) -> Result<Vec<BootstrapMethodModel>> {
+        let Some(attribute) = self
+            .attributes
+            .iter()
+            .find_map(|attribute| match attribute {
+                AttributeInfo::BootstrapMethods(attribute) => Some(attribute),
+                _ => None,
+            })
+        else {
+            return Ok(Vec::new());
+        };
+        attribute
+            .bootstrap_methods
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| {
+                let LdcValue::MethodHandle(method) =
+                    lift_ldc_value(entry.bootstrap_method_ref, &self.constant_pool)?
+                else {
+                    return Err(model_error(format!(
+                        "bootstrap method {position} does not reference a MethodHandle"
+                    )));
+                };
+                let arguments = entry
+                    .bootstrap_arguments
+                    .iter()
+                    .map(|index| lift_ldc_value(*index, &self.constant_pool))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(BootstrapMethodModel { method, arguments })
+            })
+            .collect()
+    }
+
+    /// Replace the `BootstrapMethods` attribute with `methods`.
+    ///
+    /// Constant-pool entries are reused when they already exist, so writing
+    /// back unchanged entries leaves the class byte-for-byte identical. The
+    /// attribute keeps its position among the class attributes; an empty
+    /// list removes it. Entries are addressed by position, so keep existing
+    /// entries where they are when `invokedynamic` instructions or dynamic
+    /// constants refer to them.
+    pub fn set_bootstrap_methods(&mut self, methods: &[BootstrapMethodModel]) -> Result<()> {
+        let position = self
+            .attributes
+            .iter()
+            .position(|attribute| matches!(attribute, AttributeInfo::BootstrapMethods(_)));
+        if methods.is_empty() {
+            if let Some(position) = position {
+                self.attributes.remove(position);
+            }
+            return Ok(());
+        }
+        if methods.len() > usize::from(u16::MAX) {
+            return Err(model_error("BootstrapMethods holds at most 65535 entries"));
+        }
+        // Encode into a copy so a failure leaves the model untouched.
+        let mut cp = self.constant_pool.clone();
+        let existing = position.and_then(|position| match &self.attributes[position] {
+            AttributeInfo::BootstrapMethods(attribute) => Some(attribute.bootstrap_methods.clone()),
+            _ => None,
+        });
+        // Keep the original index wherever the value at that position is
+        // unchanged: obfuscated pools often hold duplicate constants, and
+        // re-encoding would otherwise pick the first equal entry.
+        let encode = |cp: &mut ConstantPoolBuilder,
+                      value: &LdcValue,
+                      original: Option<CpIndex>|
+         -> Result<CpIndex> {
+            if let Some(original) = original
+                && lift_ldc_value(original, cp).is_ok_and(|current| current == *value)
+            {
+                return Ok(original);
+            }
+            add_ldc_value(cp, value)
+        };
+        let mut entries = Vec::with_capacity(methods.len());
+        let mut attribute_length = 2_u32;
+        for (position, method) in methods.iter().enumerate() {
+            if method.arguments.len() > usize::from(u16::MAX) {
+                return Err(model_error(
+                    "a bootstrap method takes at most 65535 static arguments",
+                ));
+            }
+            let original = existing.as_ref().and_then(|entries| entries.get(position));
+            let bootstrap_method_ref = encode(
+                &mut cp,
+                &LdcValue::MethodHandle(method.method.clone()),
+                original.map(|entry| entry.bootstrap_method_ref),
+            )?;
+            let bootstrap_arguments = method
+                .arguments
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    encode(
+                        &mut cp,
+                        argument,
+                        original.and_then(|entry| entry.bootstrap_arguments.get(index).copied()),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            attribute_length = attribute_length
+                .checked_add(4 + 2 * bootstrap_arguments.len() as u32)
+                .ok_or_else(|| model_error("BootstrapMethods attribute is too large"))?;
+            entries.push(crate::raw::BootstrapMethodInfo {
+                bootstrap_method_ref,
+                bootstrap_arguments,
+            });
+        }
+        let attribute = AttributeInfo::BootstrapMethods(crate::raw::BootstrapMethodsAttribute {
+            attribute_name_index: cp.add_utf8("BootstrapMethods")?,
+            attribute_length,
+            bootstrap_methods: entries,
+        });
+        self.constant_pool = cp;
+        match position {
+            Some(position) => self.attributes[position] = attribute,
+            None => self.attributes.push(attribute),
+        }
+        Ok(())
+    }
+
     pub fn to_classfile(&self) -> Result<ClassFile> {
         self.to_classfile_with_options(
             DebugInfoPolicy::Preserve,
@@ -601,6 +742,25 @@ impl ClassModel {
         frame_mode: FrameComputationMode,
         resolver: Option<&dyn ClassResolver>,
     ) -> Result<ClassFile> {
+        self.to_classfile_with_report(debug_info, frame_mode, resolver)
+            .map(|(classfile, _)| classfile)
+    }
+
+    /// Lower the model like [`Self::to_classfile_with_options`], also
+    /// returning the frame-computation warnings for every method.
+    ///
+    /// With [`FrameComputationMode::Recompute`], a warning means missing
+    /// hierarchy data (no resolver, or classes absent from it) forced a
+    /// merged reference type to `java/lang/Object` where the method later
+    /// needs something more specific, so the JVM verifier will likely reject
+    /// those frames. Supplying the listed classes to the resolver fixes it.
+    pub fn to_classfile_with_report(
+        &self,
+        debug_info: DebugInfoPolicy,
+        frame_mode: FrameComputationMode,
+        resolver: Option<&dyn ClassResolver>,
+    ) -> Result<(ClassFile, Vec<FrameWarning>)> {
+        let mut warnings = Vec::new();
         let mut cp = self.constant_pool.clone();
         let this_class = cp.add_class(&self.name)?;
         let super_class = match &self.super_name {
@@ -618,11 +778,17 @@ impl ClassModel {
         let mut methods = Vec::with_capacity(self.methods.len());
         for method in &self.methods {
             methods.push(lower_method_model(
-                method, self, &mut cp, debug_info, frame_mode, resolver,
+                method,
+                self,
+                &mut cp,
+                debug_info,
+                frame_mode,
+                resolver,
+                &mut warnings,
             )?);
         }
 
-        Ok(ClassFile {
+        let classfile = ClassFile {
             magic: MAGIC,
             minor_version: self.version.1,
             major_version: self.version.0,
@@ -638,7 +804,8 @@ impl ClassModel {
                 self.debug_info_state,
                 debug_info,
             ),
-        })
+        };
+        Ok((classfile, warnings))
     }
 
     pub fn to_classfile_with_recomputed_frames(
@@ -664,6 +831,19 @@ impl ClassModel {
         resolver: Option<&dyn ClassResolver>,
     ) -> Result<Vec<u8>> {
         write_class(&self.to_classfile_with_options(debug_info, frame_mode, resolver)?)
+    }
+
+    /// Serialize like [`Self::to_bytes_with_options`], also returning the
+    /// frame-computation warnings (see [`Self::to_classfile_with_report`]).
+    pub fn to_bytes_with_report(
+        &self,
+        debug_info: DebugInfoPolicy,
+        frame_mode: FrameComputationMode,
+        resolver: Option<&dyn ClassResolver>,
+    ) -> Result<(Vec<u8>, Vec<FrameWarning>)> {
+        let (classfile, warnings) =
+            self.to_classfile_with_report(debug_info, frame_mode, resolver)?;
+        Ok((write_class(&classfile)?, warnings))
     }
 
     pub fn to_bytes_with_recomputed_frames(
@@ -1167,6 +1347,7 @@ fn lower_method_model(
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn ClassResolver>,
+    warnings: &mut Vec<FrameWarning>,
 ) -> Result<MethodInfo> {
     if !is_valid_method_descriptor(&method.descriptor) {
         return Err(model_error(format!(
@@ -1197,14 +1378,14 @@ fn lower_method_model(
                     method.access_flags,
                 )?;
                 Some(AttributeInfo::Code(lower_code_model(
-                    &lifted, method, class, cp, debug_info, frame_mode, resolver,
+                    &lifted, method, class, cp, debug_info, frame_mode, resolver, warnings,
                 )?))
             } else {
                 Some(AttributeInfo::Code(code_attr))
             }
         }
         Some(MethodBody::Symbolic(code)) => Some(AttributeInfo::Code(lower_code_model(
-            code, method, class, cp, debug_info, frame_mode, resolver,
+            code, method, class, cp, debug_info, frame_mode, resolver, warnings,
         )?)),
         None => None,
     };
@@ -1241,6 +1422,47 @@ fn lower_method_model(
     })
 }
 
+/// A conditional branch whose target is out of 16-bit range is emitted as
+/// the inverted condition jumping over a `goto_w`. Its fall-through
+/// instruction then follows an unconditional jump and is a branch target,
+/// so it needs a stack map frame that ordinary frame placement omits.
+fn add_inverted_branch_frames(
+    code: &CodeModel,
+    layout: &CodeLayout,
+    frames: &mut FrameComputationResult,
+    fallthrough_frames: Vec<StackMapFrameState>,
+) {
+    if fallthrough_frames.is_empty()
+        || !layout
+            .branch_encodings
+            .contains(&BranchEncoding::InvertedWide)
+    {
+        return;
+    }
+    let mut needed = std::collections::HashSet::new();
+    for (item_index, item) in code.instructions.iter().enumerate() {
+        if matches!(item, CodeItem::Branch(_))
+            && layout.branch_encodings[item_index] == BranchEncoding::InvertedWide
+            && let Some(next) = code.instructions[item_index + 1..]
+                .iter()
+                .position(|item| !matches!(item, CodeItem::Label(_)))
+        {
+            needed.insert(item_index + 1 + next);
+        }
+    }
+    let before = frames.frames.len();
+    frames.frames.extend(
+        fallthrough_frames
+            .into_iter()
+            .filter(|frame| needed.contains(&frame.code_index)),
+    );
+    if frames.frames.len() != before {
+        frames.frames.sort_by_key(|frame| frame.code_index);
+        frames.frames.dedup_by_key(|frame| frame.code_index);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn lower_code_model(
     code: &CodeModel,
     method: &MethodModel,
@@ -1249,23 +1471,30 @@ fn lower_code_model(
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn ClassResolver>,
+    warnings: &mut Vec<FrameWarning>,
 ) -> Result<CodeAttribute> {
     let class_major_version = class.version.0;
-    let (code_cow, frame_result, catch_remap) = if frame_mode == FrameComputationMode::Recompute {
-        let (normalized, frames, remap) =
-            recompute_and_normalize_code(code, class, method, resolver).map_err(|error| {
-                model_error(format!(
-                    "frame recomputation failed for {}.{}{}: {error}",
-                    class.name, method.name, method.descriptor
-                ))
-            })?;
-        (normalized, Some(frames), remap)
-    } else {
-        (std::borrow::Cow::Borrowed(code), None, None)
-    };
+    let (code_cow, frame_result, catch_remap, fallthrough_frames) =
+        if frame_mode == FrameComputationMode::Recompute {
+            let (normalized, mut frames, remap, fallthrough_frames) =
+                recompute_and_normalize_code(code, class, method, resolver).map_err(|error| {
+                    model_error(format!(
+                        "frame recomputation failed for {}.{}{}: {error}",
+                        class.name, method.name, method.descriptor
+                    ))
+                })?;
+            warnings.append(&mut frames.warnings);
+            (normalized, Some(frames), remap, fallthrough_frames)
+        } else {
+            (std::borrow::Cow::Borrowed(code), None, None, Vec::new())
+        };
     let code = code_cow.as_ref();
 
     let layout = compute_code_layout(code, cp)?;
+    let frame_result = frame_result.map(|mut frames| {
+        add_inverted_branch_frames(code, &layout, &mut frames, fallthrough_frames);
+        frames
+    });
     if frame_mode == FrameComputationMode::Preserve {
         ensure_preserve_mode_valid(code, method, class, &layout)?;
     }

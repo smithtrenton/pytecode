@@ -73,6 +73,10 @@ Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 
 Import `FrameComputationMode` and `DebugInfoPolicy` from `pytecode.model` (or re-exported in `pytecode.archive`), and use `to_bytes_with_options(frame_mode=FrameComputationMode.RECOMPUTE)` when an edit changes control flow or stack/local layout.
 
+Recomputation merges reference types at control-flow joins. Pass `resolver=MappingClassResolver.from_bytes(...)` (from `pytecode.analysis`) with the classes you have for the most precise frames; a partial resolver, or none, still works: missing classes never abort, and merges are inferred from how the code uses the merged values. Anything that stays imprecise enough to fail JVM verification emits a `FrameComputationWarning` naming the method and the classes to add. See [frame recomputation](docs/project/compatibility-and-limits.md#hierarchy-at-join-points).
+
+`ClassModel.bootstrap_methods` reads and rewrites the `BootstrapMethods` attribute (bootstrap method handles and their static arguments), which renames must update along with the instructions.
+
 ## JAR rewriting example
 
 `JarFile.rewrite()` can apply in-place transforms to matching classes and methods:

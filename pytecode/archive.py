@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import warnings
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -11,11 +12,18 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import _rust
 from .classfile import ClassReader
-from .model import ClassModel, DebugInfoPolicy, FrameComputationMode, MalformedClassException
+from .model import (
+    ClassModel,
+    DebugInfoPolicy,
+    FrameComputationMode,
+    FrameComputationWarning,
+    MalformedClassException,
+)
 
 __all__ = [
     "DebugInfoPolicy",
     "FrameComputationMode",
+    "FrameComputationWarning",
     "JarFile",
     "JarInfo",
     "MalformedClassException",
@@ -399,6 +407,8 @@ class JarFile:
             **self._read_limits,
         )
         try:
+            for message in prepared.frame_warnings():
+                warnings.warn(message, FrameComputationWarning, stacklevel=2)
             new_infolist, new_files, new_entry_states = _build_archive_state_from_entries(prepared.entries())
             new_filename = os.fspath(destination)
             prepared.commit()

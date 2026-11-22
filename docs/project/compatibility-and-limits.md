@@ -67,10 +67,60 @@ complete model, so they cannot establish those missing declarations. The root
 `java/lang/Object` constructor is handled separately. These rules follow the
 [JVMS constructor and field instruction checks](https://docs.oracle.com/javase/specs/jvms/se26/html/jvms-4.html#jvms-4.10.1.9).
 
+### Hierarchy at join points
+
+Merging two reference types at a join needs their common superclass. The
+recomputer uses, in order: the class being lowered (its own declaration always
+wins over a resolver's copy), the supplied `resolver`, and facts deduced from the
+code. A resolver does not have to be complete:
+
+- A missing class never aborts recomputation. Superclass chains are walked as far
+  as they are known; when the known parts of two chains meet, that class is the
+  exact merge, even if neither chain reaches `java/lang/Object`.
+- When they do not meet, the merge falls back to `java/lang/Object`. That only
+  matters if the merged value later reaches an instruction that requires a more
+  specific class. Since the input is assumed to verify with *some* frames, every
+  merged class must then be a subtype of the required class. The recomputer
+  records that, runs the method's dataflow again (at most four passes), and the
+  join gets the required class. A merged class whose superclass chain is fully
+  known and lacks the required type means the required type is an interface,
+  which accepts any reference.
+- Whatever stays imprecise is reported, never silent: Rust callers get
+  `FrameWarning`s from `ClassModel::to_classfile_with_report` /
+  `to_bytes_with_report`, `FrameComputationResult::warnings`, and
+  `PreparedRewrite::frame_warnings`. Python lowering and `JarFile.rewrite` emit
+  `pytecode.model.FrameComputationWarning` (escalate it with
+  `warnings.simplefilter("error", FrameComputationWarning)`; `rewrite` raises
+  before committing). `verify_classmodel` reports them as warnings when a resolver
+  is supplied, and the CLI lists them in its rewrite reports.
+
+Deduced facts are only as good as the input: frames for bytecode that does not
+verify may be as invalid as the input. Supplying the full runtime hierarchy
+(application, dependencies, and the JDK) still gives the most precise frames.
+
+StackMapTable frames are emitted where the type checker needs them: branch targets,
+exception handlers, the starts of normalized unreachable regions, and the
+fall-through of a conditional branch that had to be inverted around a `goto_w`.
+Methods with `jsr`/`ret` keep a frame at every basic-block start.
+
 This analysis does not certify every JVM verification rule. In particular, ordinary
 reference operands are checked as initialized references; a supplied hierarchy
 resolver improves joins but does not establish all operand assignability or member
 access constraints. Use independent JVM verification for transformed output.
+
+## Bootstrap methods
+
+`ClassModel.bootstrap_methods` (Rust: `bootstrap_methods` /
+`set_bootstrap_methods`) exposes the `BootstrapMethods` attribute symbolically:
+each entry is a bootstrap `MethodHandleValue` plus static arguments as loadable
+constants (`BootstrapArgument` in Python, `LdcValue` in Rust). The arguments can
+name classes through method handles, method types, and class literals that the JVM
+resolves when the call site links, so class and member renames must rewrite them
+along with the instructions. Assigning re-encodes the attribute in place; values
+left unchanged keep their original constant-pool indices, so an unchanged
+round-trip is byte-for-byte identical. `invokedynamic` instructions and dynamic
+constants address entries by position, so keep existing entries at their index.
+An empty list removes the attribute.
 
 ## Archive mutation and transactions
 
@@ -113,7 +163,10 @@ not infer a target runtime. Before constructing a hierarchy, callers must choose
 one definition per binary name: use the base entry unless the main manifest has
 `Multi-Release: true`; otherwise select the highest entry version between 9 and the
 chosen Java release, falling back to the base. `MappingClassResolver` rejects
-duplicate binary names, preventing accidental dependence on ZIP entry order.
+duplicate binary names by default, preventing accidental dependence on ZIP entry
+order. When combining overlapping universes on purpose (an application jar and a
+dependency that both ship a class), pass `duplicates="first"` or `"last"` (Rust:
+`DuplicateClassPolicy`), or combine resolvers with `merged`.
 
 ## Python ownership and packaging
 

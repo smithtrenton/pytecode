@@ -447,6 +447,10 @@ pub struct JarPatchReport {
     pub debug_info: PatchDebugInfoMode,
     pub frame_mode: PatchFrameMode,
     pub rules: Vec<JarPatchRuleReport>,
+    /// Methods whose recomputed frames will likely fail JVM verification
+    /// because part of the class hierarchy was unavailable.
+    #[serde(default)]
+    pub frame_warnings: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -482,7 +486,7 @@ pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarP
     } else {
         Some(&mut pipeline as &mut dyn pytecode_engine::transform::ApplyClassTransform)
     };
-    jar_file.rewrite(
+    let prepared = jar_file.prepare_rewrite(
         Some(output),
         transform,
         RewriteOptions {
@@ -493,6 +497,12 @@ pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarP
             debug_info: plan.options.debug_info.into(),
         },
     )?;
+    let frame_warnings = prepared
+        .frame_warnings()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    prepared.commit(&mut jar_file)?;
     let rules = stats_handles
         .iter()
         .enumerate()
@@ -518,6 +528,7 @@ pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarP
         resource_entries,
         debug_info: plan.options.debug_info,
         frame_mode: plan.options.frame_mode,
+        frame_warnings,
         rules,
     })
 }
