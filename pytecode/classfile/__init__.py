@@ -6,71 +6,63 @@ than the mutable symbolic editing API in :mod:`pytecode.model`.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from .. import _rust
-from .._utils import document_property as _document_property
 from .bytecode import ArrayType, InsnInfoType
 
 ClassFile = _rust.ClassFile
+ClassInfo = _rust.ClassInfo
 ClassReader = _rust.ClassReader
 ClassWriter = _rust.ClassWriter
-InsnInfo = _rust.InsnInfo
-MatchOffsetPair = _rust.MatchOffsetPair
+DoubleInfo = _rust.DoubleInfo
+DynamicInfo = _rust.DynamicInfo
 ExceptionInfo = _rust.ExceptionInfo
-
-ClassReader.__doc__ = "Parse raw classfile bytes into a read-only ``ClassFile`` view."
-
-_classreader_from_bytes = ClassReader.__dict__["from_bytes"]
-
-
-def _documented_classreader_from_bytes(cls: type[ClassReader], bytes_or_bytearray: bytes) -> ClassReader:
-    """Create a reader from in-memory classfile bytes."""
-
-    return _classreader_from_bytes.__get__(cls, cls)(bytes_or_bytearray)
-
-
-# Assigning a descriptor dynamically preserves the native classmethod binding.
-ClassReader.from_bytes = classmethod(_documented_classreader_from_bytes)  # pyright: ignore[reportAttributeAccessIssue]
-
-_classreader_from_file = ClassReader.__dict__["from_file"]
-
-
-def _documented_classreader_from_file(cls: type[ClassReader], path: str | Path) -> ClassReader:
-    """Read a classfile from disk and return a new reader."""
-
-    return _classreader_from_file.__get__(cls, cls)(path)
-
-
-ClassReader.from_file = classmethod(_documented_classreader_from_file)  # pyright: ignore[reportAttributeAccessIssue]
-
-_document_property(
-    ClassReader,
-    "class_info",
-    "Parsed raw classfile structure exposed by this reader.",
-    ClassFile,
-)
-
-ClassWriter.__doc__ = "Serialize raw ``ClassFile`` objects back to bytes."
-
-_classwriter_write = ClassWriter.write
-
-
-def _documented_classwriter_write(classfile: ClassFile) -> bytes:
-    """Encode a raw classfile object into JVM classfile bytes."""
-
-    return _classwriter_write(classfile)
-
-
-ClassWriter.write = staticmethod(_documented_classwriter_write)
+FieldInfo = _rust.FieldInfo
+FieldrefInfo = _rust.FieldrefInfo
+FloatInfo = _rust.FloatInfo
+InsnInfo = _rust.InsnInfo
+IntegerInfo = _rust.IntegerInfo
+InterfaceMethodrefInfo = _rust.InterfaceMethodrefInfo
+InvokeDynamicInfo = _rust.InvokeDynamicInfo
+LongInfo = _rust.LongInfo
+MalformedClassException = _rust.MalformedClassException
+MatchOffsetPair = _rust.MatchOffsetPair
+MethodHandleInfo = _rust.MethodHandleInfo
+MethodInfo = _rust.MethodInfo
+MethodTypeInfo = _rust.MethodTypeInfo
+MethodrefInfo = _rust.MethodrefInfo
+ModuleInfo = _rust.ModuleInfo
+NameAndTypeInfo = _rust.NameAndTypeInfo
+PackageInfo = _rust.PackageInfo
+StringInfo = _rust.StringInfo
+Utf8Info = _rust.Utf8Info
 
 __all__ = [
     "ArrayType",
     "ClassFile",
+    "ClassInfo",
     "ClassReader",
     "ClassWriter",
+    "DoubleInfo",
+    "DynamicInfo",
     "ExceptionInfo",
+    "FieldInfo",
+    "FieldrefInfo",
+    "FloatInfo",
     "InsnInfo",
     "InsnInfoType",
+    "IntegerInfo",
+    "InterfaceMethodrefInfo",
+    "InvokeDynamicInfo",
+    "LongInfo",
+    "MalformedClassException",
     "MatchOffsetPair",
+    "MethodHandleInfo",
+    "MethodInfo",
+    "MethodTypeInfo",
+    "MethodrefInfo",
+    "ModuleInfo",
+    "NameAndTypeInfo",
+    "PackageInfo",
+    "StringInfo",
+    "Utf8Info",
 ]

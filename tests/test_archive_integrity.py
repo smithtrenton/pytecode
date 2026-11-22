@@ -99,7 +99,9 @@ def test_unsafe_names_rejected_on_all_platforms(tmp_path: Path, name: str):
 
 
 def test_multi_release_entries_roundtrip_independently(tmp_path: Path):
-    original = Path("crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class").read_bytes()
+    original = (
+        Path(__file__).resolve().parents[1] / "crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class"
+    ).read_bytes()
     newer = bytearray(original)
     newer[6:8] = (70).to_bytes(2, "big")
     path = tmp_path / "multi-release.jar"

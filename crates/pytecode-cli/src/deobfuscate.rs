@@ -1,7 +1,7 @@
 use crate::{CliResult, relative_to_repo};
 use pytecode_archive::{JarFile, RewriteOptions};
 use pytecode_engine::model::{
-    ClassModel, CodeItem, DebugInfoPolicy, FrameComputationMode, Label, LdcValue,
+    ClassModel, CodeItem, DebugInfoPolicy, ExceptionHandler, FrameComputationMode, Label, LdcValue,
 };
 use pytecode_engine::transform::ApplyClassTransform;
 use serde::{Deserialize, Serialize};
@@ -115,11 +115,7 @@ pub fn analyze_deobfuscation(jar: &Path) -> CliResult<DeobfuscationAnalysisRepor
     let jar_file = JarFile::open(jar)?;
     let mut class_metrics = Vec::new();
 
-    for entry in jar_file
-        .entries
-        .iter()
-        .filter(|entry| !entry.metadata.is_dir && entry.filename.ends_with(".class"))
-    {
+    for entry in jar_file.entries.iter().filter(|entry| entry.is_class()) {
         let model = ClassModel::from_bytes(&entry.bytes)?;
         class_metrics.push(class_metrics_from_model(&model, entry.bytes.len()));
     }
@@ -209,7 +205,7 @@ pub fn analyze_deobfuscation(jar: &Path) -> CliResult<DeobfuscationAnalysisRepor
         resource_entries: jar_file
             .entries
             .iter()
-            .filter(|entry| !entry.metadata.is_dir && !entry.filename.ends_with(".class"))
+            .filter(|entry| !entry.metadata.is_dir && !entry.is_class())
             .count(),
         suspicious_class_count: suspicious_classes.len(),
         rl_class_count: rl_classes.len(),
@@ -227,13 +223,14 @@ pub fn rewrite_deobfuscation(jar: &Path, output: &Path) -> CliResult<Deobfuscati
     let class_entries = jar_file
         .entries
         .iter()
-        .filter(|entry| !entry.metadata.is_dir && entry.filename.ends_with(".class"))
+        .filter(|entry| entry.is_class())
         .count();
     let resource_entries = jar_file
         .entries
         .iter()
-        .filter(|entry| !entry.metadata.is_dir && !entry.filename.ends_with(".class"))
+        .filter(|entry| !entry.metadata.is_dir && !entry.is_class())
         .count();
+    let resolver = crate::build_jar_class_resolver(&jar_file)?;
     let mut rewrite_stats = RewriteStats::default();
     let mut transform = |model: &mut ClassModel| {
         let class_stats = rewrite_class(model);
@@ -250,7 +247,7 @@ pub fn rewrite_deobfuscation(jar: &Path, output: &Path) -> CliResult<Deobfuscati
         Some(&mut transform as &mut dyn ApplyClassTransform),
         RewriteOptions {
             frame_mode: FrameComputationMode::Recompute,
-            resolver: None,
+            resolver: Some(&resolver),
             debug_info: DebugInfoPolicy::Preserve,
         },
     )?;
@@ -274,7 +271,7 @@ fn class_metrics_from_model(model: &ClassModel, byte_len: usize) -> ClassMetrics
     let mut nop_count = 0_usize;
 
     for method in &model.methods {
-        let Some(code) = &method.code else {
+        let Some(code) = method.code() else {
             continue;
         };
         for item in &code.instructions {
@@ -332,7 +329,7 @@ fn compiler_control_excludes(jar_file: &JarFile) -> CliResult<Vec<String>> {
 fn rewrite_class(model: &mut ClassModel) -> ClassRewriteStats {
     let mut stats = ClassRewriteStats::default();
     for method in &mut model.methods {
-        let Some(code) = method.code.as_mut() else {
+        let Some(code) = method.code_mut() else {
             continue;
         };
 
@@ -350,35 +347,82 @@ fn rewrite_class(model: &mut ClassModel) -> ClassRewriteStats {
     stats
 }
 
+fn can_safely_remove_index(
+    instructions: &[CodeItem],
+    exception_handlers: &[ExceptionHandler],
+    idx: usize,
+) -> bool {
+    let has_following_insn = instructions[idx + 1..]
+        .iter()
+        .any(|item| !matches!(item, CodeItem::Label(_)));
+    if !has_following_insn {
+        return false;
+    }
+    for handler in exception_handlers {
+        let Some(start_pos) = instructions
+            .iter()
+            .position(|item| matches!(item, CodeItem::Label(label) if *label == handler.start))
+        else {
+            continue;
+        };
+        let Some(end_pos) = instructions
+            .iter()
+            .position(|item| matches!(item, CodeItem::Label(label) if *label == handler.end))
+        else {
+            continue;
+        };
+        if start_pos < idx && idx < end_pos {
+            let has_other_insn =
+                instructions[start_pos + 1..end_pos]
+                    .iter()
+                    .enumerate()
+                    .any(|(offset, item)| {
+                        start_pos + 1 + offset != idx && !matches!(item, CodeItem::Label(_))
+                    });
+            if !has_other_insn {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn remove_nops(code: &mut pytecode_engine::model::CodeModel) -> usize {
-    let before = code.instructions.len();
-    code.instructions.retain(|item| {
-        !matches!(
-            item,
+    let mut removed = 0_usize;
+    let mut index = 0_usize;
+    while index < code.instructions.len() {
+        let is_nop = matches!(
+            &code.instructions[index],
             CodeItem::Raw(pytecode_engine::raw::Instruction::Simple { opcode: 0, .. })
-        )
-    });
-    before - code.instructions.len()
+        );
+        if is_nop && can_safely_remove_index(&code.instructions, &code.exception_handlers, index) {
+            code.instructions.remove(index);
+            removed += 1;
+        } else {
+            index += 1;
+        }
+    }
+    removed
 }
 
 fn remove_noop_gotos(code: &mut pytecode_engine::model::CodeModel) -> usize {
     let mut removed = 0_usize;
-    let mut rewritten = Vec::with_capacity(code.instructions.len());
-    for (index, item) in code.instructions.iter().enumerate() {
-        let should_remove = matches!(
-            item,
+    let mut index = 0_usize;
+    while index < code.instructions.len() {
+        let is_noop_goto = matches!(
+            &code.instructions[index],
             CodeItem::Branch(branch)
                 if is_unconditional_goto(branch.opcode)
                     && targets_immediate_fallthrough(&code.instructions, index, &branch.target)
         );
-        if should_remove {
+        if is_noop_goto
+            && can_safely_remove_index(&code.instructions, &code.exception_handlers, index)
+        {
+            code.instructions.remove(index);
             removed += 1;
         } else {
-            rewritten.push(item.clone());
+            index += 1;
         }
-    }
-    if removed > 0 {
-        code.instructions = rewritten;
     }
     removed
 }
@@ -475,4 +519,112 @@ fn is_readable_string(value: &str) -> bool {
     value.chars().count() >= 4
         && value.chars().filter(|ch| ch.is_alphabetic()).count() >= 3
         && value.chars().all(|ch| !ch.is_control())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pytecode_engine::constants::{ClassAccessFlags, MethodAccessFlags};
+    use pytecode_engine::model::{CodeModel, ConstantPoolBuilder, DebugInfoState, MethodModel};
+    use pytecode_engine::raw::Instruction;
+
+    #[test]
+    fn rewrite_class_preserves_trailing_nop_and_sole_handler_nop() {
+        let try_start = Label::named("try_start");
+        let try_end = Label::named("try_end");
+        let handler_lbl = Label::named("handler");
+        let mut handler_code = CodeModel::new(1, 1, DebugInfoState::Fresh);
+        handler_code.instructions = vec![
+            CodeItem::Label(try_start.clone()),
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0,
+                offset: 0,
+            }),
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0,
+                offset: 0,
+            }),
+            CodeItem::Label(try_end.clone()),
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0xB1,
+                offset: 0,
+            }),
+            CodeItem::Label(handler_lbl.clone()),
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0xBF,
+                offset: 0,
+            }),
+        ];
+        handler_code.exception_handlers.push(ExceptionHandler {
+            start: try_start,
+            end: try_end,
+            handler: handler_lbl,
+            catch_type: None,
+        });
+
+        let end_lbl = Label::named("end_lbl");
+        let mut trailing_code = CodeModel::new(0, 1, DebugInfoState::Fresh);
+        trailing_code.instructions = vec![
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0xB1,
+                offset: 0,
+            }),
+            CodeItem::Label(end_lbl),
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0,
+                offset: 0,
+            }),
+        ];
+
+        let mut model = ClassModel {
+            entry_name: "Test.class".to_owned(),
+            original_byte_len: 0,
+            version: (52, 0),
+            constant_pool: ConstantPoolBuilder::new(),
+            access_flags: ClassAccessFlags::PUBLIC | ClassAccessFlags::SUPER,
+            name: "Test".to_owned(),
+            super_name: Some("java/lang/Object".to_owned()),
+            interfaces: vec![],
+            debug_info_state: DebugInfoState::Fresh,
+            fields: vec![],
+            methods: vec![
+                MethodModel::new(
+                    MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    "handlerPair".to_owned(),
+                    "()V".to_owned(),
+                    Some(handler_code),
+                    vec![],
+                ),
+                MethodModel::new(
+                    MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+                    "trailing".to_owned(),
+                    "()V".to_owned(),
+                    Some(trailing_code),
+                    vec![],
+                ),
+            ],
+            attributes: vec![],
+        };
+
+        let stats = rewrite_class(&mut model);
+        assert_eq!(stats.nops_removed, 1);
+
+        let handler_nops = model.methods[0]
+            .code()
+            .unwrap()
+            .instructions
+            .iter()
+            .filter(|item| matches!(item, CodeItem::Raw(Instruction::Simple { opcode: 0, .. })))
+            .count();
+        assert_eq!(handler_nops, 1);
+
+        let trailing_nops = model.methods[1]
+            .code()
+            .unwrap()
+            .instructions
+            .iter()
+            .filter(|item| matches!(item, CodeItem::Raw(Instruction::Simple { opcode: 0, .. })))
+            .count();
+        assert_eq!(trailing_nops, 1);
+    }
 }

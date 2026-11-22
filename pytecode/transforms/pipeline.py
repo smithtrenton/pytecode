@@ -16,16 +16,19 @@ class, field, method, and code rewrite steps::
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from pytecode._rust import (
     ClassMatcher,
     ClassModel,
     ClassTransform,
+    CodeModel,
     CodeTransform,
     CompiledPipeline,
     FieldMatcher,
+    FieldTransform,
     MethodMatcher,
+    MethodTransform,
     Pipeline,
 )
 
@@ -48,7 +51,7 @@ class PipelineBuilder:
     def on_fields(
         self,
         field_matcher: FieldMatcher,
-        transform: ClassTransform,
+        transform: FieldTransform | ClassTransform,
         *,
         owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
@@ -59,7 +62,7 @@ class PipelineBuilder:
     def on_methods(
         self,
         method_matcher: MethodMatcher,
-        transform: ClassTransform,
+        transform: MethodTransform | ClassTransform,
         *,
         owner_matcher: ClassMatcher | None = None,
     ) -> PipelineBuilder:
@@ -88,8 +91,8 @@ class PipelineBuilder:
         """Class step with custom Python callback (receives ``ClassModel``).
 
         The callback fires at most once per class that matches *matcher*.
-        If the callback raises an exception, the exception is propagated by
-        ``apply``/``apply_all`` after the current model finishes processing.
+        If the callback raises an exception, pipeline execution stops promptly
+        and the exception is propagated by ``apply`` / ``apply_all``.
 
         Collection properties on ``ClassModel`` are live views, not eager
         snapshot lists. Use ``list(model.methods)`` / ``list(model.interfaces)``
@@ -112,8 +115,8 @@ class PipelineBuilder:
         *field_matcher*.  This is class-scoped semantics: use the class model
         to inspect or mutate whichever fields you need.
 
-        If the callback raises an exception, the exception is propagated by
-        ``apply``/``apply_all`` after the current model finishes processing.
+        If the callback raises an exception, pipeline execution stops promptly
+        and the exception is propagated by ``apply`` / ``apply_all``.
 
         Nested bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.
@@ -135,8 +138,8 @@ class PipelineBuilder:
         *method_matcher*.  This is class-scoped semantics: use the class model
         to inspect or mutate whichever methods you need.
 
-        If the callback raises an exception, the exception is propagated by
-        ``apply``/``apply_all`` after the current model finishes processing.
+        If the callback raises an exception, pipeline execution stops promptly
+        and the exception is propagated by ``apply`` / ``apply_all``.
 
         Nested bridge collections also use live views; ``list(...)`` is the
         explicit materialization boundary.
@@ -144,15 +147,31 @@ class PipelineBuilder:
         self._pipeline.on_methods_custom(method_matcher, callback, owner_matcher)
         return self
 
+    def on_code_custom(
+        self,
+        method_matcher: MethodMatcher,
+        callback: Callable[[CodeModel], None],
+        *,
+        owner_matcher: ClassMatcher | None = None,
+    ) -> PipelineBuilder:
+        """Code step with custom Python callback (receives ``CodeModel``).
+
+        The callback receives each matching method's editable ``CodeModel`` in
+        place. If the callback raises an exception, pipeline execution stops
+        promptly and the exception is propagated by ``apply`` / ``apply_all``.
+        """
+        self._pipeline.on_code_custom(method_matcher, callback, owner_matcher)
+        return self
+
     def build(self) -> Pipeline:
-        """Return the configured :class:`Pipeline` instance."""
-        return self._pipeline
+        """Return a snapshot copy of the configured :class:`Pipeline` instance."""
+        return self._pipeline.copy()
 
     def apply(self, model: ClassModel) -> None:
         """Apply the current pipeline to one class model in place."""
         self._pipeline.apply(model)
 
-    def apply_all(self, models: list[ClassModel]) -> None:
+    def apply_all(self, models: Iterable[ClassModel]) -> None:
         """Apply the current pipeline to many class models in place."""
         self._pipeline.apply_all(models)
 

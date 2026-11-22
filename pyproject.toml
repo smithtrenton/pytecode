@@ -53,6 +53,20 @@ include = [
   "pytecode/py.typed",
   { path = "rust-toolchain.toml", format = "sdist" },
 ]
+exclude = [
+  ".github/**",
+  ".python-version",
+  "MANIFEST.in",
+  "crates/pytecode-engine/fixtures/**",
+  "docs/**",
+  "examples/**",
+  "fuzz/**",
+  "output/**",
+  "run.py",
+  "tests/**",
+  "tools/**",
+  "uv.lock",
+]
 
 [tool.basedpyright]
 pythonVersion = "3.12"

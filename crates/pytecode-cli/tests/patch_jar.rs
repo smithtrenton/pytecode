@@ -224,7 +224,7 @@ fn patch_jar_applies_code_actions_from_json() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(code.instructions.iter().any(|item| {
         matches!(
             item,
@@ -320,7 +320,7 @@ fn patch_jar_applies_sequence_code_actions_from_json() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(!code.instructions.iter().any(|item| {
         matches!(
             item,
@@ -447,7 +447,7 @@ fn patch_jar_applies_replace_insert_code_actions_from_json() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
 
     assert!(code.instructions.iter().any(|item| {
         matches!(
@@ -537,7 +537,7 @@ fn patch_jar_supports_control_flow_replacements_from_json() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
 
     let branch_target = code.instructions.iter().find_map(|item| match item {
         CodeItem::Branch(insn) if insn.opcode == 167 => Some(insn.target.clone()),
@@ -669,7 +669,7 @@ fn patch_jar_rewrites_ldc_class_from_json() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "token")
         .expect("token method should exist");
-    let code = token.code.as_ref().expect("token should have code");
+    let code = token.code().expect("token should have code");
     assert!(code.instructions.iter().any(|item| {
         matches!(
             item,
@@ -682,5 +682,189 @@ fn patch_jar_rewrites_ldc_class_from_json() -> TestResult<()> {
             CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == "ClassLiteral")
         )
     }));
+    Ok(())
+}
+
+#[test]
+fn patch_jar_emits_interface_method_for_0xb9_replacement() -> TestResult<()> {
+    let temp_dir = fresh_temp_dir("patch-jar-invokeinterface");
+    let jar_path = temp_dir.join("input.jar");
+    let out_path = temp_dir.join("output.jar");
+    let rules_path = temp_dir.join("rules.json");
+    let class_bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    make_jar(&jar_path, &[("HelloWorld.class", &class_bytes)])?;
+    fs::write(
+        &rules_path,
+        serde_json::to_vec_pretty(&json!({
+            "rules": [
+                {
+                    "name": "emit-invokeinterface",
+                    "kind": "method",
+                    "owner": { "name": "HelloWorld" },
+                    "matcher": { "name": "main", "has_code": true },
+                    "code_actions": [
+                        {
+                            "type": "replace-insn",
+                            "matcher": {
+                                "method_owner": "java/io/PrintStream",
+                                "method_name": "println",
+                                "method_descriptor": "(Ljava/lang/String;)V"
+                            },
+                            "replacement": [
+                                {
+                                    "type": "method",
+                                    "opcode": 185,
+                                    "owner": "java/lang/CharSequence",
+                                    "name": "length",
+                                    "descriptor": "()I",
+                                    "is_interface": true
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }))?,
+    )?;
+
+    let report = patch_jar(&jar_path, &out_path, &rules_path)?;
+    assert_eq!(report.rules[0].changed_targets, 1);
+
+    let rewritten = JarFile::open(&out_path)?;
+    let entry = rewritten
+        .entries
+        .iter()
+        .find(|entry| entry.filename == "HelloWorld.class")
+        .unwrap();
+    let model = ClassModel::from_bytes(&entry.bytes)?;
+    let main = model.methods.iter().find(|m| m.name == "main").unwrap();
+    assert!(
+        main.code()
+            .unwrap()
+            .instructions
+            .iter()
+            .any(|item| matches!(
+                item,
+                CodeItem::InterfaceMethod(insn)
+                    if insn.owner == "java/lang/CharSequence"
+                        && insn.name == "length"
+                        && insn.descriptor == "()I"
+            ))
+    );
+    Ok(())
+}
+
+#[test]
+fn patch_jar_reports_zero_changes_for_noop_code_action_and_applies_rename_after_code_actions()
+-> TestResult<()> {
+    let temp_dir = fresh_temp_dir("patch-jar-noop-and-rename");
+    let jar_path = temp_dir.join("input.jar");
+    let out_path = temp_dir.join("output.jar");
+    let rules_path = temp_dir.join("rules.json");
+    let class_bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    make_jar(&jar_path, &[("HelloWorld.class", &class_bytes)])?;
+    fs::write(
+        &rules_path,
+        serde_json::to_vec_pretty(&json!({
+            "rules": [
+                {
+                    "name": "noop-replace-string",
+                    "kind": "method",
+                    "owner": { "name": "HelloWorld" },
+                    "matcher": { "name": "main", "has_code": true },
+                    "code_actions": [
+                        {
+                            "type": "replace-string",
+                            "from": "Hello from fixture",
+                            "to": "Hello from fixture"
+                        }
+                    ]
+                },
+                {
+                    "name": "patch-and-rename",
+                    "kind": "method",
+                    "owner": { "name": "HelloWorld" },
+                    "matcher": { "name": "main", "has_code": true },
+                    "action": { "type": "rename", "to": "patchedMain" },
+                    "code_actions": [
+                        {
+                            "type": "replace-string",
+                            "from": "Hello from fixture",
+                            "to": "Updated string"
+                        }
+                    ]
+                }
+            ]
+        }))?,
+    )?;
+
+    let report = patch_jar(&jar_path, &out_path, &rules_path)?;
+    assert_eq!(report.rules[0].matched_targets, 1);
+    assert_eq!(report.rules[0].changed_targets, 0);
+    assert_eq!(report.rules[0].changed_classes, 0);
+    assert_eq!(report.rules[1].changed_targets, 2);
+
+    let rewritten = JarFile::open(&out_path)?;
+    let entry = rewritten
+        .entries
+        .iter()
+        .find(|entry| entry.filename == "HelloWorld.class")
+        .unwrap();
+    let model = ClassModel::from_bytes(&entry.bytes)?;
+    let renamed = model
+        .methods
+        .iter()
+        .find(|m| m.name == "patchedMain")
+        .unwrap();
+    assert!(renamed.code().unwrap().instructions.iter().any(|item| matches!(
+        item,
+        CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::String(s) if s == "Updated string")
+    )));
+    Ok(())
+}
+
+#[test]
+fn patch_jar_rejects_inverted_table_switch_range() -> TestResult<()> {
+    let temp_dir = fresh_temp_dir("patch-jar-bad-tableswitch");
+    let jar_path = temp_dir.join("input.jar");
+    let out_path = temp_dir.join("output.jar");
+    let rules_path = temp_dir.join("rules.json");
+    let class_bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    make_jar(&jar_path, &[("HelloWorld.class", &class_bytes)])?;
+    fs::write(
+        &rules_path,
+        serde_json::to_vec_pretty(&json!({
+            "rules": [
+                {
+                    "name": "bad-switch",
+                    "kind": "method",
+                    "owner": { "name": "HelloWorld" },
+                    "matcher": { "name": "main" },
+                    "code_actions": [
+                        {
+                            "type": "insert-before",
+                            "matcher": { "opcode": 177 },
+                            "items": [
+                                { "type": "label", "name": "def" },
+                                {
+                                    "type": "table-switch",
+                                    "default_target": "def",
+                                    "low": 5,
+                                    "high": 2,
+                                    "targets": []
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }))?,
+    )?;
+
+    let err = patch_jar(&jar_path, &out_path, &rules_path).unwrap_err();
+    assert!(matches!(
+        err,
+        pytecode_cli::CliError::InvalidPatchPlan { .. }
+    ));
     Ok(())
 }

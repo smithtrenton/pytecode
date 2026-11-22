@@ -14,6 +14,7 @@ def main() -> None:
         "rust-toolchain.toml",
         "pyproject.toml",
         "LICENSE",
+        "README.md",
         "pytecode/__init__.py",
         "pytecode/_rust.pyi",
         "pytecode/py.typed",
@@ -26,8 +27,26 @@ def main() -> None:
         "crates/pytecode-cli/src/main.rs",
     }
     assert not (required - names), sorted(required - names)
-    assert not any(name.startswith(("output/", ".venv/", ".git/", "target/")) for name in names)
-    assert not any("/" not in name and name.endswith(".jar") for name in names)
+    assert not any(
+        name.startswith(
+            (
+                "output/",
+                ".venv/",
+                ".git/",
+                "target/",
+                "crates/pytecode-engine/fixtures/",
+                "docs/",
+                "examples/",
+                "fuzz/",
+                "tests/",
+                "tools/",
+                ".github/",
+            )
+        )
+        for name in names
+    )
+    assert not any(name.endswith(".jar") for name in names)
+    assert not any(name.endswith(".class") for name in names)
     print(f"Source archive contains required build inputs ({len(names)} members).")
 
 

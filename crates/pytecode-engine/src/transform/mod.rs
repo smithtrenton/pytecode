@@ -193,7 +193,7 @@ impl MethodContext {
             access_flags: method.access_flags,
             name: method.name.clone(),
             descriptor: method.descriptor.clone(),
-            has_code: method.code.is_some(),
+            has_code: method.has_code(),
         }
     }
 }
@@ -231,6 +231,9 @@ where
         let owner = ClassContext::from_model(model);
         let original_len = model.fields.len();
         for index in 0..original_len {
+            if index >= model.fields.len() {
+                break;
+            }
             let should_apply = {
                 let field = &model.fields[index];
                 where_matcher
@@ -263,6 +266,9 @@ where
         let owner = ClassContext::from_model(model);
         let original_len = model.methods.len();
         for index in 0..original_len {
+            if index >= model.methods.len() {
+                break;
+            }
             let should_apply = {
                 let method = &model.methods[index];
                 where_matcher
@@ -295,6 +301,9 @@ where
         let owner = ClassContext::from_model(model);
         let original_len = model.methods.len();
         for index in 0..original_len {
+            if index >= model.methods.len() {
+                break;
+            }
             let method_snapshot = MethodContext::from_method(&model.methods[index]);
             let should_apply = where_matcher
                 .as_ref()
@@ -302,7 +311,7 @@ where
             if !should_apply {
                 continue;
             }
-            let Some(code) = model.methods[index].code.as_mut() else {
+            let Some(code) = model.methods[index].code_mut() else {
                 continue;
             };
             transform(code, &method_snapshot, &owner)?;
@@ -566,7 +575,7 @@ pub fn method_is_synthetic() -> MethodMatcher {
 }
 
 pub fn has_code() -> MethodMatcher {
-    Matcher::of(|method: &MethodModel| method.code.is_some(), "has_code()")
+    Matcher::of(|method: &MethodModel| method.has_code(), "has_code()")
 }
 
 pub fn is_constructor() -> MethodMatcher {
@@ -806,13 +815,17 @@ pub fn insn_ldc_class(value: &str) -> InsnMatcher {
 
 pub fn insn_var_slot(slot: u16) -> InsnMatcher {
     Matcher::of(
-        move |item: &CodeItem| matches!(item, CodeItem::Var(insn) if insn.slot == slot),
+        move |item: &CodeItem| match item {
+            CodeItem::Var(insn) => insn.slot == slot,
+            CodeItem::IInc(insn) => insn.slot == slot,
+            _ => false,
+        },
         format!("insn_var_slot({slot})"),
     )
 }
 
 pub fn insn_field_owner_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
-    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let regex = Regex::new(&format!(r"\A(?:{pattern})\z"))?;
     let description = format!("insn_field_owner_matches({pattern:?})");
     Ok(Matcher::of(
         move |item: &CodeItem| matches!(item, CodeItem::Field(insn) if regex.is_match(&insn.owner)),
@@ -821,7 +834,7 @@ pub fn insn_field_owner_matches(pattern: &str) -> std::result::Result<InsnMatche
 }
 
 pub fn insn_method_owner_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
-    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let regex = Regex::new(&format!(r"\A(?:{pattern})\z"))?;
     let description = format!("insn_method_owner_matches({pattern:?})");
     Ok(Matcher::of(
         move |item: &CodeItem| match item {
@@ -834,7 +847,7 @@ pub fn insn_method_owner_matches(pattern: &str) -> std::result::Result<InsnMatch
 }
 
 pub fn insn_method_name_matches(pattern: &str) -> std::result::Result<InsnMatcher, regex::Error> {
-    let regex = Regex::new(&format!("^(?:{pattern})$"))?;
+    let regex = Regex::new(&format!(r"\A(?:{pattern})\z"))?;
     let description = format!("insn_method_name_matches({pattern:?})");
     Ok(Matcher::of(
         move |item: &CodeItem| match item {
@@ -849,8 +862,136 @@ pub fn insn_method_name_matches(pattern: &str) -> std::result::Result<InsnMatche
 
 fn parenthesize_description(description: &str) -> String {
     if description.starts_with('(') && description.ends_with(')') {
-        description.to_owned()
-    } else {
-        format!("({description})")
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut balanced_outer = true;
+        for (idx, ch) in description.char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && idx + ch.len_utf8() < description.len() {
+                        balanced_outer = false;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if balanced_outer && depth == 0 && !in_string {
+            return description.to_owned();
+        }
+    }
+    format!("({description})")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{DebugInfoState, IIncInsn, VarInsn};
+
+    #[test]
+    fn insn_var_slot_matches_var_and_iinc() {
+        let matcher = insn_var_slot(3);
+        let var_item = CodeItem::Var(VarInsn {
+            opcode: 0x15,
+            slot: 3,
+        });
+        let iinc_item = CodeItem::IInc(IIncInsn { slot: 3, value: 1 });
+        let other_iinc = CodeItem::IInc(IIncInsn { slot: 4, value: 1 });
+
+        assert!(matcher.matches(&var_item));
+        assert!(matcher.matches(&iinc_item));
+        assert!(!matcher.matches(&other_iinc));
+    }
+
+    #[test]
+    fn insn_regex_matchers_require_full_string_without_trailing_newline() {
+        let field_matcher = insn_field_owner_matches("java/lang/System").unwrap();
+        let newline_owner = CodeItem::Field(crate::model::FieldInsn {
+            opcode: 0xB2,
+            owner: "java/lang/System\n".to_owned(),
+            name: "out".to_owned(),
+            descriptor: "Ljava/io/PrintStream;".to_owned(),
+        });
+        assert!(!field_matcher.matches(&newline_owner));
+
+        let method_owner_matcher = insn_method_owner_matches("java/lang/Object").unwrap();
+        let newline_method = CodeItem::Method(crate::model::MethodInsn {
+            opcode: 0xB6,
+            owner: "java/lang/Object\n".to_owned(),
+            name: "toString\n".to_owned(),
+            descriptor: "()Ljava/lang/String;".to_owned(),
+            is_interface: false,
+        });
+        assert!(!method_owner_matcher.matches(&newline_method));
+        let method_name_matcher = insn_method_name_matches("toString").unwrap();
+        assert!(!method_name_matcher.matches(&newline_method));
+    }
+
+    #[test]
+    fn parenthesize_description_checks_outer_balance() {
+        assert_eq!(parenthesize_description("(a & b)"), "(a & b)");
+        assert_eq!(parenthesize_description("(a) & (b)"), "((a) & (b))");
+        assert_eq!(
+            parenthesize_description("(method_named(\")\") & has_code())"),
+            "(method_named(\")\") & has_code())"
+        );
+        assert_eq!(
+            parenthesize_description("method_named(\"foo\")"),
+            "(method_named(\"foo\"))"
+        );
+    }
+
+    #[test]
+    fn on_methods_handles_callback_removing_subsequent_methods() {
+        let mut model = ClassModel {
+            entry_name: "Test.class".to_owned(),
+            original_byte_len: 0,
+            version: (52, 0),
+            constant_pool: Default::default(),
+            access_flags: ClassAccessFlags::PUBLIC,
+            name: "Test".to_owned(),
+            super_name: Some("java/lang/Object".to_owned()),
+            interfaces: vec![],
+            debug_info_state: DebugInfoState::Fresh,
+            fields: vec![],
+            methods: vec![
+                MethodModel::new(
+                    MethodAccessFlags::PUBLIC,
+                    "a".into(),
+                    "()V".into(),
+                    None,
+                    vec![],
+                ),
+                MethodModel::new(
+                    MethodAccessFlags::PUBLIC,
+                    "b".into(),
+                    "()V".into(),
+                    None,
+                    vec![],
+                ),
+            ],
+            attributes: vec![],
+        };
+
+        let mut step = on_methods(
+            |_method, _owner| Ok(()),
+            Some(method_named("a")),
+            Some(class_named("Test")),
+        );
+        step.apply(&mut model).unwrap();
     }
 }

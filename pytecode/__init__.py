@@ -13,7 +13,7 @@ For more specialized APIs, prefer the semantic submodules such as
 """
 
 from .archive import JarFile
-from .classfile import ClassReader, ClassWriter
+from .classfile import ClassReader, ClassWriter, MalformedClassException
 from .model import ClassModel
 
 __all__ = [
@@ -21,4 +21,5 @@ __all__ = [
     "ClassReader",
     "ClassWriter",
     "JarFile",
+    "MalformedClassException",
 ]

@@ -29,13 +29,6 @@ pub enum FieldDescriptor {
     Array(ArrayType),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum VoidType {
-    Void,
-}
-
-pub const VOID: VoidType = VoidType::Void;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReturnType {
     Void,
@@ -53,9 +46,10 @@ pub fn parse_field_descriptor(descriptor: &str) -> Result<FieldDescriptor> {
     let mut index = 0_usize;
     let parsed = parse_field_descriptor_at(bytes, &mut index)?;
     if index != bytes.len() {
-        return Err(descriptor_error(format!(
-            "trailing characters at byte index {index}"
-        )));
+        return Err(descriptor_error(
+            index,
+            format!("trailing characters at byte index {index}"),
+        ));
     }
     Ok(parsed)
 }
@@ -70,7 +64,10 @@ pub fn parse_method_descriptor(descriptor: &str) -> Result<MethodDescriptor> {
         let parameter = parse_field_descriptor_at(bytes, &mut index)?;
         parameter_slots += slot_size(&parameter);
         if parameter_slots > 255 {
-            return Err(descriptor_error("method parameters exceed 255 slots"));
+            return Err(descriptor_error(
+                index,
+                "method parameters exceed 255 slots",
+            ));
         }
         parameter_types.push(parameter);
     }
@@ -82,9 +79,10 @@ pub fn parse_method_descriptor(descriptor: &str) -> Result<MethodDescriptor> {
         ReturnType::Field(parse_field_descriptor_at(bytes, &mut index)?)
     };
     if index != bytes.len() {
-        return Err(descriptor_error(format!(
-            "trailing characters at byte index {index}"
-        )));
+        return Err(descriptor_error(
+            index,
+            format!("trailing characters at byte index {index}"),
+        ));
     }
     Ok(MethodDescriptor {
         parameter_types,
@@ -147,7 +145,10 @@ fn parse_field_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDes
         dimensions += 1;
         *index += 1;
         if dimensions > 255 {
-            return Err(descriptor_error("array descriptor exceeds 255 dimensions"));
+            return Err(descriptor_error(
+                *index,
+                "array descriptor exceeds 255 dimensions",
+            ));
         }
     }
     let mut field = parse_non_array_descriptor_at(bytes, index)?;
@@ -160,6 +161,7 @@ fn parse_field_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDes
 }
 
 fn parse_non_array_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<FieldDescriptor> {
+    let byte_offset = *index;
     let current = next_byte(bytes, index)?;
     match current {
         b'Z' => Ok(FieldDescriptor::Base(BaseType::Boolean)),
@@ -171,10 +173,14 @@ fn parse_non_array_descriptor_at(bytes: &[u8], index: &mut usize) -> Result<Fiel
         b'F' => Ok(FieldDescriptor::Base(BaseType::Float)),
         b'D' => Ok(FieldDescriptor::Base(BaseType::Double)),
         b'L' => parse_object_type(bytes, index).map(FieldDescriptor::Object),
-        value => Err(descriptor_error(format!(
-            "invalid descriptor character '{}'",
-            value as char
-        ))),
+        value => Err(descriptor_error(
+            byte_offset,
+            if value.is_ascii_graphic() {
+                format!("invalid descriptor character '{}'", value as char)
+            } else {
+                format!("invalid descriptor byte 0x{value:02x}")
+            },
+        )),
     }
 }
 
@@ -187,37 +193,44 @@ fn parse_object_type(bytes: &[u8], index: &mut usize) -> Result<ObjectType> {
         *index += 1;
     }
     if peek(bytes, *index).is_none() {
-        return Err(descriptor_error("unexpected end while parsing object type"));
+        return Err(descriptor_error(
+            *index,
+            "unexpected end while parsing object type",
+        ));
     }
     if *index == start {
-        return Err(descriptor_error("empty class name"));
+        return Err(descriptor_error(start, "empty class name"));
     }
     let raw = std::str::from_utf8(&bytes[start..*index])
-        .map_err(|_| descriptor_error("descriptor must be valid UTF-8"))?;
-    validate_internal_name(raw)?;
+        .map_err(|_| descriptor_error(start, "descriptor must be valid UTF-8"))?;
+    validate_internal_name(raw, start)?;
     *index += 1;
     Ok(ObjectType {
         class_name: raw.to_owned(),
     })
 }
 
-fn validate_internal_name(value: &str) -> Result<()> {
+fn validate_internal_name(value: &str, offset: usize) -> Result<()> {
     if !crate::names::is_valid_internal_name(value) {
-        return Err(descriptor_error("invalid internal class name"));
+        return Err(descriptor_error(offset, "invalid internal class name"));
     }
     Ok(())
 }
 
 fn next_byte(bytes: &[u8], index: &mut usize) -> Result<u8> {
-    let current = peek(bytes, *index).ok_or_else(|| descriptor_error("unexpected end"))?;
+    let current = peek(bytes, *index).ok_or_else(|| descriptor_error(*index, "unexpected end"))?;
     *index += 1;
     Ok(current)
 }
 
 fn expect_byte(bytes: &[u8], index: &mut usize, expected: u8) -> Result<()> {
+    let offset = *index;
     let current = next_byte(bytes, index)?;
     if current != expected {
-        return Err(descriptor_error(format!("expected '{}'", expected as char)));
+        return Err(descriptor_error(
+            offset,
+            format!("expected '{}'", expected as char),
+        ));
     }
     Ok(())
 }
@@ -226,9 +239,9 @@ fn peek(bytes: &[u8], index: usize) -> Option<u8> {
     bytes.get(index).copied()
 }
 
-fn descriptor_error(reason: impl Into<String>) -> EngineError {
+fn descriptor_error(offset: usize, reason: impl Into<String>) -> EngineError {
     EngineError::new(
-        0,
+        offset,
         EngineErrorKind::InvalidDescriptor {
             reason: reason.into(),
         },

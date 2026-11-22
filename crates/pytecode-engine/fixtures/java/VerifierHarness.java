@@ -1,5 +1,6 @@
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -123,7 +124,7 @@ public class VerifierHarness {
 
             if (executeMode) {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                PrintStream capture = new PrintStream(baos);
+                PrintStream capture = new PrintStream(baos, true, StandardCharsets.UTF_8);
                 PrintStream originalOut = System.out;
                 System.setOut(capture);
                 try {
@@ -133,7 +134,7 @@ public class VerifierHarness {
                     System.setOut(originalOut);
                     capture.flush();
                 }
-                String stdout = baos.toString("UTF-8");
+                String stdout = baos.toString(StandardCharsets.UTF_8);
                 return resultJson(classFilePath, "VERIFY_OK", null, stdout, null, includePath);
             } else {
                 return resultJson(classFilePath, "VERIFY_OK", null, null, null, includePath);
@@ -194,6 +195,7 @@ public class VerifierHarness {
         }
 
         int cpCount = readU2(bytes, 8);
+        if (cpCount < 1) return null;
         int[] cpOffsets = new int[cpCount];
         int[] cpTags = new int[cpCount];
 
@@ -207,24 +209,32 @@ public class VerifierHarness {
 
             switch (tag) {
                 case 1: // Utf8
+                    if (bytes.length - offset < 2) return null;
                     int len = readU2(bytes, offset);
-                    offset += 2 + len;
+                    offset += 2;
+                    if (bytes.length - offset < len) return null;
+                    offset += len;
                     break;
                 case 3: case 4: // Integer, Float
+                    if (bytes.length - offset < 4) return null;
                     offset += 4;
                     break;
                 case 5: case 6: // Long, Double
+                    if (bytes.length - offset < 8 || i + 1 >= cpCount) return null;
                     offset += 8;
                     i++; // double-slot
                     break;
                 case 7: case 8: case 16: case 19: case 20: // Class, String, MethodType, Module, Package
+                    if (bytes.length - offset < 2) return null;
                     offset += 2;
                     break;
                 case 9: case 10: case 11: case 12: case 17: case 18:
                     // Fieldref, Methodref, InterfaceMethodref, NameAndType, Dynamic, InvokeDynamic
+                    if (bytes.length - offset < 4) return null;
                     offset += 4;
                     break;
                 case 15: // MethodHandle
+                    if (bytes.length - offset < 3) return null;
                     offset += 3;
                     break;
                 default:
@@ -233,11 +243,13 @@ public class VerifierHarness {
         }
 
         // access_flags at offset, this_class at offset+2
+        if (bytes.length - offset < 4) return null;
         int thisClassIndex = readU2(bytes, offset + 2);
         if (thisClassIndex <= 0 || thisClassIndex >= cpCount
                 || cpOffsets[thisClassIndex] == 0 || cpTags[thisClassIndex] != 7) {
             return null;
         }
+        if (bytes.length - cpOffsets[thisClassIndex] < 3) return null;
 
         int nameIndex = readU2(bytes, cpOffsets[thisClassIndex] + 1);
         if (nameIndex <= 0 || nameIndex >= cpCount
@@ -246,8 +258,10 @@ public class VerifierHarness {
         }
 
         int utf8Offset = cpOffsets[nameIndex] + 1;
+        if (bytes.length - utf8Offset < 2) return null;
         int utf8Len = readU2(bytes, utf8Offset);
-        return new String(bytes, utf8Offset + 2, utf8Len);
+        if (bytes.length - (utf8Offset + 2) < utf8Len) return null;
+        return new String(bytes, utf8Offset + 2, utf8Len, StandardCharsets.UTF_8);
     }
 
     private static int readU2(byte[] bytes, int offset) {

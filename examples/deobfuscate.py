@@ -24,7 +24,7 @@ def analyze_jar(jar_path: str | Path) -> dict[str, object]:
     class_metrics: list[dict[str, object]] = []
 
     for jar_info in jar.files.values():
-        if not jar_info.filename.endswith(".class"):
+        if jar_info.is_dir or not jar_info.filename.endswith(".class"):
             continue
         model = ClassModel.from_bytes(jar_info.bytes)
         class_metrics.append(_class_metrics(model, len(jar_info.bytes)))
@@ -93,7 +93,9 @@ def analyze_jar(jar_path: str | Path) -> dict[str, object]:
     return {
         "input_jar": str(Path(jar.filename)),
         "class_entries": len(class_metrics),
-        "resource_entries": sum(1 for jar_info in jar.files.values() if not jar_info.filename.endswith(".class")),
+        "resource_entries": sum(
+            1 for jar_info in jar.files.values() if not jar_info.is_dir and not jar_info.filename.endswith(".class")
+        ),
         "suspicious_class_count": len(suspicious_classes),
         "rl_class_count": len(rl_classes),
         "top_packages": top_packages[:10],
@@ -107,8 +109,12 @@ def analyze_jar(jar_path: str | Path) -> dict[str, object]:
 
 def rewrite_jar(jar_path: str | Path, output_path: str | Path) -> dict[str, object]:
     jar = JarFile(jar_path)
-    class_entries = sum(1 for jar_info in jar.files.values() if jar_info.filename.endswith(".class"))
-    resource_entries = sum(1 for jar_info in jar.files.values() if not jar_info.filename.endswith(".class"))
+    class_entries = sum(
+        1 for jar_info in jar.files.values() if not jar_info.is_dir and jar_info.filename.endswith(".class")
+    )
+    resource_entries = sum(
+        1 for jar_info in jar.files.values() if not jar_info.is_dir and not jar_info.filename.endswith(".class")
+    )
     stats = {
         "classes_changed": 0,
         "nops_removed": 0,
@@ -117,7 +123,7 @@ def rewrite_jar(jar_path: str | Path, output_path: str | Path) -> dict[str, obje
     }
 
     for jar_info in list(jar.files.values()):
-        if not jar_info.filename.endswith(".class"):
+        if jar_info.is_dir or not jar_info.filename.endswith(".class"):
             continue
         model = ClassModel.from_bytes(jar_info.bytes)
         pipeline, class_stats = _build_class_rewrite_pipeline(model)

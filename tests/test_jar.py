@@ -66,14 +66,12 @@ def test_read_jar_files_populated(tmp_path: Path):
 def test_jar_info_has_bytes(tmp_path: Path):
     content = b"some content"
     jar = make_jar({"readme.txt": content}, tmp_path / "t.jar")
-    key = str(Path("readme.txt"))
-    assert jar.files[key].bytes == content
+    assert jar.files["readme.txt"].bytes == content
 
 
 def test_jar_info_has_zipinfo(tmp_path: Path):
     jar = make_jar({"readme.txt": b"x"}, tmp_path / "t.jar")
-    key = str(Path("readme.txt"))
-    assert isinstance(jar.files[key].zipinfo, zipfile.ZipInfo)
+    assert isinstance(jar.files["readme.txt"].zipinfo, zipfile.ZipInfo)
 
 
 def test_read_preserves_zipinfo_metadata(tmp_path: Path) -> None:
@@ -158,8 +156,8 @@ def test_path_normalization(tmp_path: Path):
         {"com/example/Foo.class": minimal_classfile()},
         tmp_path / "t.jar",
     )
-    expected_key = str(Path("com/example/Foo.class"))
-    assert expected_key in jar.files
+    assert "com/example/Foo.class" in jar.files
+    assert jar.files["com/example/Foo.class"].filename == "com/example/Foo.class"
 
 
 # ---------------------------------------------------------------------------
@@ -189,10 +187,9 @@ def test_add_file_normalizes_path_and_updates_infolist(tmp_path: Path):
     jar = make_jar({}, tmp_path / "t.jar")
     class_bytes = minimal_classfile()
 
-    jar.add_file("com/example/New.class", class_bytes)
+    jar.add_file("com\\example\\New.class", class_bytes)
 
-    expected_key = str(Path("com/example/New.class"))
-    assert jar.files[expected_key].bytes == class_bytes
+    assert jar.files["com/example/New.class"].bytes == class_bytes
     assert jar.infolist[-1].filename == "com/example/New.class"
 
 
@@ -617,8 +614,8 @@ def test_rewrite_preserves_signature_artifacts_as_pass_through_resources(tmp_pat
     jar.rewrite(out_path, transform=pipeline)
 
     rewritten = JarFile(out_path)
-    assert rewritten.files[str(Path("META-INF/TEST.SF"))].bytes == b"signature-file"
-    assert rewritten.files[str(Path("META-INF/TEST.RSA"))].bytes == b"signature-block"
+    assert rewritten.files["META-INF/TEST.SF"].bytes == b"signature-file"
+    assert rewritten.files["META-INF/TEST.RSA"].bytes == b"signature-block"
 
 
 def test_rewrite_supports_skip_debug_with_rust_pipeline_transform(tmp_path: Path):
@@ -677,14 +674,14 @@ def test_rewrite_serializes_added_and_removed_entries(tmp_path: Path):
     jar.rewrite(out_path)
 
     assert Path(jar.filename) == out_path
-    assert str(Path("README.txt")) not in jar.files
-    assert str(Path("nested/new.txt")) in jar.files
+    assert "README.txt" not in jar.files
+    assert "nested/new.txt" in jar.files
     assert "Added.class" in jar.files
 
     rewritten = JarFile(out_path)
     classes, others = rewritten.parse_classes()
     assert sorted(jar_info.filename for jar_info, _ in classes) == ["Added.class", "Foo.class"]
-    assert [other.filename for other in others] == [str(Path("nested/new.txt"))]
+    assert [other.filename for other in others] == ["nested/new.txt"]
 
     with zipfile.ZipFile(out_path, "r") as zf:
         assert "nested/new.txt" in zf.namelist()
@@ -721,23 +718,22 @@ def test_rewrite_preserves_disk_and_memory_when_staged_refresh_fails(
     )
     jar = JarFile(jar_path)
     original_filename = jar.filename
-    original_keys = list(jar.files)
     original_bytes = jar_path.read_bytes()
     original_paths = set(tmp_path.iterdir())
     jar.add_file("new.txt", b"must not be committed")
     original_keys = list(jar.files)
 
-    real_read_archive_state = jar_module._read_archive_state
+    real_build_state = jar_module._build_archive_state_from_entries
     should_fail = True
 
-    def flaky_read_archive_state(filename: str | Path, **limits: int):
+    def flaky_build_state(states: Any) -> Any:
         nonlocal should_fail
         if should_fail:
             should_fail = False
             raise OSError("refresh failed")
-        return real_read_archive_state(filename, **limits)
+        return real_build_state(states)
 
-    monkeypatch.setattr(jar_module, "_read_archive_state", flaky_read_archive_state)
+    monkeypatch.setattr(jar_module, "_build_archive_state_from_entries", flaky_build_state)
 
     with pytest.raises(OSError, match="refresh failed"):
         jar.rewrite()
@@ -746,3 +742,64 @@ def test_rewrite_preserves_disk_and_memory_when_staged_refresh_fails(
     assert list(jar.files) == original_keys
     assert jar_path.read_bytes() == original_bytes
     assert set(tmp_path.iterdir()) == original_paths
+
+
+def test_posix_normalization_and_directory_helpers(tmp_path: Path) -> None:
+    jar = make_jar({}, tmp_path / "t.jar")
+
+    with pytest.raises(ValueError, match="add_directory"):
+        jar.add_file("dir/", b"")
+    with pytest.raises(ValueError, match="NUL"):
+        jar.add_file("bad\x00name.txt", b"data")
+
+    dir_entry = jar.add_directory("META-INF\\custom")
+    assert dir_entry.filename == "META-INF/custom/"
+    assert dir_entry.zipinfo.is_dir()
+
+    jar.add_file("pkg\\Asset.txt", b"abc")
+    assert "pkg/Asset.txt" in jar.files
+
+    removed = jar.remove_file("pkg\\Asset.txt")
+    assert removed.filename == "pkg/Asset.txt"
+
+    out_path = tmp_path / "dirs.jar"
+    jar.rewrite(out_path)
+    classes, others = JarFile(out_path).parse_classes()
+    assert classes == []
+    assert others == []
+    with zipfile.ZipFile(out_path, "r") as zf:
+        assert zf.namelist() == ["META-INF/custom/"]
+        assert zf.getinfo("META-INF/custom/").is_dir()
+
+
+def test_archive_comment_roundtrip_and_rewrite_frame_mode_string(tmp_path: Path) -> None:
+    jar_path = make_compiled_jar(tmp_path, [TEST_RESOURCES / "HelloWorld.java"])
+    with zipfile.ZipFile(jar_path, "a") as zf:
+        zf.comment = b"initial archive comment"
+
+    jar = JarFile(jar_path)
+    assert jar.comment == b"initial archive comment"
+    jar.comment = b"updated comment"
+    out_path = tmp_path / "nested-out" / "out.jar"
+    jar.rewrite(out_path, frame_mode="recompute")
+
+    assert JarFile(out_path).comment == b"updated comment"
+    with zipfile.ZipFile(out_path, "r") as zf:
+        assert zf.comment == b"updated comment"
+
+
+def test_rewrite_is_dir_follows_filename_and_skips_mkdir_on_validation_error(tmp_path: Path) -> None:
+    jar = make_jar({"dir/": b""}, tmp_path / "t.jar")
+    entry = jar.files["dir/"]
+    entry.filename = "dir/file.txt"
+    entry.bytes = b"now a file"
+    out_path = tmp_path / "retyped.jar"
+    jar.rewrite(out_path)
+    with zipfile.ZipFile(out_path, "r") as zf:
+        assert zf.read("dir/file.txt") == b"now a file"
+        assert not zf.getinfo("dir/file.txt").is_dir()
+
+    nonexistent_dir = tmp_path / "never_created" / "out.jar"
+    with pytest.raises(ValueError, match="debug_info"):
+        jar.rewrite(nonexistent_dir, debug_info="invalid")
+    assert not nonexistent_dir.parent.exists()

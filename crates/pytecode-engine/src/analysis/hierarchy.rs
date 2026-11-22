@@ -5,7 +5,7 @@ use crate::model::{ClassModel, MethodModel};
 use crate::raw::ClassFile;
 use crate::raw::ConstantPoolEntry;
 use crate::{Result as EngineResult, modified_utf8::decode_modified_utf8};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 pub const JAVA_LANG_OBJECT: &str = "java/lang/Object";
 
@@ -175,6 +175,9 @@ impl MappingClassResolver {
 
 impl ClassResolver for MappingClassResolver {
     fn resolve_class(&self, class_name: &str) -> Option<ResolvedClass> {
+        if let Some(resolved) = self.classes.get(class_name) {
+            return Some(resolved.clone());
+        }
         if class_name == JAVA_LANG_OBJECT {
             return Some(ResolvedClass {
                 name: JAVA_LANG_OBJECT.to_owned(),
@@ -184,7 +187,7 @@ impl ClassResolver for MappingClassResolver {
                 methods: Vec::new(),
             });
         }
-        self.classes.get(class_name).cloned()
+        None
     }
 }
 
@@ -193,14 +196,15 @@ pub fn iter_superclasses(
     class_name: &str,
 ) -> Result<Vec<ResolvedClass>, AnalysisError> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::from([class_name.to_owned()]);
+    let mut path = vec![class_name.to_owned()];
     let mut current = resolve_class(resolver, class_name)?;
     while let Some(super_name) = current.super_name.clone() {
         if !seen.insert(super_name.clone()) {
-            return Err(AnalysisError::HierarchyCycle {
-                cycle: seen.into_iter().collect(),
-            });
+            path.push(super_name);
+            return Err(AnalysisError::HierarchyCycle { cycle: path });
         }
+        path.push(super_name.clone());
         let resolved = resolve_class(resolver, &super_name)?;
         out.push(resolved.clone());
         current = resolved;
@@ -215,30 +219,85 @@ pub fn iter_supertypes(
     resolver: &dyn ClassResolver,
     class_name: &str,
 ) -> Result<Vec<ResolvedClass>, AnalysisError> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let mut queue = VecDeque::new();
-    let resolved = resolve_class(resolver, class_name)?;
-    if let Some(super_name) = resolved.super_name {
-        queue.push_back(super_name);
-    }
-    for interface in resolved.interfaces {
-        queue.push_back(interface);
-    }
-    while let Some(name) = queue.pop_front() {
-        if !seen.insert(name.clone()) {
-            continue;
+    fn dfs_supertype(
+        resolver: &dyn ClassResolver,
+        name: &str,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+        path: &mut Vec<String>,
+        out: &mut Vec<ResolvedClass>,
+    ) -> Result<(), AnalysisError> {
+        if visiting.contains(name) {
+            let mut cycle = path.clone();
+            cycle.push(name.to_owned());
+            return Err(AnalysisError::HierarchyCycle { cycle });
         }
-        let resolved = resolve_class(resolver, &name)?;
-        if let Some(super_name) = resolved.super_name.clone() {
-            queue.push_back(super_name);
+        if visited.contains(name) {
+            return Ok(());
+        }
+        let resolved = resolve_class(resolver, name)?;
+        visiting.insert(name.to_owned());
+        path.push(name.to_owned());
+        if let Some(super_name) = resolved.super_name.as_deref() {
+            dfs_supertype(resolver, super_name, visiting, visited, path, out)?;
+        } else if resolved.name != JAVA_LANG_OBJECT {
+            dfs_supertype(resolver, JAVA_LANG_OBJECT, visiting, visited, path, out)?;
         }
         for interface in &resolved.interfaces {
-            queue.push_back(interface.clone());
+            dfs_supertype(resolver, interface, visiting, visited, path, out)?;
         }
+        path.pop();
+        visiting.remove(name);
+        visited.insert(name.to_owned());
         out.push(resolved);
+        Ok(())
+    }
+
+    let root = resolve_class(resolver, class_name)?;
+    let mut visiting = HashSet::from([class_name.to_owned()]);
+    let mut visited = HashSet::new();
+    let mut path = vec![class_name.to_owned()];
+    let mut out = Vec::new();
+    if let Some(super_name) = root.super_name.as_deref() {
+        dfs_supertype(
+            resolver,
+            super_name,
+            &mut visiting,
+            &mut visited,
+            &mut path,
+            &mut out,
+        )?;
+    } else if root.name != JAVA_LANG_OBJECT {
+        dfs_supertype(
+            resolver,
+            JAVA_LANG_OBJECT,
+            &mut visiting,
+            &mut visited,
+            &mut path,
+            &mut out,
+        )?;
+    }
+    for interface in &root.interfaces {
+        dfs_supertype(
+            resolver,
+            interface,
+            &mut visiting,
+            &mut visited,
+            &mut path,
+            &mut out,
+        )?;
     }
     Ok(out)
+}
+
+fn peel_array_component_reference(component: &str) -> Option<&str> {
+    if component.starts_with('[') {
+        Some(component)
+    } else {
+        component
+            .strip_prefix('L')
+            .and_then(|name| name.strip_suffix(';'))
+    }
 }
 
 pub fn is_subtype(
@@ -246,12 +305,53 @@ pub fn is_subtype(
     child_name: &str,
     target_name: &str,
 ) -> Result<bool, AnalysisError> {
-    if child_name == target_name {
-        return Ok(true);
+    let mut child = child_name;
+    let mut target = target_name;
+    for _ in 0..=255 {
+        if child == target {
+            return Ok(true);
+        }
+        if let Some(child_component) = child.strip_prefix('[') {
+            if matches!(
+                target,
+                JAVA_LANG_OBJECT | "java/lang/Cloneable" | "java/io/Serializable"
+            ) {
+                return Ok(true);
+            }
+            let Some(target_component) = target.strip_prefix('[') else {
+                return Ok(false);
+            };
+            match (
+                peel_array_component_reference(child_component),
+                peel_array_component_reference(target_component),
+            ) {
+                (Some(next_child), Some(next_target)) => {
+                    child = next_child;
+                    target = next_target;
+                    continue;
+                }
+                _ => return Ok(child_component == target_component),
+            }
+        }
+        if target.starts_with('[') {
+            return Ok(false);
+        }
+        if target != JAVA_LANG_OBJECT
+            && resolver
+                .resolve_class(target)
+                .is_some_and(|resolved| !resolved.is_interface())
+        {
+            return Ok(iter_superclasses(resolver, child)?
+                .into_iter()
+                .any(|resolved| resolved.name == target));
+        }
+        return Ok(iter_supertypes(resolver, child)?
+            .into_iter()
+            .any(|resolved| resolved.name == target));
     }
-    Ok(iter_supertypes(resolver, child_name)?
-        .into_iter()
-        .any(|resolved| resolved.name == target_name))
+    Err(AnalysisError::InvalidControlFlow {
+        reason: "array subtype nesting exceeds 255 dimensions".to_owned(),
+    })
 }
 
 pub fn common_superclass(
@@ -267,68 +367,81 @@ pub(crate) fn common_reference_type(
     left_name: &str,
     right_name: &str,
 ) -> Result<String, AnalysisError> {
-    if left_name == right_name {
-        return Ok(left_name.to_owned());
-    }
-    if let (Some(left), Some(right)) = (left_name.strip_prefix('['), right_name.strip_prefix('[')) {
-        let reference_name = |component: &str| {
-            if component.starts_with('[') {
-                Some(component.to_owned())
-            } else {
-                component
-                    .strip_prefix('L')
-                    .and_then(|name| name.strip_suffix(';'))
-                    .map(str::to_owned)
-            }
-        };
-        if let (Some(left), Some(right)) = (reference_name(left), reference_name(right)) {
-            let component = common_reference_type(resolver, &left, &right)?;
-            return Ok(if component.starts_with('[') {
-                format!("[{component}")
-            } else {
-                format!("[L{component};")
+    let mut dims = 0_usize;
+    let mut left = left_name;
+    let mut right = right_name;
+    let base_common = loop {
+        if left == right {
+            break left.to_owned();
+        }
+        if dims > 255 {
+            return Err(AnalysisError::InvalidControlFlow {
+                reason: "array nesting exceeds 255 dimensions".to_owned(),
             });
         }
-        return Ok(JAVA_LANG_OBJECT.to_owned());
-    }
-    if left_name.starts_with('[') || right_name.starts_with('[') {
-        let other = if left_name.starts_with('[') {
-            right_name
-        } else {
-            left_name
-        };
-        if matches!(other, "java/lang/Cloneable" | "java/io/Serializable") {
-            return Ok(other.to_owned());
+        if let (Some(left_component), Some(right_component)) =
+            (left.strip_prefix('['), right.strip_prefix('['))
+        {
+            if let (Some(next_left), Some(next_right)) = (
+                peel_array_component_reference(left_component),
+                peel_array_component_reference(right_component),
+            ) {
+                dims += 1;
+                left = next_left;
+                right = next_right;
+                continue;
+            }
+            break JAVA_LANG_OBJECT.to_owned();
         }
-        return Ok(JAVA_LANG_OBJECT.to_owned());
-    }
-    if left_name == JAVA_LANG_OBJECT || right_name == JAVA_LANG_OBJECT {
-        return Ok(JAVA_LANG_OBJECT.to_owned());
-    }
-    let Some(resolver) = resolver else {
-        return Ok(JAVA_LANG_OBJECT.to_owned());
-    };
-    let mut left_ancestors = vec![left_name.to_owned()];
-    left_ancestors.extend(
-        iter_superclasses(resolver, left_name)?
-            .into_iter()
-            .map(|resolved| resolved.name),
-    );
-    let right_ancestors = {
-        let mut names = vec![right_name.to_owned()];
-        names.extend(
-            iter_superclasses(resolver, right_name)?
+        if left.starts_with('[') || right.starts_with('[') {
+            let other = if left.starts_with('[') { right } else { left };
+            if matches!(other, "java/lang/Cloneable" | "java/io/Serializable") {
+                break other.to_owned();
+            }
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        if left == JAVA_LANG_OBJECT || right == JAVA_LANG_OBJECT {
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        let Some(resolver) = resolver else {
+            break JAVA_LANG_OBJECT.to_owned();
+        };
+        let left_resolved = resolve_class(resolver, left)?;
+        let right_resolved = resolve_class(resolver, right)?;
+        if left_resolved.is_interface() || right_resolved.is_interface() {
+            break JAVA_LANG_OBJECT.to_owned();
+        }
+        let mut left_ancestors = vec![left.to_owned()];
+        left_ancestors.extend(
+            iter_superclasses(resolver, left)?
                 .into_iter()
                 .map(|resolved| resolved.name),
         );
-        names
-    };
-    for name in left_ancestors {
-        if right_ancestors.iter().any(|candidate| candidate == &name) {
-            return Ok(name);
+        let right_ancestors = {
+            let mut names = vec![right.to_owned()];
+            names.extend(
+                iter_superclasses(resolver, right)?
+                    .into_iter()
+                    .map(|resolved| resolved.name),
+            );
+            names
+        };
+        let mut found = JAVA_LANG_OBJECT.to_owned();
+        for name in left_ancestors {
+            if right_ancestors.iter().any(|candidate| candidate == &name) {
+                found = name;
+                break;
+            }
         }
+        break found;
+    };
+    if dims == 0 {
+        Ok(base_common)
+    } else if base_common.starts_with('[') {
+        Ok(format!("{}{base_common}", "[".repeat(dims)))
+    } else {
+        Ok(format!("{}L{base_common};", "[".repeat(dims)))
     }
-    Ok(JAVA_LANG_OBJECT.to_owned())
 }
 
 pub fn find_overridden_methods(
@@ -344,8 +457,12 @@ pub fn find_overridden_methods(
         return Ok(Vec::new());
     }
     let owner_package = package_name(owner_name);
+    let mut overriding_packages = HashSet::from([owner_package.to_owned()]);
+    let mut visited_superclasses = HashSet::new();
     let mut matches = Vec::new();
-    for resolved in iter_supertypes(resolver, owner_name)? {
+
+    for resolved in iter_superclasses(resolver, owner_name)? {
+        visited_superclasses.insert(resolved.name.clone());
         let Some(candidate) = resolved
             .find_method(&method.name, &method.descriptor)
             .cloned()
@@ -358,7 +475,46 @@ pub fn find_overridden_methods(
         {
             continue;
         }
-        if !method_visible_from_subclass(&resolved.name, &candidate, owner_package) {
+        let resolved_package = package_name(&resolved.name);
+        let visible = candidate.access_flags.contains(MethodAccessFlags::PUBLIC)
+            || candidate
+                .access_flags
+                .contains(MethodAccessFlags::PROTECTED)
+            || overriding_packages.contains(resolved_package);
+        if !visible {
+            continue;
+        }
+        overriding_packages.insert(resolved_package.to_owned());
+        matches.push(InheritedMethod {
+            owner: resolved.name,
+            name: candidate.name,
+            descriptor: candidate.descriptor,
+            access_flags: candidate.access_flags,
+        });
+    }
+
+    for resolved in iter_supertypes(resolver, owner_name)? {
+        if visited_superclasses.contains(&resolved.name) {
+            continue;
+        }
+        let Some(candidate) = resolved
+            .find_method(&method.name, &method.descriptor)
+            .cloned()
+        else {
+            continue;
+        };
+        if candidate.access_flags.contains(MethodAccessFlags::PRIVATE)
+            || candidate.access_flags.contains(MethodAccessFlags::STATIC)
+            || candidate.access_flags.contains(MethodAccessFlags::FINAL)
+        {
+            continue;
+        }
+        let visible = candidate.access_flags.contains(MethodAccessFlags::PUBLIC)
+            || candidate
+                .access_flags
+                .contains(MethodAccessFlags::PROTECTED)
+            || package_name(&resolved.name) == owner_package;
+        if !visible {
             continue;
         }
         matches.push(InheritedMethod {
@@ -369,19 +525,6 @@ pub fn find_overridden_methods(
         });
     }
     Ok(matches)
-}
-
-fn method_visible_from_subclass(
-    owner_name: &str,
-    method: &ResolvedMethod,
-    subclass_package: &str,
-) -> bool {
-    if method.access_flags.contains(MethodAccessFlags::PUBLIC)
-        || method.access_flags.contains(MethodAccessFlags::PROTECTED)
-    {
-        return true;
-    }
-    package_name(owner_name) == subclass_package
 }
 
 fn package_name(class_name: &str) -> &str {

@@ -54,7 +54,11 @@ Frame recomputation tracks constructor initialization independently of local
 variables. Overwriting local zero does not permit an early return. Calls that
 initialize a receiver replace all its aliases on the normal path and invalidate
 saved aliases on the exception path. A pending constructor flag that cannot be
-represented in a modern StackMapTable produces an explicit error.
+represented in a modern StackMapTable produces an explicit error. During
+`FrameComputationMode.RECOMPUTE` lowering, unreachable bytecode regions are
+normalized (`nop...athrow` with synthetic frames) and dead exception handlers
+are pruned; pre-Java-7 (`major < 51`) `jsr`/`ret` subroutines are analyzed
+polymorphically.
 
 Model-based recomputation checks the actual direct superclass and declared fields:
 before initialization, `putfield` must reference a field declared by the current
@@ -89,9 +93,10 @@ representation. Entries with extra fields use ordinary emission because the ZIP
 backend's raw-copy operation drops those fields. Unsupported comment encodings or
 extra fields may reject rewriting; the original archive stays intact.
 
-Exact duplicate names and names colliding after path normalization are rejected.
-Absolute paths, drive-prefixed paths, and parent traversal are rejected on every
-platform. Archives are not extracted to disk by these APIs.
+Exact duplicate names and names colliding after POSIX `'/'` path
+normalization (backslashes are rejected/normalized consistently across platforms)
+are rejected. Absolute paths, drive-prefixed paths, and parent traversal are
+rejected on every platform. Archives are not extracted to disk by these APIs.
 
 Default read/rewrite limits are 100,000 entries, 256 MiB decompressed per entry, and
 1 GiB total decompressed content. Python constructors expose `max_entries`,
@@ -112,10 +117,14 @@ duplicate binary names, preventing accidental dependence on ZIP entry order.
 
 ## Python ownership and packaging
 
-Mutable class, method, code, and constant-pool views share Rust-owned state. Member
-views can update their owning model; instruction list views support inspection,
-while structural instruction changes use transform APIs. Retain the owner when
-working with its views, and create separate models for independent edits.
+Mutable class, method, code, and constant-pool views share Rust-owned state and
+expose direct mutation APIs for fields, methods, interfaces, attributes,
+instructions, exception handlers, debug tables, and type annotations, while
+`pytecode.classfile.attributes` re-exports Rust-backed raw attribute and
+annotation classes. Structural mutations to a class or code model bump generation
+counters on child views so stale handles fail loudly rather than observing stale
+state; retain the owner when working with its views, and create separate models
+for independent edits.
 
 These views use `Rc<RefCell<...>>` and PyO3's unsendable classes. Use them only on
 their creating thread. The module explicitly requires the GIL (`gil_used = true`);
@@ -132,7 +141,8 @@ Development pins Rust 1.98.1, Python 3.14.7, uv 0.12.10, and maturin 1.15.0. Rus
 uses Windows raw-dylib support; the obsolete `generate-import-lib` feature was
 removed following the [migration guide](https://pyo3.rs/v0.29.2/migration).
 
-Source distributions use maturin's Git generator to retain every workspace member
-and preserve the meaning of `Cargo.lock`. Build release sdists from a checkout
-whose intended sources are tracked. `locked = true` also applies to builds from
-the source archive; no Git checkout is needed to build a wheel from that archive.
+Source distributions use maturin's Git generator with `[tool.maturin] exclude` to
+omit test fixtures, sample JARs, tests, docs, examples, fuzz targets, and helper
+tools while retaining all workspace crate manifests and `Cargo.lock` so `cargo`
+and `maturin` remain self-contained for isolated `locked = true` source builds;
+no Git checkout is needed to build a wheel from that archive.

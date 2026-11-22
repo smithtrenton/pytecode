@@ -49,7 +49,7 @@ fn instrumented_hello_world_bytes() -> TestResult<Vec<u8>> {
         .iter_mut()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_mut().expect("main should have code");
+    let code = main.code_mut().expect("main should have code");
     code.instructions.insert(
         0,
         CodeItem::Raw(Instruction::Simple {
@@ -175,7 +175,7 @@ fn rewrite_deobfuscation_removes_nops_and_trivial_gotos() -> TestResult<()> {
         .iter()
         .find(|method| method.name == "main")
         .expect("main method should exist");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(
         !code
             .instructions
@@ -188,5 +188,128 @@ fn rewrite_deobfuscation_removes_nops_and_trivial_gotos() -> TestResult<()> {
             .iter()
             .any(|item| { matches!(item, CodeItem::Branch(branch) if branch.opcode == 167) })
     );
+    Ok(())
+}
+
+#[test]
+fn rewrite_deobfuscation_preserves_sole_handler_nop_and_trailing_nop() -> TestResult<()> {
+    use pytecode_engine::constants::MethodAccessFlags;
+    use pytecode_engine::model::{ExceptionHandler, MethodModel};
+
+    let temp_dir = fresh_temp_dir("deobfuscate-protected-nops");
+    let jar_path = temp_dir.join("input.jar");
+    let out_path = temp_dir.join("output.jar");
+
+    let mut model = ClassModel::from_bytes(&fixture_bytes("HelloWorld.java", "HelloWorld.class"))?;
+    let try_start = Label::named("try_start");
+    let try_end = Label::named("try_end");
+    let handler_lbl = Label::named("handler");
+    let mut protected_code =
+        pytecode_engine::model::CodeModel::new(1, 1, pytecode_engine::model::DebugInfoState::Fresh);
+    protected_code.instructions = vec![
+        CodeItem::Label(try_start.clone()),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0,
+            offset: 0,
+        }),
+        CodeItem::Label(try_end.clone()),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xB1,
+            offset: 0,
+        }),
+        CodeItem::Label(handler_lbl.clone()),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xBF,
+            offset: 0,
+        }),
+    ];
+    protected_code.exception_handlers.push(ExceptionHandler {
+        start: try_start,
+        end: try_end,
+        handler: handler_lbl,
+        catch_type: None,
+    });
+
+    let mut trailing_code =
+        pytecode_engine::model::CodeModel::new(0, 1, pytecode_engine::model::DebugInfoState::Fresh);
+    let end_lbl = Label::named("end_lbl");
+    trailing_code.instructions = vec![
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xB1,
+            offset: 0,
+        }),
+        CodeItem::Label(end_lbl),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0,
+            offset: 0,
+        }),
+    ];
+
+    let mut trailing_model =
+        ClassModel::from_bytes(&fixture_bytes("HelloWorld.java", "HelloWorld.class"))?;
+    trailing_model.name = "TrailingNop".to_owned();
+    trailing_model.version = (49, 0);
+    trailing_model.methods.push(MethodModel::new(
+        MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+        "trailingNop".to_owned(),
+        "()V".to_owned(),
+        Some(trailing_code),
+        vec![],
+    ));
+
+    model.methods.push(MethodModel::new(
+        MethodAccessFlags::PUBLIC | MethodAccessFlags::STATIC,
+        "protectedTry".to_owned(),
+        "()V".to_owned(),
+        Some(protected_code),
+        vec![],
+    ));
+
+    let protected_bytes = model.to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)?;
+    let trailing_bytes = trailing_model.to_bytes()?;
+    make_jar(
+        &jar_path,
+        &[
+            ("HelloWorld.class", &protected_bytes),
+            ("TrailingNop.class", &trailing_bytes),
+        ],
+    )?;
+
+    let report = rewrite_deobfuscation(&jar_path, &out_path)?;
+    assert_eq!(report.nops_removed, 0);
+
+    let rewritten = pytecode_archive::JarFile::open(&out_path)?;
+    let entry = rewritten
+        .entries
+        .iter()
+        .find(|e| e.filename == "HelloWorld.class")
+        .unwrap();
+    let out_model = ClassModel::from_bytes(&entry.bytes)?;
+    let protected = out_model
+        .methods
+        .iter()
+        .find(|m| m.name == "protectedTry")
+        .unwrap();
+    assert!(
+        protected
+            .code()
+            .unwrap()
+            .instructions
+            .iter()
+            .any(|i| matches!(i, CodeItem::Raw(Instruction::Simple { opcode: 0, .. })))
+    );
+
+    let trailing_entry = rewritten
+        .entries
+        .iter()
+        .find(|e| e.filename == "TrailingNop.class")
+        .unwrap();
+    let out_trailing_model = ClassModel::from_bytes(&trailing_entry.bytes)?;
+    let trailing = out_trailing_model
+        .methods
+        .iter()
+        .find(|m| m.name == "trailingNop")
+        .unwrap();
+    assert!(!trailing.code().unwrap().instructions.is_empty());
     Ok(())
 }

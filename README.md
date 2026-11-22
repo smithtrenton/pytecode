@@ -71,7 +71,7 @@ updated_bytes = model.to_bytes()
 Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 ```
 
-Import `FrameComputationMode` from `pytecode.archive` and use `to_bytes_with_options(frame_mode=FrameComputationMode.RECOMPUTE)` when an edit changes control flow or stack/local layout.
+Import `FrameComputationMode` and `DebugInfoPolicy` from `pytecode.model` (or re-exported in `pytecode.archive`), and use `to_bytes_with_options(frame_mode=FrameComputationMode.RECOMPUTE)` when an edit changes control flow or stack/local layout.
 
 ## JAR rewriting example
 
@@ -119,23 +119,24 @@ Top-level exports:
 
 - `pytecode.ClassReader` / `pytecode.ClassWriter` for Rust-backed raw classfile parsing and emission.
 - `pytecode.ClassModel` for Rust-owned mutable editing.
-- `pytecode.JarFile` for Rust-backed archive reads and rewrite workflows.
+- `pytecode.JarFile` for archive reads, mutation, and safe rewrite-to-disk.
+- `pytecode.MalformedClassException` for classfile parsing, validation, and lowering failures.
 
 Canonical semantic modules:
 
 - `pytecode.classfile` for raw Rust-backed classfile reading and writing.
-- `pytecode.model` for editable class models, typed code items, labels, and code metadata wrappers.
+- `pytecode.model` for editable class, field, method, and code models (including direct instruction, attribute, field, method, and constant-pool mutation, `FrameComputationMode`, `DebugInfoPolicy`, and `MalformedClassException`).
 
 Supported submodules:
 
-- `pytecode.transforms` for Rust-backed class, field, and method transforms.
+- `pytecode.transforms` for Rust-backed class, field, method, and code transforms.
 - `pytecode.analysis` for Rust-backed verification entry points.
 - `pytecode.analysis.verify` for structural validation and diagnostics.
 - `pytecode.analysis.hierarchy` for type and override resolution helpers.
-- `pytecode.classfile.attributes` for typed raw attribute dataclasses.
+- `pytecode.classfile.attributes` for Rust-backed raw attribute and annotation classes.
 - `pytecode.classfile.bytecode` for opcode and array-type enums.
 - `pytecode.classfile.constants` for access flags, opcodes, and verifier constants.
-- `pytecode.model` for editable class, field, method, and code models.
+- `pytecode.archive` for JAR archive reading/writing and re-exported policy enums.
 
 ## Documentation
 
@@ -338,7 +339,7 @@ Build source and wheel distributions locally:
 uv build
 ```
 
-`uv build` produces both an sdist and a platform wheel for the current machine.
+`uv build` produces both an sdist and a platform wheel for the current machine. The sdist excludes test fixtures, sample JARs, tests, docs, examples, and fuzz inputs while retaining all workspace crates needed for isolated offline builds (`tools\check_sdist.py`).
 
 Profile isolated JAR-processing stages without `run.py`'s output overhead:
 

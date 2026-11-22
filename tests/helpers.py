@@ -14,12 +14,13 @@ TEST_RESOURCES = Path(__file__).resolve().parents[1] / "crates/pytecode-engine/f
 def _jdk_tool(name: str) -> str:
     """Return the path to a JDK tool, preferring ``JAVA_HOME`` when present."""
 
-    java_home = os.environ.get("JAVA_HOME")
+    java_home = (os.environ.get("JAVA_HOME") or "").strip()
     if java_home:
         bin_dir = Path(java_home) / "bin"
-        for suffix in ("", ".exe"):
+        suffixes = (".exe", "") if os.name == "nt" else ("", ".exe")
+        for suffix in suffixes:
             candidate = bin_dir / f"{name}{suffix}"
-            if candidate.exists():
+            if candidate.is_file():
                 return str(candidate)
     return name
 
@@ -52,7 +53,17 @@ def compile_java_resource(tmp_path: Path, resource_name: str, *, release: int = 
 
     source_path = TEST_RESOURCES / resource_name
     classes_dir = compile_java_sources(tmp_path, [source_path], release=release)
-    return classes_dir / Path(resource_name).with_suffix(".class").name
+    target_name = Path(resource_name).with_suffix(".class").name
+    direct = classes_dir / target_name
+    if direct.is_file():
+        return direct
+    matches = sorted(
+        (path for path in classes_dir.rglob(target_name) if path.is_file()),
+        key=lambda path: path.relative_to(classes_dir).as_posix(),
+    )
+    if matches:
+        return matches[0]
+    raise AssertionError(f"Java resource {resource_name!r} did not emit {target_name!r}")
 
 
 def compile_java_resource_classes(tmp_path: Path, resource_name: str, *, release: int = 8) -> list[Path]:

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers import _jdk_tool, compile_java_sources
+from helpers import TEST_RESOURCES, _jdk_tool, compile_java_sources
 
 from pytecode.archive import FrameComputationMode
 from pytecode.classfile import ClassReader, ClassWriter
@@ -15,8 +15,11 @@ pytestmark = pytest.mark.skipif(os.environ.get("PYTECODE_TEST_JAVA26") != "1", r
 
 
 def test_java26_roundtrip_recompute_and_execute(tmp_path: Path):
-    root = Path("crates/pytecode-engine/fixtures/java")
-    classes = compile_java_sources(tmp_path, [root / "Java25Features.java", root / "FrameRegression.java"], release=26)
+    classes = compile_java_sources(
+        tmp_path,
+        [TEST_RESOURCES / "Java25Features.java", TEST_RESOURCES / "FrameRegression.java"],
+        release=26,
+    )
     for path in classes.rglob("*.class"):
         original = path.read_bytes()
         raw = ClassReader.from_bytes(original).class_info

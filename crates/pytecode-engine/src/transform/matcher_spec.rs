@@ -7,13 +7,15 @@
 
 use crate::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
 use crate::model::{ClassModel, CodeItem, FieldModel, LdcValue, MethodModel};
+use crate::modified_utf8::JavaString;
+use crate::raw::Instruction;
 use regex::Regex;
 use std::fmt;
 
 /// Build a regex that matches the entire string (Python ``re.fullmatch`` semantics).
-fn fullmatch_regex(pattern: &str) -> Option<Regex> {
-    let anchored = format!("^(?:{pattern})$");
-    Regex::new(&anchored).ok()
+pub(crate) fn fullmatch_regex(pattern: &str) -> std::result::Result<Regex, regex::Error> {
+    let anchored = format!(r"\A(?:{pattern})\z");
+    Regex::new(&anchored)
 }
 
 // ---------------------------------------------------------------------------
@@ -33,7 +35,7 @@ pub enum ClassMatcherSpec {
     AccessAll(u16),
     /// Match when **any** of the given access flags are set.
     AccessAny(u16),
-    /// Match classes whose `access_flags & (PUBLIC)` is zero.
+    /// Match package-private classes (neither PUBLIC nor MODULE).
     IsPackagePrivate,
     /// Match by exact super-class name.
     Extends(String),
@@ -59,18 +61,15 @@ impl ClassMatcherSpec {
         match self {
             Self::Any => true,
             Self::Named(name) => model.name == *name,
-            Self::NameMatches(pattern) => fullmatch_regex(pattern)
-                .map(|re| re.is_match(&model.name))
-                .unwrap_or(false),
-            Self::AccessAll(flags) => {
-                let f = ClassAccessFlags::from_bits_truncate(*flags);
-                model.access_flags.contains(f)
+            Self::NameMatches(pattern) => {
+                fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&model.name))
             }
-            Self::AccessAny(flags) => {
-                let f = ClassAccessFlags::from_bits_truncate(*flags);
-                model.access_flags.intersects(f)
+            Self::AccessAll(flags) => (model.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (model.access_flags.bits() & *flags) != 0,
+            Self::IsPackagePrivate => {
+                !model.access_flags.contains(ClassAccessFlags::PUBLIC)
+                    && !model.access_flags.contains(ClassAccessFlags::MODULE)
             }
-            Self::IsPackagePrivate => !model.access_flags.contains(ClassAccessFlags::PUBLIC),
             Self::Extends(name) => model.super_name.as_deref() == Some(name.as_str()),
             Self::Implements(name) => model.interfaces.iter().any(|i| i == name),
             Self::Version(major) => model.version.0 == *major,
@@ -80,6 +79,11 @@ impl ClassMatcherSpec {
             Self::Or(specs) => specs.iter().any(|s| s.matches(model)),
             Self::Not(spec) => !spec.matches(model),
         }
+    }
+
+    /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
+    pub fn try_compile(&self) -> std::result::Result<CompiledClassMatcher, regex::Error> {
+        CompiledClassMatcher::try_from_spec(self)
     }
 
     /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
@@ -164,21 +168,15 @@ impl FieldMatcherSpec {
         match self {
             Self::Any => true,
             Self::Named(name) => field.name == *name,
-            Self::NameMatches(pattern) => fullmatch_regex(pattern)
-                .map(|re| re.is_match(&field.name))
-                .unwrap_or(false),
+            Self::NameMatches(pattern) => {
+                fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&field.name))
+            }
             Self::Descriptor(desc) => field.descriptor == *desc,
-            Self::DescriptorMatches(pattern) => fullmatch_regex(pattern)
-                .map(|re| re.is_match(&field.descriptor))
-                .unwrap_or(false),
-            Self::AccessAll(flags) => {
-                let f = FieldAccessFlags::from_bits_truncate(*flags);
-                field.access_flags.contains(f)
+            Self::DescriptorMatches(pattern) => {
+                fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&field.descriptor))
             }
-            Self::AccessAny(flags) => {
-                let f = FieldAccessFlags::from_bits_truncate(*flags);
-                field.access_flags.intersects(f)
-            }
+            Self::AccessAll(flags) => (field.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (field.access_flags.bits() & *flags) != 0,
             Self::IsPackagePrivate => {
                 let visibility = FieldAccessFlags::PUBLIC
                     | FieldAccessFlags::PRIVATE
@@ -189,6 +187,11 @@ impl FieldMatcherSpec {
             Self::Or(specs) => specs.iter().any(|s| s.matches(field)),
             Self::Not(spec) => !spec.matches(field),
         }
+    }
+
+    /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
+    pub fn try_compile(&self) -> std::result::Result<CompiledFieldMatcher, regex::Error> {
+        CompiledFieldMatcher::try_from_spec(self)
     }
 
     /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
@@ -278,35 +281,36 @@ impl MethodMatcherSpec {
         match self {
             Self::Any => true,
             Self::Named(name) => method.name == *name,
-            Self::NameMatches(pattern) => fullmatch_regex(pattern)
-                .map(|re| re.is_match(&method.name))
-                .unwrap_or(false),
+            Self::NameMatches(pattern) => {
+                fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&method.name))
+            }
             Self::Descriptor(desc) => method.descriptor == *desc,
-            Self::DescriptorMatches(pattern) => fullmatch_regex(pattern)
-                .map(|re| re.is_match(&method.descriptor))
-                .unwrap_or(false),
-            Self::AccessAll(flags) => {
-                let f = MethodAccessFlags::from_bits_truncate(*flags);
-                method.access_flags.contains(f)
+            Self::DescriptorMatches(pattern) => {
+                fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&method.descriptor))
             }
-            Self::AccessAny(flags) => {
-                let f = MethodAccessFlags::from_bits_truncate(*flags);
-                method.access_flags.intersects(f)
-            }
+            Self::AccessAll(flags) => (method.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (method.access_flags.bits() & *flags) != 0,
             Self::IsPackagePrivate => {
                 let visibility = MethodAccessFlags::PUBLIC
                     | MethodAccessFlags::PRIVATE
                     | MethodAccessFlags::PROTECTED;
                 !method.access_flags.intersects(visibility)
             }
-            Self::HasCode => method.code.is_some(),
+            Self::HasCode => method.has_code(),
             Self::IsConstructor => method.name == "<init>",
             Self::IsStaticInitializer => method.name == "<clinit>",
-            Self::Returns(ret_desc) => extract_return_descriptor(&method.descriptor) == *ret_desc,
+            Self::Returns(ret_desc) => {
+                extract_return_descriptor(&method.descriptor) == Some(ret_desc.as_str())
+            }
             Self::And(specs) => specs.iter().all(|s| s.matches(method)),
             Self::Or(specs) => specs.iter().any(|s| s.matches(method)),
             Self::Not(spec) => !spec.matches(method),
         }
+    }
+
+    /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
+    pub fn try_compile(&self) -> std::result::Result<CompiledMethodMatcher, regex::Error> {
+        CompiledMethodMatcher::try_from_spec(self)
     }
 
     /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
@@ -362,14 +366,26 @@ impl fmt::Display for MethodMatcherSpec {
 pub(crate) fn insn_matches_opcode(item: &CodeItem, opcode: u8) -> bool {
     match item {
         CodeItem::Label(_) => false,
-        CodeItem::Raw(insn) => insn.opcode() == opcode,
+        CodeItem::Raw(insn) => {
+            insn.opcode() == opcode || matches!(insn, Instruction::Wide(w) if w.opcode == opcode)
+        }
         CodeItem::Field(insn) => insn.opcode == opcode,
         CodeItem::Method(insn) => insn.opcode == opcode,
         CodeItem::InterfaceMethod(_) => opcode == 0xB9,
         CodeItem::Type(insn) => insn.opcode == opcode,
-        CodeItem::Var(insn) => insn.opcode == opcode,
-        CodeItem::IInc(_) => opcode == 0x84,
-        CodeItem::Ldc(_) => matches!(opcode, 0x12..=0x14),
+        CodeItem::Var(insn) => {
+            insn.opcode == opcode || (opcode == 0xC4 && insn.slot > u8::MAX as u16)
+        }
+        CodeItem::IInc(insn) => {
+            opcode == 0x84
+                || (opcode == 0xC4
+                    && (insn.slot > u8::MAX as u16 || i8::try_from(insn.value).is_err()))
+        }
+        CodeItem::Ldc(insn) => match &insn.value {
+            LdcValue::Long(_) | LdcValue::DoubleBits(_) => opcode == 0x14,
+            LdcValue::Dynamic(d) if matches!(d.descriptor.as_str(), "J" | "D") => opcode == 0x14,
+            _ => matches!(opcode, 0x12 | 0x13),
+        },
         CodeItem::InvokeDynamic(_) => opcode == 0xBA,
         CodeItem::MultiANewArray(_) => opcode == 0xC5,
         CodeItem::Branch(insn) => insn.opcode == opcode,
@@ -431,11 +447,11 @@ pub enum InsnMatcherSpec {
     },
     /// Match type descriptor exactly.
     TypeDescriptor(String),
-    /// Match string LDC values exactly.
-    LdcString(String),
+    /// Match string LDC values exactly (lossless Java UTF-16).
+    LdcString(JavaString),
     /// Match class LDC values exactly (internal JVM name).
     LdcClass(String),
-    /// Match variable slot exactly.
+    /// Match variable slot (Var or IInc) exactly.
     VarSlot(u16),
     /// Match field owner by regex.
     FieldOwnerMatches(String),
@@ -537,38 +553,47 @@ impl InsnMatcherSpec {
                 item,
                 CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == expected)
             ),
-            Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
+            Self::VarSlot(slot) => match item {
+                CodeItem::Var(insn) => insn.slot == *slot,
+                CodeItem::IInc(insn) => insn.slot == *slot,
+                _ => false,
+            },
             Self::FieldOwnerMatches(pattern) => match item {
-                CodeItem::Field(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.owner))
-                    .unwrap_or(false),
+                CodeItem::Field(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.owner))
+                }
                 _ => false,
             },
             Self::MethodOwnerMatches(pattern) => match item {
-                CodeItem::Method(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.owner))
-                    .unwrap_or(false),
-                CodeItem::InterfaceMethod(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.owner))
-                    .unwrap_or(false),
+                CodeItem::Method(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.owner))
+                }
+                CodeItem::InterfaceMethod(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.owner))
+                }
                 _ => false,
             },
             Self::MethodNameMatches(pattern) => match item {
-                CodeItem::Method(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.name))
-                    .unwrap_or(false),
-                CodeItem::InterfaceMethod(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.name))
-                    .unwrap_or(false),
-                CodeItem::InvokeDynamic(insn) => fullmatch_regex(pattern)
-                    .map(|re| re.is_match(&insn.name))
-                    .unwrap_or(false),
+                CodeItem::Method(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.name))
+                }
+                CodeItem::InterfaceMethod(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.name))
+                }
+                CodeItem::InvokeDynamic(insn) => {
+                    fullmatch_regex(pattern).is_ok_and(|re| re.is_match(&insn.name))
+                }
                 _ => false,
             },
             Self::And(specs) => specs.iter().all(|spec| spec.matches(item)),
             Self::Or(specs) => specs.iter().any(|spec| spec.matches(item)),
             Self::Not(spec) => !spec.matches(item),
         }
+    }
+
+    /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
+    pub fn try_compile(&self) -> std::result::Result<CompiledInsnMatcher, regex::Error> {
+        CompiledInsnMatcher::try_from_spec(self)
     }
 
     /// Build a compiled form with pre-compiled regexes for hot-path evaluation.
@@ -609,7 +634,9 @@ impl fmt::Display for InsnMatcherSpec {
                 descriptor,
             } => write!(f, "insn_method({owner:?}, {name:?}, {descriptor:?})"),
             Self::TypeDescriptor(descriptor) => write!(f, "insn_type_descriptor({descriptor:?})"),
-            Self::LdcString(value) => write!(f, "insn_ldc_string({value:?})"),
+            Self::LdcString(value) => {
+                write!(f, "insn_ldc_string({:?})", value.to_string_lossy())
+            }
             Self::LdcClass(value) => write!(f, "insn_ldc_class({value:?})"),
             Self::VarSlot(slot) => write!(f, "insn_var_slot({slot})"),
             Self::FieldOwnerMatches(pattern) => write!(f, "insn_field_owner_matches({pattern:?})"),
@@ -648,13 +675,14 @@ impl fmt::Display for InsnMatcherSpec {
 
 /// Extract the return-type descriptor from a method descriptor string.
 ///
-/// Given `(Ljava/lang/String;I)V`, returns `"V"`.
-fn extract_return_descriptor(descriptor: &str) -> &str {
-    // Method descriptor grammar: '(' ParameterDescriptor* ')' ReturnDescriptor
-    match descriptor.rfind(')') {
-        Some(pos) => &descriptor[pos + 1..],
-        None => descriptor,
+/// Returns `None` for malformed descriptors lacking leading `(` or `)` or return type.
+fn extract_return_descriptor(descriptor: &str) -> Option<&str> {
+    if !descriptor.starts_with('(') {
+        return None;
     }
+    let pos = descriptor.rfind(')')?;
+    let ret = &descriptor[pos + 1..];
+    if ret.is_empty() { None } else { Some(ret) }
 }
 
 // ---------------------------------------------------------------------------
@@ -666,8 +694,8 @@ pub enum CompiledClassMatcher {
     Any,
     Named(String),
     NameMatches(Regex),
-    AccessAll(ClassAccessFlags),
-    AccessAny(ClassAccessFlags),
+    AccessAll(u16),
+    AccessAny(u16),
     IsPackagePrivate,
     Extends(String),
     Implements(String),
@@ -680,30 +708,39 @@ pub enum CompiledClassMatcher {
 }
 
 impl CompiledClassMatcher {
-    /// Compile from a spec, panicking on invalid regex patterns.
-    pub fn from_spec(spec: &ClassMatcherSpec) -> Self {
-        match spec {
+    /// Compile from a spec, returning a regex error on invalid patterns.
+    pub fn try_from_spec(spec: &ClassMatcherSpec) -> std::result::Result<Self, regex::Error> {
+        Ok(match spec {
             ClassMatcherSpec::Any => Self::Any,
             ClassMatcherSpec::Named(n) => Self::Named(n.clone()),
-            ClassMatcherSpec::NameMatches(p) => {
-                Self::NameMatches(fullmatch_regex(p).expect("invalid regex in ClassMatcherSpec"))
-            }
-            ClassMatcherSpec::AccessAll(f) => {
-                Self::AccessAll(ClassAccessFlags::from_bits_truncate(*f))
-            }
-            ClassMatcherSpec::AccessAny(f) => {
-                Self::AccessAny(ClassAccessFlags::from_bits_truncate(*f))
-            }
+            ClassMatcherSpec::NameMatches(p) => Self::NameMatches(fullmatch_regex(p)?),
+            ClassMatcherSpec::AccessAll(f) => Self::AccessAll(*f),
+            ClassMatcherSpec::AccessAny(f) => Self::AccessAny(*f),
             ClassMatcherSpec::IsPackagePrivate => Self::IsPackagePrivate,
             ClassMatcherSpec::Extends(n) => Self::Extends(n.clone()),
             ClassMatcherSpec::Implements(n) => Self::Implements(n.clone()),
             ClassMatcherSpec::Version(v) => Self::Version(*v),
             ClassMatcherSpec::VersionAtLeast(v) => Self::VersionAtLeast(*v),
             ClassMatcherSpec::VersionBelow(v) => Self::VersionBelow(*v),
-            ClassMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
-            ClassMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
-            ClassMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
-        }
+            ClassMatcherSpec::And(specs) => Self::And(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            ClassMatcherSpec::Or(specs) => Self::Or(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            ClassMatcherSpec::Not(spec) => Self::Not(Box::new(Self::try_from_spec(spec)?)),
+        })
+    }
+
+    /// Compile from a spec, panicking on invalid regex patterns.
+    pub fn from_spec(spec: &ClassMatcherSpec) -> Self {
+        Self::try_from_spec(spec).expect("invalid regex in ClassMatcherSpec")
     }
 
     /// Evaluate against a [`ClassModel`].
@@ -712,9 +749,12 @@ impl CompiledClassMatcher {
             Self::Any => true,
             Self::Named(name) => model.name == *name,
             Self::NameMatches(re) => re.is_match(&model.name),
-            Self::AccessAll(flags) => model.access_flags.contains(*flags),
-            Self::AccessAny(flags) => model.access_flags.intersects(*flags),
-            Self::IsPackagePrivate => !model.access_flags.contains(ClassAccessFlags::PUBLIC),
+            Self::AccessAll(flags) => (model.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (model.access_flags.bits() & *flags) != 0,
+            Self::IsPackagePrivate => {
+                !model.access_flags.contains(ClassAccessFlags::PUBLIC)
+                    && !model.access_flags.contains(ClassAccessFlags::MODULE)
+            }
             Self::Extends(name) => model.super_name.as_deref() == Some(name.as_str()),
             Self::Implements(name) => model.interfaces.iter().any(|i| i == name),
             Self::Version(major) => model.version.0 == *major,
@@ -734,8 +774,8 @@ pub enum CompiledFieldMatcher {
     NameMatches(Regex),
     Descriptor(String),
     DescriptorMatches(Regex),
-    AccessAll(FieldAccessFlags),
-    AccessAny(FieldAccessFlags),
+    AccessAll(u16),
+    AccessAny(u16),
     IsPackagePrivate,
     And(Vec<CompiledFieldMatcher>),
     Or(Vec<CompiledFieldMatcher>),
@@ -743,28 +783,34 @@ pub enum CompiledFieldMatcher {
 }
 
 impl CompiledFieldMatcher {
-    pub fn from_spec(spec: &FieldMatcherSpec) -> Self {
-        match spec {
+    pub fn try_from_spec(spec: &FieldMatcherSpec) -> std::result::Result<Self, regex::Error> {
+        Ok(match spec {
             FieldMatcherSpec::Any => Self::Any,
             FieldMatcherSpec::Named(n) => Self::Named(n.clone()),
-            FieldMatcherSpec::NameMatches(p) => {
-                Self::NameMatches(fullmatch_regex(p).expect("invalid regex in FieldMatcherSpec"))
-            }
+            FieldMatcherSpec::NameMatches(p) => Self::NameMatches(fullmatch_regex(p)?),
             FieldMatcherSpec::Descriptor(d) => Self::Descriptor(d.clone()),
-            FieldMatcherSpec::DescriptorMatches(p) => Self::DescriptorMatches(
-                fullmatch_regex(p).expect("invalid regex in FieldMatcherSpec"),
-            ),
-            FieldMatcherSpec::AccessAll(f) => {
-                Self::AccessAll(FieldAccessFlags::from_bits_truncate(*f))
-            }
-            FieldMatcherSpec::AccessAny(f) => {
-                Self::AccessAny(FieldAccessFlags::from_bits_truncate(*f))
-            }
+            FieldMatcherSpec::DescriptorMatches(p) => Self::DescriptorMatches(fullmatch_regex(p)?),
+            FieldMatcherSpec::AccessAll(f) => Self::AccessAll(*f),
+            FieldMatcherSpec::AccessAny(f) => Self::AccessAny(*f),
             FieldMatcherSpec::IsPackagePrivate => Self::IsPackagePrivate,
-            FieldMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
-            FieldMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
-            FieldMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
-        }
+            FieldMatcherSpec::And(specs) => Self::And(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            FieldMatcherSpec::Or(specs) => Self::Or(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            FieldMatcherSpec::Not(spec) => Self::Not(Box::new(Self::try_from_spec(spec)?)),
+        })
+    }
+
+    pub fn from_spec(spec: &FieldMatcherSpec) -> Self {
+        Self::try_from_spec(spec).expect("invalid regex in FieldMatcherSpec")
     }
 
     pub fn matches(&self, field: &FieldModel) -> bool {
@@ -774,8 +820,8 @@ impl CompiledFieldMatcher {
             Self::NameMatches(re) => re.is_match(&field.name),
             Self::Descriptor(desc) => field.descriptor == *desc,
             Self::DescriptorMatches(re) => re.is_match(&field.descriptor),
-            Self::AccessAll(flags) => field.access_flags.contains(*flags),
-            Self::AccessAny(flags) => field.access_flags.intersects(*flags),
+            Self::AccessAll(flags) => (field.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (field.access_flags.bits() & *flags) != 0,
             Self::IsPackagePrivate => {
                 let visibility = FieldAccessFlags::PUBLIC
                     | FieldAccessFlags::PRIVATE
@@ -796,8 +842,8 @@ pub enum CompiledMethodMatcher {
     NameMatches(Regex),
     Descriptor(String),
     DescriptorMatches(Regex),
-    AccessAll(MethodAccessFlags),
-    AccessAny(MethodAccessFlags),
+    AccessAll(u16),
+    AccessAny(u16),
     IsPackagePrivate,
     HasCode,
     IsConstructor,
@@ -809,32 +855,38 @@ pub enum CompiledMethodMatcher {
 }
 
 impl CompiledMethodMatcher {
-    pub fn from_spec(spec: &MethodMatcherSpec) -> Self {
-        match spec {
+    pub fn try_from_spec(spec: &MethodMatcherSpec) -> std::result::Result<Self, regex::Error> {
+        Ok(match spec {
             MethodMatcherSpec::Any => Self::Any,
             MethodMatcherSpec::Named(n) => Self::Named(n.clone()),
-            MethodMatcherSpec::NameMatches(p) => {
-                Self::NameMatches(fullmatch_regex(p).expect("invalid regex in MethodMatcherSpec"))
-            }
+            MethodMatcherSpec::NameMatches(p) => Self::NameMatches(fullmatch_regex(p)?),
             MethodMatcherSpec::Descriptor(d) => Self::Descriptor(d.clone()),
-            MethodMatcherSpec::DescriptorMatches(p) => Self::DescriptorMatches(
-                fullmatch_regex(p).expect("invalid regex in MethodMatcherSpec"),
-            ),
-            MethodMatcherSpec::AccessAll(f) => {
-                Self::AccessAll(MethodAccessFlags::from_bits_truncate(*f))
-            }
-            MethodMatcherSpec::AccessAny(f) => {
-                Self::AccessAny(MethodAccessFlags::from_bits_truncate(*f))
-            }
+            MethodMatcherSpec::DescriptorMatches(p) => Self::DescriptorMatches(fullmatch_regex(p)?),
+            MethodMatcherSpec::AccessAll(f) => Self::AccessAll(*f),
+            MethodMatcherSpec::AccessAny(f) => Self::AccessAny(*f),
             MethodMatcherSpec::IsPackagePrivate => Self::IsPackagePrivate,
             MethodMatcherSpec::HasCode => Self::HasCode,
             MethodMatcherSpec::IsConstructor => Self::IsConstructor,
             MethodMatcherSpec::IsStaticInitializer => Self::IsStaticInitializer,
             MethodMatcherSpec::Returns(d) => Self::Returns(d.clone()),
-            MethodMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
-            MethodMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
-            MethodMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
-        }
+            MethodMatcherSpec::And(specs) => Self::And(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            MethodMatcherSpec::Or(specs) => Self::Or(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            MethodMatcherSpec::Not(spec) => Self::Not(Box::new(Self::try_from_spec(spec)?)),
+        })
+    }
+
+    pub fn from_spec(spec: &MethodMatcherSpec) -> Self {
+        Self::try_from_spec(spec).expect("invalid regex in MethodMatcherSpec")
     }
 
     pub fn matches(&self, method: &MethodModel) -> bool {
@@ -844,18 +896,20 @@ impl CompiledMethodMatcher {
             Self::NameMatches(re) => re.is_match(&method.name),
             Self::Descriptor(desc) => method.descriptor == *desc,
             Self::DescriptorMatches(re) => re.is_match(&method.descriptor),
-            Self::AccessAll(flags) => method.access_flags.contains(*flags),
-            Self::AccessAny(flags) => method.access_flags.intersects(*flags),
+            Self::AccessAll(flags) => (method.access_flags.bits() & *flags) == *flags,
+            Self::AccessAny(flags) => (method.access_flags.bits() & *flags) != 0,
             Self::IsPackagePrivate => {
                 let visibility = MethodAccessFlags::PUBLIC
                     | MethodAccessFlags::PRIVATE
                     | MethodAccessFlags::PROTECTED;
                 !method.access_flags.intersects(visibility)
             }
-            Self::HasCode => method.code.is_some(),
+            Self::HasCode => method.has_code(),
             Self::IsConstructor => method.name == "<init>",
             Self::IsStaticInitializer => method.name == "<clinit>",
-            Self::Returns(ret_desc) => extract_return_descriptor(&method.descriptor) == *ret_desc,
+            Self::Returns(ret_desc) => {
+                extract_return_descriptor(&method.descriptor) == Some(ret_desc.as_str())
+            }
             Self::And(matchers) => matchers.iter().all(|m| m.matches(method)),
             Self::Or(matchers) => matchers.iter().any(|m| m.matches(method)),
             Self::Not(matcher) => !matcher.matches(method),
@@ -892,7 +946,7 @@ pub enum CompiledInsnMatcher {
         descriptor: String,
     },
     TypeDescriptor(String),
-    LdcString(String),
+    LdcString(JavaString),
     LdcClass(String),
     VarSlot(u16),
     FieldOwnerMatches(Regex),
@@ -904,8 +958,8 @@ pub enum CompiledInsnMatcher {
 }
 
 impl CompiledInsnMatcher {
-    pub fn from_spec(spec: &InsnMatcherSpec) -> Self {
-        match spec {
+    pub fn try_from_spec(spec: &InsnMatcherSpec) -> std::result::Result<Self, regex::Error> {
+        Ok(match spec {
             InsnMatcherSpec::Any => Self::Any,
             InsnMatcherSpec::Opcode(opcode) => Self::Opcode(*opcode),
             InsnMatcherSpec::OpcodeAny(opcodes) => Self::OpcodeAny(opcodes.clone()),
@@ -948,19 +1002,33 @@ impl CompiledInsnMatcher {
             InsnMatcherSpec::LdcString(value) => Self::LdcString(value.clone()),
             InsnMatcherSpec::LdcClass(value) => Self::LdcClass(value.clone()),
             InsnMatcherSpec::VarSlot(slot) => Self::VarSlot(*slot),
-            InsnMatcherSpec::FieldOwnerMatches(pattern) => Self::FieldOwnerMatches(
-                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
+            InsnMatcherSpec::FieldOwnerMatches(pattern) => {
+                Self::FieldOwnerMatches(fullmatch_regex(pattern)?)
+            }
+            InsnMatcherSpec::MethodOwnerMatches(pattern) => {
+                Self::MethodOwnerMatches(fullmatch_regex(pattern)?)
+            }
+            InsnMatcherSpec::MethodNameMatches(pattern) => {
+                Self::MethodNameMatches(fullmatch_regex(pattern)?)
+            }
+            InsnMatcherSpec::And(specs) => Self::And(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
             ),
-            InsnMatcherSpec::MethodOwnerMatches(pattern) => Self::MethodOwnerMatches(
-                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
+            InsnMatcherSpec::Or(specs) => Self::Or(
+                specs
+                    .iter()
+                    .map(Self::try_from_spec)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
             ),
-            InsnMatcherSpec::MethodNameMatches(pattern) => Self::MethodNameMatches(
-                fullmatch_regex(pattern).expect("invalid regex in InsnMatcherSpec"),
-            ),
-            InsnMatcherSpec::And(specs) => Self::And(specs.iter().map(Self::from_spec).collect()),
-            InsnMatcherSpec::Or(specs) => Self::Or(specs.iter().map(Self::from_spec).collect()),
-            InsnMatcherSpec::Not(spec) => Self::Not(Box::new(Self::from_spec(spec))),
-        }
+            InsnMatcherSpec::Not(spec) => Self::Not(Box::new(Self::try_from_spec(spec)?)),
+        })
+    }
+
+    pub fn from_spec(spec: &InsnMatcherSpec) -> Self {
+        Self::try_from_spec(spec).expect("invalid regex in InsnMatcherSpec")
     }
 
     pub fn matches(&self, item: &CodeItem) -> bool {
@@ -1047,7 +1115,11 @@ impl CompiledInsnMatcher {
                 item,
                 CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == expected)
             ),
-            Self::VarSlot(slot) => matches!(item, CodeItem::Var(insn) if insn.slot == *slot),
+            Self::VarSlot(slot) => match item {
+                CodeItem::Var(insn) => insn.slot == *slot,
+                CodeItem::IInc(insn) => insn.slot == *slot,
+                _ => false,
+            },
             Self::FieldOwnerMatches(regex) => {
                 matches!(item, CodeItem::Field(insn) if regex.is_match(&insn.owner))
             }
@@ -1511,17 +1583,115 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // extract_return_descriptor
+    // extract_return_descriptor & Step 4A invariants
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_extract_return_descriptor() {
-        assert_eq!(extract_return_descriptor("()V"), "V");
-        assert_eq!(extract_return_descriptor("(II)I"), "I");
+        assert_eq!(extract_return_descriptor("()V"), Some("V"));
+        assert_eq!(extract_return_descriptor("(II)I"), Some("I"));
         assert_eq!(
             extract_return_descriptor("(Ljava/lang/String;)Ljava/lang/Object;"),
-            "Ljava/lang/Object;"
+            Some("Ljava/lang/Object;")
         );
-        assert_eq!(extract_return_descriptor("()[B"), "[B");
+        assert_eq!(extract_return_descriptor("()[B"), Some("[B"));
+        assert_eq!(extract_return_descriptor(""), None);
+        assert_eq!(extract_return_descriptor("V"), None);
+        assert_eq!(extract_return_descriptor("()"), None);
+    }
+
+    #[test]
+    fn regex_fullmatch_rejects_trailing_newline_and_try_compile_reports_errors() {
+        let mut model = sample_class();
+        model.name = "test/Sample\n".into();
+        let spec = ClassMatcherSpec::NameMatches("test/.*".into());
+        assert!(!spec.matches(&model));
+        assert!(!spec.try_compile().unwrap().matches(&model));
+
+        let bad = ClassMatcherSpec::NameMatches("[unclosed".into());
+        assert!(bad.try_compile().is_err());
+        assert!(
+            FieldMatcherSpec::DescriptorMatches("[unclosed".into())
+                .try_compile()
+                .is_err()
+        );
+        assert!(
+            MethodMatcherSpec::NameMatches("[unclosed".into())
+                .try_compile()
+                .is_err()
+        );
+        assert!(
+            InsnMatcherSpec::MethodNameMatches("[unclosed".into())
+                .try_compile()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn package_private_excludes_module_and_raw_bits_are_not_truncated() {
+        let mut model = sample_class();
+        model.access_flags = ClassAccessFlags::MODULE;
+        assert!(!ClassMatcherSpec::IsPackagePrivate.matches(&model));
+        assert!(!ClassMatcherSpec::IsPackagePrivate.compile().matches(&model));
+
+        // 0x8000 on class is MODULE; test raw bitmask round-trip on field/method
+        let raw_bit = 0x4000_u16; // SYNTHETIC or arbitrary raw bit
+        let custom_field_spec = FieldMatcherSpec::AccessAll(raw_bit);
+        let non_matching_field = &model.fields[0];
+        assert!(!custom_field_spec.matches(non_matching_field));
+        assert!(!custom_field_spec.compile().matches(non_matching_field));
+    }
+
+    #[test]
+    fn insn_var_slot_and_opcode_handle_iinc_wide_and_ldc_variants() {
+        use crate::model::{DynamicValue, IIncInsn, LdcInsn, VarInsn};
+        use crate::modified_utf8::JavaString;
+
+        let iinc_narrow = CodeItem::IInc(IIncInsn { slot: 3, value: 1 });
+        let iinc_wide = CodeItem::IInc(IIncInsn {
+            slot: 300,
+            value: 1,
+        });
+        let var_wide = CodeItem::Var(VarInsn {
+            opcode: 0x15,
+            slot: 300,
+        });
+        let iinc_wide_val = CodeItem::IInc(IIncInsn {
+            slot: 1,
+            value: 200,
+        });
+        let raw_wide = CodeItem::Raw(crate::raw::Instruction::Wide(crate::raw::WideInstruction {
+            offset: 0,
+            opcode: 0x15,
+            index: 300,
+            value: None,
+        }));
+        assert!(InsnMatcherSpec::VarSlot(3).matches(&iinc_narrow));
+        assert!(InsnMatcherSpec::VarSlot(3).compile().matches(&iinc_narrow));
+        assert!(InsnMatcherSpec::Opcode(0xC4).matches(&iinc_wide));
+        assert!(InsnMatcherSpec::Opcode(0xC4).matches(&iinc_wide_val));
+        assert!(InsnMatcherSpec::Opcode(0x84).matches(&iinc_wide_val));
+        assert!(InsnMatcherSpec::Opcode(0xC4).matches(&var_wide));
+        assert!(InsnMatcherSpec::Opcode(0xC4).matches(&raw_wide));
+        assert!(InsnMatcherSpec::Opcode(0x15).matches(&raw_wide));
+        assert!(!InsnMatcherSpec::Opcode(0xC4).matches(&iinc_narrow));
+
+        let ldc_long = CodeItem::Ldc(LdcInsn {
+            value: LdcValue::Long(42),
+        });
+        let ldc_dyn_double = CodeItem::Ldc(LdcInsn {
+            value: LdcValue::Dynamic(DynamicValue {
+                bootstrap_method_attr_index: crate::indexes::BootstrapMethodIndex(0),
+                name: "x".into(),
+                descriptor: "D".into(),
+            }),
+        });
+        let ldc_str = CodeItem::Ldc(LdcInsn {
+            value: LdcValue::String(JavaString::from("hi")),
+        });
+        assert!(InsnMatcherSpec::Opcode(0x14).matches(&ldc_long));
+        assert!(InsnMatcherSpec::Opcode(0x14).matches(&ldc_dyn_double));
+        assert!(InsnMatcherSpec::Opcode(0x12).matches(&ldc_str));
+        assert!(!InsnMatcherSpec::Opcode(0x12).matches(&ldc_long));
     }
 }

@@ -65,7 +65,7 @@ fn bench_frames(c: &mut Criterion) {
         b.iter(|| {
             for model in &models {
                 for method in &model.methods {
-                    if let Some(code) = &method.code {
+                    if let Some(code) = method.code() {
                         black_box(
                             recompute_frames(
                                 code,

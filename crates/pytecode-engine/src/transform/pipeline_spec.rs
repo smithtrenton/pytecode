@@ -4,24 +4,106 @@
 //! a matcher spec with a transform action. The pipeline iterates models and
 //! evaluates matchers entirely in Rust; only custom Python callbacks cross FFI.
 
-use crate::model::ClassModel;
+use crate::Result;
+use crate::model::{ClassModel, CodeModel, FieldModel, MethodModel};
 use crate::transform::matcher_spec::{
     ClassMatcherSpec, CompiledClassMatcher, CompiledFieldMatcher, CompiledMethodMatcher,
     FieldMatcherSpec, MethodMatcherSpec,
 };
-use crate::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
+use crate::transform::transform_spec::{
+    ClassTransformSpec, CodeTransformSpec, CompiledClassTransform, CompiledCodeTransform,
+    CompiledMethodTransform, FieldTransformSpec, MethodTransformSpec,
+};
+use crate::transform::{ClassContext, MethodContext};
 use std::fmt;
 
-/// The action to perform when a step's matcher matches.
+/// Shared callback type for custom class transforms.
+pub type ClassTransformCallback =
+    std::sync::Arc<dyn Fn(&mut ClassModel) -> Result<()> + Send + Sync>;
+
+/// Shared callback type for custom field transforms.
+pub type FieldTransformCallback =
+    std::sync::Arc<dyn Fn(&mut FieldModel, &ClassContext) -> Result<()> + Send + Sync>;
+
+/// Shared callback type for custom method transforms.
+pub type MethodTransformCallback =
+    std::sync::Arc<dyn Fn(&mut MethodModel, &ClassContext) -> Result<()> + Send + Sync>;
+
+/// Shared callback type for custom code transforms.
+pub type CodeTransformCallback = std::sync::Arc<
+    dyn Fn(&mut CodeModel, &MethodContext, &ClassContext) -> Result<()> + Send + Sync,
+>;
+
+/// The action to perform on a class when a step's matcher matches.
 #[derive(Clone)]
 pub enum TransformAction {
-    /// A built-in transform that Rust applies natively.
+    /// A built-in class transform that Rust applies natively.
     BuiltIn(ClassTransformSpec),
-    /// A custom callback function (e.g. from Python via PyO3).
-    Custom(std::sync::Arc<dyn Fn(&mut ClassModel) + Send + Sync>),
+    /// A fallible custom callback (e.g. from Python via PyO3).
+    Custom(ClassTransformCallback),
 }
 
 impl fmt::Debug for TransformAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BuiltIn(spec) => f.debug_tuple("BuiltIn").field(spec).finish(),
+            Self::Custom(_) => f.debug_tuple("Custom").field(&"<callback>").finish(),
+        }
+    }
+}
+
+/// The action to perform when a field step matches.
+#[derive(Clone)]
+pub enum FieldTransformAction {
+    /// Apply a built-in transform to each matched field.
+    BuiltIn(FieldTransformSpec),
+    /// Apply a custom fallible callback to each matched field.
+    Custom(FieldTransformCallback),
+    /// Legacy class-level guard action: runs once if any field matches.
+    ClassAction(TransformAction),
+}
+
+impl fmt::Debug for FieldTransformAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BuiltIn(spec) => f.debug_tuple("BuiltIn").field(spec).finish(),
+            Self::Custom(_) => f.debug_tuple("Custom").field(&"<callback>").finish(),
+            Self::ClassAction(action) => f.debug_tuple("ClassAction").field(action).finish(),
+        }
+    }
+}
+
+/// The action to perform when a method step matches.
+#[derive(Clone)]
+pub enum MethodTransformAction {
+    /// Apply a built-in transform to each matched method.
+    BuiltIn(MethodTransformSpec),
+    /// Apply a custom fallible callback to each matched method.
+    Custom(MethodTransformCallback),
+    /// Legacy class-level guard action: runs once if any method matches.
+    ClassAction(TransformAction),
+}
+
+impl fmt::Debug for MethodTransformAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BuiltIn(spec) => f.debug_tuple("BuiltIn").field(spec).finish(),
+            Self::Custom(_) => f.debug_tuple("Custom").field(&"<callback>").finish(),
+            Self::ClassAction(action) => f.debug_tuple("ClassAction").field(action).finish(),
+        }
+    }
+}
+
+/// The action to perform when a code step matches.
+#[derive(Clone)]
+pub enum CodeTransformAction {
+    /// Apply a built-in code transform to each matched method's code.
+    BuiltIn(CodeTransformSpec),
+    /// Apply a custom fallible callback to each matched method's code.
+    Custom(CodeTransformCallback),
+}
+
+impl fmt::Debug for CodeTransformAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BuiltIn(spec) => f.debug_tuple("BuiltIn").field(spec).finish(),
@@ -38,23 +120,23 @@ pub enum PipelineStep {
         matcher: ClassMatcherSpec,
         action: TransformAction,
     },
-    /// Apply a field-level transform (wrapped as class transform with field filtering).
+    /// Apply a field-level transform to matching fields.
     Field {
         owner_matcher: ClassMatcherSpec,
         field_matcher: FieldMatcherSpec,
-        action: TransformAction,
+        action: FieldTransformAction,
     },
-    /// Apply a method-level transform (wrapped as class transform with method filtering).
+    /// Apply a method-level transform to matching methods.
     Method {
         owner_matcher: ClassMatcherSpec,
         method_matcher: MethodMatcherSpec,
-        action: TransformAction,
+        action: MethodTransformAction,
     },
     /// Apply a code-level transform to matching methods with code.
     Code {
         owner_matcher: ClassMatcherSpec,
         method_matcher: MethodMatcherSpec,
-        action: CodeTransformSpec,
+        action: CodeTransformAction,
     },
 }
 
@@ -91,11 +173,33 @@ impl fmt::Display for PipelineStep {
             } => {
                 write!(
                     f,
-                    "on_code({method_matcher}, owner={owner_matcher}, {action})"
+                    "on_code({method_matcher}, owner={owner_matcher}, {action:?})"
                 )
             }
         }
     }
+}
+
+enum CompiledClassAction {
+    BuiltIn(CompiledClassTransform),
+    Custom(ClassTransformCallback),
+}
+
+enum CompiledFieldAction {
+    BuiltIn(FieldTransformSpec),
+    Custom(FieldTransformCallback),
+    ClassAction(CompiledClassAction),
+}
+
+enum CompiledMethodAction {
+    BuiltIn(CompiledMethodTransform),
+    Custom(MethodTransformCallback),
+    ClassAction(CompiledClassAction),
+}
+
+enum CompiledCodeAction {
+    BuiltIn(CompiledCodeTransform),
+    Custom(CodeTransformCallback),
 }
 
 /// A compiled pipeline ready for repeated evaluation.
@@ -109,22 +213,22 @@ pub struct CompiledPipeline {
 enum CompiledStep {
     Class {
         matcher: CompiledClassMatcher,
-        action: TransformAction,
+        action: CompiledClassAction,
     },
     Field {
         owner_matcher: CompiledClassMatcher,
         field_matcher: CompiledFieldMatcher,
-        action: TransformAction,
+        action: CompiledFieldAction,
     },
     Method {
         owner_matcher: CompiledClassMatcher,
         method_matcher: CompiledMethodMatcher,
-        action: TransformAction,
+        action: CompiledMethodAction,
     },
     Code {
         owner_matcher: CompiledClassMatcher,
         method_matcher: CompiledMethodMatcher,
-        action: CodeTransformSpec,
+        action: CompiledCodeAction,
     },
 }
 
@@ -132,6 +236,15 @@ enum CompiledStep {
 #[derive(Debug, Clone, Default)]
 pub struct PipelineSpec {
     pub steps: Vec<PipelineStep>,
+}
+
+fn compile_class_action(
+    action: &TransformAction,
+) -> std::result::Result<CompiledClassAction, regex::Error> {
+    Ok(match action {
+        TransformAction::BuiltIn(spec) => CompiledClassAction::BuiltIn(spec.try_compile()?),
+        TransformAction::Custom(cb) => CompiledClassAction::Custom(cb.clone()),
+    })
 }
 
 impl PipelineSpec {
@@ -150,7 +263,7 @@ impl PipelineSpec {
         mut self,
         field_matcher: FieldMatcherSpec,
         owner_matcher: ClassMatcherSpec,
-        action: TransformAction,
+        action: FieldTransformAction,
     ) -> Self {
         self.steps.push(PipelineStep::Field {
             owner_matcher,
@@ -165,7 +278,7 @@ impl PipelineSpec {
         mut self,
         method_matcher: MethodMatcherSpec,
         owner_matcher: ClassMatcherSpec,
-        action: TransformAction,
+        action: MethodTransformAction,
     ) -> Self {
         self.steps.push(PipelineStep::Method {
             owner_matcher,
@@ -180,7 +293,7 @@ impl PipelineSpec {
         mut self,
         method_matcher: MethodMatcherSpec,
         owner_matcher: ClassMatcherSpec,
-        action: CodeTransformSpec,
+        action: CodeTransformAction,
     ) -> Self {
         self.steps.push(PipelineStep::Code {
             owner_matcher,
@@ -190,77 +303,105 @@ impl PipelineSpec {
         self
     }
 
-    /// Compile the pipeline for efficient repeated evaluation.
-    pub fn compile(&self) -> CompiledPipeline {
+    /// Compile the pipeline for efficient repeated evaluation, validating all regexes.
+    pub fn try_compile(&self) -> std::result::Result<CompiledPipeline, regex::Error> {
         let steps = self
             .steps
             .iter()
-            .map(|step| match step {
-                PipelineStep::Class { matcher, action } => CompiledStep::Class {
-                    matcher: CompiledClassMatcher::from_spec(matcher),
-                    action: action.clone(),
-                },
-                PipelineStep::Field {
-                    owner_matcher,
-                    field_matcher,
-                    action,
-                } => CompiledStep::Field {
-                    owner_matcher: CompiledClassMatcher::from_spec(owner_matcher),
-                    field_matcher: CompiledFieldMatcher::from_spec(field_matcher),
-                    action: action.clone(),
-                },
-                PipelineStep::Method {
-                    owner_matcher,
-                    method_matcher,
-                    action,
-                } => CompiledStep::Method {
-                    owner_matcher: CompiledClassMatcher::from_spec(owner_matcher),
-                    method_matcher: CompiledMethodMatcher::from_spec(method_matcher),
-                    action: action.clone(),
-                },
-                PipelineStep::Code {
-                    owner_matcher,
-                    method_matcher,
-                    action,
-                } => CompiledStep::Code {
-                    owner_matcher: CompiledClassMatcher::from_spec(owner_matcher),
-                    method_matcher: CompiledMethodMatcher::from_spec(method_matcher),
-                    action: action.clone(),
-                },
+            .map(|step| -> std::result::Result<CompiledStep, regex::Error> {
+                Ok(match step {
+                    PipelineStep::Class { matcher, action } => CompiledStep::Class {
+                        matcher: CompiledClassMatcher::try_from_spec(matcher)?,
+                        action: compile_class_action(action)?,
+                    },
+                    PipelineStep::Field {
+                        owner_matcher,
+                        field_matcher,
+                        action,
+                    } => CompiledStep::Field {
+                        owner_matcher: CompiledClassMatcher::try_from_spec(owner_matcher)?,
+                        field_matcher: CompiledFieldMatcher::try_from_spec(field_matcher)?,
+                        action: match action {
+                            FieldTransformAction::BuiltIn(spec) => {
+                                CompiledFieldAction::BuiltIn(spec.clone())
+                            }
+                            FieldTransformAction::Custom(cb) => {
+                                CompiledFieldAction::Custom(cb.clone())
+                            }
+                            FieldTransformAction::ClassAction(a) => {
+                                CompiledFieldAction::ClassAction(compile_class_action(a)?)
+                            }
+                        },
+                    },
+                    PipelineStep::Method {
+                        owner_matcher,
+                        method_matcher,
+                        action,
+                    } => CompiledStep::Method {
+                        owner_matcher: CompiledClassMatcher::try_from_spec(owner_matcher)?,
+                        method_matcher: CompiledMethodMatcher::try_from_spec(method_matcher)?,
+                        action: match action {
+                            MethodTransformAction::BuiltIn(spec) => {
+                                CompiledMethodAction::BuiltIn(spec.try_compile()?)
+                            }
+                            MethodTransformAction::Custom(cb) => {
+                                CompiledMethodAction::Custom(cb.clone())
+                            }
+                            MethodTransformAction::ClassAction(a) => {
+                                CompiledMethodAction::ClassAction(compile_class_action(a)?)
+                            }
+                        },
+                    },
+                    PipelineStep::Code {
+                        owner_matcher,
+                        method_matcher,
+                        action,
+                    } => CompiledStep::Code {
+                        owner_matcher: CompiledClassMatcher::try_from_spec(owner_matcher)?,
+                        method_matcher: CompiledMethodMatcher::try_from_spec(method_matcher)?,
+                        action: match action {
+                            CodeTransformAction::BuiltIn(spec) => {
+                                CompiledCodeAction::BuiltIn(spec.try_compile()?)
+                            }
+                            CodeTransformAction::Custom(cb) => {
+                                CompiledCodeAction::Custom(cb.clone())
+                            }
+                        },
+                    },
+                })
             })
-            .collect();
-        CompiledPipeline { steps }
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(CompiledPipeline { steps })
+    }
+
+    /// Compile the pipeline for efficient repeated evaluation.
+    pub fn compile(&self) -> CompiledPipeline {
+        self.try_compile().expect("invalid regex in PipelineSpec")
     }
 
     /// Apply this pipeline to a single class model.
-    ///
-    /// # Performance note
-    ///
-    /// This method re-compiles all regex matchers on every call. For hot loops
-    /// over many models, prefer [`PipelineSpec::compile`] + [`CompiledPipeline::apply`]
-    /// in a loop (or use [`PipelineSpec::apply_all`] which compiles once internally).
-    pub fn apply(&self, model: &mut ClassModel) {
-        let compiled = self.compile();
-        compiled.apply(model);
+    pub fn apply(&self, model: &mut ClassModel) -> Result<()> {
+        self.compile().apply(model)
     }
 
     /// Apply this pipeline to a batch of class models.
-    pub fn apply_all(&self, models: &mut [ClassModel]) {
+    pub fn apply_all(&self, models: &mut [ClassModel]) -> Result<()> {
         let compiled = self.compile();
         for model in models {
-            compiled.apply(model);
+            compiled.apply(model)?;
         }
+        Ok(())
     }
 }
 
 impl CompiledPipeline {
     /// Apply the compiled pipeline to a single class model.
-    pub fn apply(&self, model: &mut ClassModel) {
+    pub fn apply(&self, model: &mut ClassModel) -> Result<()> {
         for step in &self.steps {
             match step {
                 CompiledStep::Class { matcher, action } => {
                     if matcher.matches(model) {
-                        Self::apply_action(action, model);
+                        Self::apply_class_action(action, model)?;
                     }
                 }
                 CompiledStep::Field {
@@ -271,10 +412,29 @@ impl CompiledPipeline {
                     if !owner_matcher.matches(model) {
                         continue;
                     }
-                    // Field steps: apply built-in class transforms if any field matches
-                    let has_match = model.fields.iter().any(|f| field_matcher.matches(f));
-                    if has_match {
-                        Self::apply_action(action, model);
+                    match action {
+                        CompiledFieldAction::BuiltIn(spec) => {
+                            model.fields.retain_mut(|field| {
+                                if field_matcher.matches(field) {
+                                    spec.apply_to_field(field)
+                                } else {
+                                    true
+                                }
+                            });
+                        }
+                        CompiledFieldAction::Custom(callback) => {
+                            let owner = ClassContext::from_model(model);
+                            for field in &mut model.fields {
+                                if field_matcher.matches(field) {
+                                    callback(field, &owner)?;
+                                }
+                            }
+                        }
+                        CompiledFieldAction::ClassAction(action) => {
+                            if model.fields.iter().any(|f| field_matcher.matches(f)) {
+                                Self::apply_class_action(action, model)?;
+                            }
+                        }
                     }
                 }
                 CompiledStep::Method {
@@ -285,9 +445,29 @@ impl CompiledPipeline {
                     if !owner_matcher.matches(model) {
                         continue;
                     }
-                    let has_match = model.methods.iter().any(|m| method_matcher.matches(m));
-                    if has_match {
-                        Self::apply_action(action, model);
+                    match action {
+                        CompiledMethodAction::BuiltIn(spec) => {
+                            model.methods.retain_mut(|method| {
+                                if method_matcher.matches(method) {
+                                    spec.apply_to_method(method)
+                                } else {
+                                    true
+                                }
+                            });
+                        }
+                        CompiledMethodAction::Custom(callback) => {
+                            let owner = ClassContext::from_model(model);
+                            for method in &mut model.methods {
+                                if method_matcher.matches(method) {
+                                    callback(method, &owner)?;
+                                }
+                            }
+                        }
+                        CompiledMethodAction::ClassAction(action) => {
+                            if model.methods.iter().any(|m| method_matcher.matches(m)) {
+                                Self::apply_class_action(action, model)?;
+                            }
+                        }
                     }
                 }
                 CompiledStep::Code {
@@ -298,23 +478,38 @@ impl CompiledPipeline {
                     if !owner_matcher.matches(model) {
                         continue;
                     }
+                    let owner = ClassContext::from_model(model);
                     for method in &mut model.methods {
                         if !method_matcher.matches(method) {
                             continue;
                         }
-                        if let Some(code) = method.code.as_mut() {
-                            action.apply(code);
+                        match action {
+                            CompiledCodeAction::BuiltIn(spec) => {
+                                if let Some(code) = method.code_mut() {
+                                    spec.apply(code);
+                                }
+                            }
+                            CompiledCodeAction::Custom(callback) => {
+                                let method_ctx = MethodContext::from_method(method);
+                                if let Some(code) = method.code_mut() {
+                                    callback(code, &method_ctx, &owner)?;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+        Ok(())
     }
 
-    fn apply_action(action: &TransformAction, model: &mut ClassModel) {
+    fn apply_class_action(action: &CompiledClassAction, model: &mut ClassModel) -> Result<()> {
         match action {
-            TransformAction::BuiltIn(spec) => spec.apply(model),
-            TransformAction::Custom(callback) => callback(model),
+            CompiledClassAction::BuiltIn(spec) => {
+                spec.apply(model);
+                Ok(())
+            }
+            CompiledClassAction::Custom(callback) => callback(model),
         }
     }
 }
@@ -366,8 +561,8 @@ mod tests {
         let mut foo = sample_class("test/Foo");
         let mut bar = sample_class("test/Bar");
 
-        pipeline.apply(&mut foo);
-        pipeline.apply(&mut bar);
+        pipeline.apply(&mut foo).unwrap();
+        pipeline.apply(&mut bar).unwrap();
 
         assert!(foo.access_flags.contains(ClassAccessFlags::FINAL));
         assert!(!bar.access_flags.contains(ClassAccessFlags::FINAL));
@@ -378,13 +573,13 @@ mod tests {
         let pipeline = PipelineSpec::new().on_methods(
             MethodMatcherSpec::IsConstructor,
             ClassMatcherSpec::Named("test/Foo".into()),
-            TransformAction::BuiltIn(ClassTransformSpec::AddAccessFlags(
-                ClassAccessFlags::FINAL.bits(),
+            MethodTransformAction::ClassAction(TransformAction::BuiltIn(
+                ClassTransformSpec::AddAccessFlags(ClassAccessFlags::FINAL.bits()),
             )),
         );
 
         let mut foo = sample_class("test/Foo");
-        pipeline.apply(&mut foo);
+        pipeline.apply(&mut foo).unwrap();
         // Foo has <init>, so class transform fires
         assert!(foo.access_flags.contains(ClassAccessFlags::FINAL));
     }
@@ -394,14 +589,105 @@ mod tests {
         let pipeline = PipelineSpec::new().on_methods(
             MethodMatcherSpec::Named("nonexistent".into()),
             ClassMatcherSpec::Any,
-            TransformAction::BuiltIn(ClassTransformSpec::AddAccessFlags(
-                ClassAccessFlags::FINAL.bits(),
+            MethodTransformAction::ClassAction(TransformAction::BuiltIn(
+                ClassTransformSpec::AddAccessFlags(ClassAccessFlags::FINAL.bits()),
             )),
         );
 
         let mut model = sample_class("test/Foo");
-        pipeline.apply(&mut model);
+        pipeline.apply(&mut model).unwrap();
         assert!(!model.access_flags.contains(ClassAccessFlags::FINAL));
+    }
+
+    #[test]
+    fn field_step_mutates_and_removes_only_matching_fields() {
+        let pipeline = PipelineSpec::new()
+            .on_fields(
+                FieldMatcherSpec::Named("count".into()),
+                ClassMatcherSpec::Named("test/Foo".into()),
+                FieldTransformAction::BuiltIn(FieldTransformSpec::Sequence(vec![
+                    FieldTransformSpec::Rename("total".into()),
+                    FieldTransformSpec::AddAccessFlags(FieldAccessFlags::FINAL.bits()),
+                ])),
+            )
+            .on_fields(
+                FieldMatcherSpec::Named("removeMe".into()),
+                ClassMatcherSpec::Any,
+                FieldTransformAction::BuiltIn(FieldTransformSpec::Remove),
+            );
+
+        let mut model = sample_class("test/Foo");
+        model.fields.push(FieldModel {
+            access_flags: FieldAccessFlags::PRIVATE,
+            name: "removeMe".to_string(),
+            descriptor: "Z".to_string(),
+            attributes: vec![],
+        });
+        model.fields.push(FieldModel {
+            access_flags: FieldAccessFlags::PUBLIC,
+            name: "keepMe".to_string(),
+            descriptor: "Ljava/lang/String;".to_string(),
+            attributes: vec![],
+        });
+
+        pipeline.apply(&mut model).unwrap();
+        assert_eq!(model.fields.len(), 2);
+        assert_eq!(model.fields[0].name, "total");
+        assert!(
+            model.fields[0]
+                .access_flags
+                .contains(FieldAccessFlags::FINAL)
+        );
+        assert_eq!(model.fields[1].name, "keepMe");
+    }
+
+    #[test]
+    fn member_scoped_method_step_and_custom_error_propagation() {
+        let pipeline = PipelineSpec::new().on_methods(
+            MethodMatcherSpec::Named("helper".into()),
+            ClassMatcherSpec::Named("test/Foo".into()),
+            MethodTransformAction::BuiltIn(MethodTransformSpec::Rename("renamedHelper".into())),
+        );
+
+        let mut model = sample_class("test/Foo");
+        model.methods.push(MethodModel::new(
+            MethodAccessFlags::PUBLIC,
+            "helper".to_string(),
+            "()V".to_string(),
+            None,
+            vec![],
+        ));
+        pipeline.apply(&mut model).unwrap();
+        assert!(model.methods.iter().any(|m| m.name == "renamedHelper"));
+        assert!(model.methods.iter().any(|m| m.name == "<init>"));
+
+        let failing_pipeline = PipelineSpec::new().on_classes(
+            ClassMatcherSpec::Any,
+            TransformAction::Custom(std::sync::Arc::new(|_| {
+                Err(crate::EngineError::new(
+                    0,
+                    crate::EngineErrorKind::InvalidModelState {
+                        reason: "boom".into(),
+                    },
+                ))
+            })),
+        );
+        let err = failing_pipeline.apply(&mut model).unwrap_err();
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn try_compile_rejects_invalid_regex_in_nested_code_transform() {
+        let pipeline = PipelineSpec::new().on_code(
+            MethodMatcherSpec::Any,
+            ClassMatcherSpec::Any,
+            CodeTransformAction::BuiltIn(CodeTransformSpec::RemoveInsn {
+                matcher: crate::transform::matcher_spec::InsnMatcherSpec::MethodNameMatches(
+                    "[unclosed".into(),
+                ),
+            }),
+        );
+        assert!(pipeline.try_compile().is_err());
     }
 
     #[test]
@@ -419,7 +705,7 @@ mod tests {
             sample_class("test/C"),
         ];
 
-        pipeline.apply_all(&mut models);
+        pipeline.apply_all(&mut models).unwrap();
 
         for model in &models {
             assert!(
@@ -447,7 +733,7 @@ mod tests {
             );
 
         let mut foo = sample_class("test/Foo");
-        pipeline.apply(&mut foo);
+        pipeline.apply(&mut foo).unwrap();
 
         assert!(foo.access_flags.contains(ClassAccessFlags::FINAL));
         assert!(foo.interfaces.contains(&"java/lang/Runnable".to_string()));
@@ -464,8 +750,8 @@ mod tests {
 
         let mut a = sample_class("test/A");
         let mut b = sample_class("test/B");
-        compiled.apply(&mut a);
-        compiled.apply(&mut b);
+        compiled.apply(&mut a).unwrap();
+        compiled.apply(&mut b).unwrap();
 
         assert_eq!(a.name, "test/Same");
         assert_eq!(b.name, "test/Same");

@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 mod deobfuscate;
 mod jar_patcher;
 use pytecode_archive::{JarFile, RewriteOptions};
+use pytecode_engine::analysis::{AnalysisError, MappingClassResolver, ResolvedClass};
 use pytecode_engine::constants::MethodAccessFlags;
 use pytecode_engine::fixtures::{compatibility_manifest, default_benchmark_jar, repo_root};
 use pytecode_engine::indexes::Utf8Index;
@@ -17,6 +18,7 @@ use pytecode_engine::transform::{
 };
 use pytecode_engine::write_class;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -39,6 +41,8 @@ pub enum CliError {
     Archive(#[from] pytecode_archive::ArchiveError),
     #[error(transparent)]
     Engine(#[from] pytecode_engine::EngineError),
+    #[error(transparent)]
+    Analysis(#[from] AnalysisError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
@@ -216,7 +220,10 @@ pub fn run_smoke_benchmark(jar: Option<PathBuf>, iterations: usize) -> CliResult
     if iterations == 0 {
         return Err(CliError::InvalidIterations);
     }
-    let jar_path = jar.unwrap_or(default_benchmark_jar()?);
+    let jar_path = match jar {
+        Some(path) => path,
+        None => default_benchmark_jar()?,
+    };
     let jar_display = relative_to_repo(&jar_path);
     let stage_reports = BenchmarkStage::ALL
         .into_iter()
@@ -228,6 +235,29 @@ pub fn run_smoke_benchmark(jar: Option<PathBuf>, iterations: usize) -> CliResult
         iterations,
         stage_reports,
     })
+}
+
+pub(crate) fn build_jar_class_resolver(jar_file: &JarFile) -> CliResult<MappingClassResolver> {
+    let mut classes = HashMap::new();
+    for entry in jar_file
+        .entries
+        .iter()
+        .filter(|entry| entry.is_class() && !entry.filename.starts_with("META-INF/versions/"))
+    {
+        let classfile = parse_class(&entry.bytes)?;
+        let resolved = ResolvedClass::from_classfile(&classfile)?;
+        classes.insert(resolved.name.clone(), resolved);
+    }
+    for entry in jar_file
+        .entries
+        .iter()
+        .filter(|entry| entry.is_class() && entry.filename.starts_with("META-INF/versions/"))
+    {
+        let classfile = parse_class(&entry.bytes)?;
+        let resolved = ResolvedClass::from_classfile(&classfile)?;
+        classes.entry(resolved.name.clone()).or_insert(resolved);
+    }
+    Ok(MappingClassResolver::new(classes.into_values())?)
 }
 
 pub fn export_class_summary(path: &Path) -> CliResult<ClassSummary> {

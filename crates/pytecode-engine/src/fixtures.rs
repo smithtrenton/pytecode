@@ -1,20 +1,34 @@
 use crate::stages::stage_names;
 use serde::{Deserialize, Serialize};
 use serde_json::from_slice;
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
 const INFRASTRUCTURE_FIXTURES: &[&str] = &["VerifierHarness.java", "RuntimeClasses.java"];
 const FOCUSED_BENCHMARK_JAR: &str = "byte-buddy-1.17.5.jar";
 const FIXTURE_CACHE_SCHEMA_VERSION: u8 = 1;
 const FIXTURE_COMPILE_CACHE_DIR: &str = "pytecode-rust-javac";
+
+fn cache_entry_mutex(entry_dir: &Path) -> Arc<Mutex<()>> {
+    static CACHE_ENTRY_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let registry = CACHE_ENTRY_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(
+        locks
+            .entry(entry_dir.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompatibilityManifest {
@@ -232,8 +246,14 @@ fn ensure_compiled_source_cached(
     ));
     let parent = entry_dir.parent().expect("cache entry has a parent");
     fs::create_dir_all(parent)?;
+    // Serialize in-process threads before acquiring the OS file lock so concurrent
+    // Windows threads never contend inside OpenOptions/LockFile on the same handle path.
+    let in_process_mutex = cache_entry_mutex(&entry_dir);
+    let _in_process_guard = in_process_mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Lock a separate file: readers never observe an entry while it is repaired,
-    // and competing threads/processes cannot remove a just-published entry.
+    // and competing processes cannot remove a just-published entry.
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -373,7 +393,17 @@ fn publish_cache_entry(
     if let Some(parent) = entry_dir.parent() {
         fs::create_dir_all(parent)?;
     }
-    match fs::rename(staging_dir, entry_dir) {
+    let mut rename_result = fs::rename(staging_dir, entry_dir);
+    for attempt in 1..=5_u32 {
+        match &rename_result {
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                std::thread::sleep(Duration::from_millis(25 * u64::from(attempt)));
+                rename_result = fs::rename(staging_dir, entry_dir);
+            }
+            _ => break,
+        }
+    }
+    match rename_result {
         Ok(()) => Ok(()),
         Err(rename_err) => {
             if cache_entry_matches(entry_dir, expected)? {
@@ -546,6 +576,7 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestDir {
@@ -554,11 +585,15 @@ mod tests {
 
     impl TestDir {
         fn new(name: &str) -> io::Result<Self> {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(io::Error::other)?
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("pytecode-{name}-{timestamp}"));
+            let seq = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let pid = std::process::id();
+            let path =
+                std::env::temp_dir().join(format!("pytecode-{name}-{pid}-{timestamp}-{seq}"));
             fs::create_dir_all(&path)?;
             Ok(Self { path })
         }

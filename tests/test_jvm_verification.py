@@ -7,20 +7,20 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers import _jdk_tool, compile_java_sources
+from helpers import TEST_RESOURCES, _jdk_tool, compile_java_sources
 
 from pytecode import _rust
 from pytecode.archive import FrameComputationMode
 from pytecode.model import BranchInsn, ClassModel, FieldModel, Label, MethodModel, RawInsn, VarInsn
 
-BASE_CLASS = Path("crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class")
+BASE_CLASS = Path(__file__).resolve().parents[1] / "crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class"
 
 
 @pytest.fixture(scope="module")
 def harness(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return compile_java_sources(
         tmp_path_factory.mktemp("verifier"),
-        [Path("crates/pytecode-engine/fixtures/java/VerifierHarness.java")],
+        [TEST_RESOURCES / "VerifierHarness.java"],
         release=17,
     )
 

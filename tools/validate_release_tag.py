@@ -37,6 +37,39 @@ def read_project_version(pyproject_path: Path = DEFAULT_PYPROJECT_PATH) -> str:
     raise ValueError(f"{pyproject_path} is missing a non-empty project.version value in [project].")
 
 
+def read_crate_versions(repo_root: Path) -> dict[str, str]:
+    """Return mapping of workspace crate directory names to ``[package] version``."""
+    crates_dir = repo_root / "crates"
+    if not crates_dir.is_dir():
+        return {}
+    versions: dict[str, str] = {}
+    for manifest in sorted(crates_dir.glob("*/Cargo.toml")):
+        current_section: str | None = None
+        found: str | None = None
+        for raw_line in manifest.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            section_match = SECTION_PATTERN.match(line)
+            if section_match is not None:
+                current_section = section_match.group("section")
+                continue
+
+            if current_section != "package":
+                continue
+
+            version_match = VERSION_PATTERN.match(line)
+            if version_match is not None:
+                found = version_match.group("version")
+                break
+
+        if found is None:
+            raise ValueError(f"{manifest} is missing a non-empty package.version value in [package].")
+        versions[manifest.parent.name] = found
+    return versions
+
+
 def extract_tag_version(tag: str) -> str:
     """Strip and validate the version portion of a release tag."""
     if not tag:
@@ -57,6 +90,16 @@ def validate_release_tag(tag: str, expected_version: str) -> str:
     if tag_version != expected_version:
         raise ValueError(f"Release tag {tag!r} does not match project.version {expected_version!r}.")
     return tag_version
+
+
+def validate_workspace_versions(pyproject_path: Path, expected_version: str) -> None:
+    """Validate that every workspace crate version matches ``expected_version`` when ``crates/`` exists."""
+    repo_root = pyproject_path.resolve().parent
+    crate_versions = read_crate_versions(repo_root)
+    mismatched = {name: version for name, version in crate_versions.items() if version != expected_version}
+    if mismatched:
+        details = ", ".join(f"{name}={version!r}" for name, version in sorted(mismatched.items()))
+        raise ValueError(f"Workspace crate versions ({details}) do not match project.version {expected_version!r}.")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -85,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         expected_version = read_project_version(args.pyproject)
         validate_release_tag(args.tag, expected_version)
+        validate_workspace_versions(args.pyproject, expected_version)
     except ValueError as exc:
         print(f"Release validation failed: {exc}", file=sys.stderr)
         return 1

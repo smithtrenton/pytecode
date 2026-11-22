@@ -5,36 +5,22 @@ from __future__ import annotations
 import copy
 import os
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import _rust
 from .classfile import ClassReader
-from .model import ClassModel
+from .model import ClassModel, DebugInfoPolicy, FrameComputationMode, MalformedClassException
 
 __all__ = [
     "DebugInfoPolicy",
     "FrameComputationMode",
     "JarFile",
     "JarInfo",
+    "MalformedClassException",
     "normalize_debug_info_policy",
 ]
-
-
-class DebugInfoPolicy(Enum):
-    """Policy controlling whether archive rewrites preserve or strip debug info."""
-
-    PRESERVE = "preserve"
-    STRIP = "strip"
-
-
-class FrameComputationMode(Enum):
-    """Policy controlling whether lowering preserves or recomputes stack map frames."""
-
-    PRESERVE = "preserve"
-    RECOMPUTE = "recompute"
 
 
 _RewriteTransform = (
@@ -47,7 +33,7 @@ class JarInfo:
     """Metadata and raw content for a single entry in a JAR archive.
 
     Attributes:
-        filename: Normalized, OS-native relative path of the entry.
+        filename: Normalized POSIX (``/``-separated) relative path of the entry.
         zipinfo: Supported ZIP metadata; mutations are honored by ``rewrite``.
         bytes: Raw (uninterpreted) byte content of the entry.
     """
@@ -65,36 +51,39 @@ def _normalize_filename(
     raw = os.fspath(filename)
     if not raw:
         raise ValueError("JAR entry filename must not be empty")
-    if raw.startswith(("/", "\\")) or Path(raw).is_absolute() or raw[1:2] == ":":
+    if "\0" in raw:
+        raise ValueError("JAR entry filename must not contain NUL bytes")
+    if (
+        raw.startswith(("/", "\\"))
+        or Path(raw).is_absolute()
+        or (len(raw) >= 2 and raw[1] == ":")
+        or bool(PureWindowsPath(raw).drive)
+    ):
         raise ValueError(f"JAR entry filename must be relative: {raw!r}")
 
     posix_path = raw.replace("\\", "/")
-    parts = PurePosixPath(posix_path).parts
-    if ".." in parts:
+    raw_parts = PurePosixPath(posix_path).parts
+    if ".." in raw_parts:
         raise ValueError(f"JAR entry filename must not contain parent directory references: {raw!r}")
 
-    normalized = str(Path(*parts))
-    if normalized in ("", "."):
+    parts = [part for part in raw_parts if part not in ("", ".")]
+    if not parts:
         raise ValueError("JAR entry filename must not be empty")
 
+    normalized = "/".join(parts)
     if is_dir is None:
         is_dir = raw.endswith(("/", "\\"))
     if is_dir:
-        return normalized.rstrip("\\/") + os.sep
+        return normalized + "/"
     return normalized
 
 
 def _archive_name(filename: str) -> str:
-    is_dir = filename.endswith(os.sep)
-    stripped = filename.rstrip("\\/")
-    archive_name = PurePosixPath(*Path(stripped).parts).as_posix()
-    if is_dir:
-        return archive_name + "/"
-    return archive_name
+    return _normalize_filename(filename)
 
 
 def _is_class_filename(filename: str) -> bool:
-    return not filename.endswith(os.sep) and filename.endswith(".class")
+    return not filename.endswith("/") and filename.endswith(".class")
 
 
 def _is_supported_transform(transform: object) -> bool:
@@ -115,15 +104,17 @@ def _entry_state_from_jarinfo(
     original_index: int | None,
 ) -> _rust._ArchiveEntryState:
     zipinfo = jar_info.zipinfo
+    normalized = _normalize_filename(jar_info.filename)
+    is_dir = normalized.endswith("/")
     year, month, day, hour, minute, second = zipinfo.date_time
     return _rust._ArchiveEntryState(
-        jar_info.filename,
-        jar_info.bytes,
+        normalized,
+        b"" if is_dir else jar_info.bytes,
         int(zipinfo.compress_type),
         (year, month, day, hour, minute, second),
         system=_zipinfo_system(zipinfo),
         unix_mode=(zipinfo.external_attr >> 16) or None,
-        is_dir=zipinfo.is_dir(),
+        is_dir=is_dir,
         comment=bytes(zipinfo.comment),
         extra_data=bytes(zipinfo.extra),
         original_index=original_index,
@@ -157,11 +148,9 @@ def normalize_debug_info_policy(policy: DebugInfoPolicy | str) -> DebugInfoPolic
         raise ValueError("debug_info must be one of: preserve, strip") from exc
 
 
-def _read_archive_state(
-    filename: str | os.PathLike[str],
-    **limits: int,
+def _build_archive_state_from_entries(
+    states: Sequence[_rust._ArchiveEntryState],
 ) -> tuple[list[zipfile.ZipInfo], dict[str, JarInfo], dict[str, _rust._ArchiveEntryState]]:
-    states = _rust.read_archive_state(os.fspath(filename), **limits)
     infolist: list[zipfile.ZipInfo] = []
     files: dict[str, JarInfo] = {}
     entry_states: dict[str, _rust._ArchiveEntryState] = {}
@@ -171,6 +160,15 @@ def _read_archive_state(
         files[jar_info.filename] = jar_info
         entry_states[jar_info.filename] = state
     return infolist, files, entry_states
+
+
+def _read_archive_state(
+    filename: str | os.PathLike[str],
+    **limits: int,
+) -> tuple[list[zipfile.ZipInfo], dict[str, JarInfo], dict[str, _rust._ArchiveEntryState], bytes]:
+    states, comment = _rust.read_archive_info(os.fspath(filename), **limits)
+    infolist, files, entry_states = _build_archive_state_from_entries(states)
+    return infolist, files, entry_states, bytes(comment)
 
 
 class JarFile:
@@ -210,11 +208,14 @@ class JarFile:
         self.infolist: list[zipfile.ZipInfo] = []
         self.files: dict[str, JarInfo] = {}
         self._entry_states: dict[str, _rust._ArchiveEntryState] = {}
+        self.comment: bytes = b""
         self.read()
 
     def read(self) -> None:
         """Re-read the archive from disk, replacing all in-memory state."""
-        self.infolist, self.files, self._entry_states = _read_archive_state(self.filename, **self._read_limits)
+        self.infolist, self.files, self._entry_states, self.comment = _read_archive_state(
+            self.filename, **self._read_limits
+        )
 
     def add_file(
         self,
@@ -223,28 +224,60 @@ class JarFile:
         *,
         zipinfo: zipfile.ZipInfo | None = None,
     ) -> JarInfo:
-        """Add or replace an entry in the archive.
+        """Add or replace a file entry in the archive.
 
         If *filename* already exists its ZIP metadata is reused unless an
         explicit *zipinfo* is supplied.
 
         Args:
-            filename: Relative path for the entry inside the JAR.
+            filename: Relative path for the file entry inside the JAR.
             data: Raw bytes to store for this entry.
             zipinfo: Optional ZIP header to use instead of the default.
 
         Returns:
             The ``JarInfo`` for the newly added entry.
         """
-        normalized = _normalize_filename(filename)
+        raw = os.fspath(filename)
+        if raw.endswith(("/", "\\")):
+            raise ValueError("add_file() cannot create directory entries; use add_directory()")
+        normalized = _normalize_filename(raw, is_dir=False)
         if zipinfo is not None:
             entry_zipinfo = copy.copy(zipinfo)
         elif normalized in self.files:
             entry_zipinfo = copy.copy(self.files[normalized].zipinfo)
         else:
             entry_zipinfo = zipfile.ZipInfo()
-        entry_zipinfo.filename = _archive_name(normalized)
+        entry_zipinfo.filename = normalized
         jar_info = JarInfo(normalized, entry_zipinfo, bytes(data))
+        self.files[normalized] = jar_info
+        self._entry_states[normalized] = _entry_state_from_jarinfo(jar_info, original_index=None)
+        self.infolist = [item.zipinfo for item in self.files.values()]
+        return jar_info
+
+    def add_directory(
+        self,
+        dirname: str | os.PathLike[str],
+        *,
+        zipinfo: zipfile.ZipInfo | None = None,
+    ) -> JarInfo:
+        """Add or replace a directory entry (trailing ``/``) in the archive.
+
+        Args:
+            dirname: Relative directory path inside the JAR.
+            zipinfo: Optional ZIP header to use instead of the default.
+
+        Returns:
+            The ``JarInfo`` for the newly added directory entry.
+        """
+        normalized = _normalize_filename(dirname, is_dir=True)
+        if zipinfo is not None:
+            entry_zipinfo = copy.copy(zipinfo)
+        elif normalized in self.files:
+            entry_zipinfo = copy.copy(self.files[normalized].zipinfo)
+        else:
+            entry_zipinfo = zipfile.ZipInfo()
+        entry_zipinfo.filename = normalized
+        jar_info = JarInfo(normalized, entry_zipinfo, b"")
         self.files[normalized] = jar_info
         self._entry_states[normalized] = _entry_state_from_jarinfo(jar_info, original_index=None)
         self.infolist = [item.zipinfo for item in self.files.values()]
@@ -274,8 +307,10 @@ class JarFile:
     def parse_classes(self) -> tuple[list[tuple[JarInfo, ClassReader]], list[JarInfo]]:
         """Parse all ``.class`` entries into Rust-backed readers and separate them from other resources.
 
+        Directory entries are excluded from both returned lists.
+
         Returns:
-            A two-element tuple of (class entries, non-class entries).
+            A two-element tuple of (class entries, non-class file entries).
             Each class entry is a ``(JarInfo, pytecode.ClassReader)`` pair.
         """
         classes: list[tuple[JarInfo, ClassReader]] = []
@@ -283,7 +318,7 @@ class JarFile:
         for jar_info in self.files.values():
             if _is_class_filename(jar_info.filename):
                 classes.append((jar_info, ClassReader.from_bytes(jar_info.bytes)))
-            else:
+            elif not jar_info.filename.endswith("/"):
                 other_files.append(jar_info)
         return classes, other_files
 
@@ -292,7 +327,7 @@ class JarFile:
         output_path: str | os.PathLike[str] | None = None,
         *,
         transform: _RewriteTransform | None = None,
-        frame_mode: FrameComputationMode = FrameComputationMode.PRESERVE,
+        frame_mode: FrameComputationMode | str = FrameComputationMode.PRESERVE,
         resolver: _rust.MappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str = DebugInfoPolicy.PRESERVE,
         skip_debug: bool = False,
@@ -305,18 +340,20 @@ class JarFile:
         in place.
 
         Entries are written to a temporary file in the destination directory and
-        validated before an atomic replacement. A failed transform, staged read,
-        or replacement leaves the destination intact and removes the temporary
-        file. This guarantees atomic visibility, not durability after a crash.
-        ``files`` and its ``JarInfo`` values are the authoritative mutable view;
-        an entry's ``filename`` determines its output name.
+        validated before an atomic replacement. On commit, ``self.filename`` is
+        updated to the committed destination path and in-memory entries refresh
+        from the staged archive. A failed transform, staged read, or replacement
+        leaves the destination and prior ``self.filename`` intact and removes
+        the temporary file. This guarantees atomic visibility, not durability
+        after a crash. ``files`` and its ``JarInfo`` values are the authoritative
+        mutable view; an entry's ``filename`` determines its output name.
 
         Signed-JAR artifacts under ``META-INF`` are preserved as ordinary
         resources and are **not** re-signed; if class bytes change the
         resulting archive may no longer verify.
 
         Args:
-            output_path: Destination path.  When ``None`` the original file
+            output_path: Destination path. When ``None`` the original file
                 is overwritten.
             transform: Optional Rust-backed transform or pipeline, a bound
                 ``.apply`` method from a Rust pipeline object, or a plain
@@ -342,7 +379,6 @@ class JarFile:
                 "Pipeline, CompiledPipeline, or bound .apply method"
             )
         destination = Path(self.filename if output_path is None else output_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
         effective_debug_info = _effective_rust_debug_policy(debug_policy, skip_debug=skip_debug)
         states = [
             _entry_state_from_jarinfo(
@@ -359,10 +395,11 @@ class JarFile:
             frame_mode=frame_mode,
             resolver=resolver,
             debug_info=effective_debug_info,
+            comment=self.comment,
             **self._read_limits,
         )
         try:
-            new_infolist, new_files, new_entry_states = _read_archive_state(prepared.path, **self._read_limits)
+            new_infolist, new_files, new_entry_states = _build_archive_state_from_entries(prepared.entries())
             new_filename = os.fspath(destination)
             prepared.commit()
             self.filename = new_filename

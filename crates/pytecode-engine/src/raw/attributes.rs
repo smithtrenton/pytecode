@@ -640,4 +640,40 @@ impl AttributeInfo {
             Self::Unknown(attr) => attr.attribute_name_index,
         }
     }
+
+    pub const fn attribute_length(&self) -> u32 {
+        match self {
+            Self::ConstantValue(attr) => attr.attribute_length,
+            Self::Signature(attr) => attr.attribute_length,
+            Self::SourceFile(attr) => attr.attribute_length,
+            Self::SourceDebugExtension(attr) => attr.attribute_length,
+            Self::Synthetic(attr) => attr.attribute_length,
+            Self::Deprecated(attr) => attr.attribute_length,
+            Self::StackMapTable(attr) => attr.attribute_length,
+            Self::Exceptions(attr) => attr.attribute_length,
+            Self::InnerClasses(attr) => attr.attribute_length,
+            Self::EnclosingMethod(attr) => attr.attribute_length,
+            Self::Code(attr) => attr.attribute_length,
+            Self::LineNumberTable(attr) => attr.attribute_length,
+            Self::LocalVariableTable(attr) => attr.attribute_length,
+            Self::LocalVariableTypeTable(attr) => attr.attribute_length,
+            Self::MethodParameters(attr) => attr.attribute_length,
+            Self::NestHost(attr) => attr.attribute_length,
+            Self::NestMembers(attr) => attr.attribute_length,
+            Self::RuntimeVisibleAnnotations(attr) => attr.attribute_length,
+            Self::RuntimeInvisibleAnnotations(attr) => attr.attribute_length,
+            Self::RuntimeVisibleParameterAnnotations(attr) => attr.attribute_length,
+            Self::RuntimeInvisibleParameterAnnotations(attr) => attr.attribute_length,
+            Self::RuntimeVisibleTypeAnnotations(attr) => attr.attribute_length,
+            Self::RuntimeInvisibleTypeAnnotations(attr) => attr.attribute_length,
+            Self::AnnotationDefault(attr) => attr.attribute_length,
+            Self::BootstrapMethods(attr) => attr.attribute_length,
+            Self::Module(attr) => attr.attribute_length,
+            Self::ModulePackages(attr) => attr.attribute_length,
+            Self::ModuleMainClass(attr) => attr.attribute_length,
+            Self::Record(attr) => attr.attribute_length,
+            Self::PermittedSubclasses(attr) => attr.attribute_length,
+            Self::Unknown(attr) => attr.attribute_length,
+        }
+    }
 }

@@ -13,7 +13,7 @@ from ..model import ClassModel
 JAVA_LANG_OBJECT = "java/lang/Object"
 
 
-class HierarchyError(Exception):
+class HierarchyError(RuntimeError):
     """Base class for hierarchy-resolution failures."""
 
 
@@ -64,7 +64,7 @@ class ResolvedClass:
 
         if not isinstance(classfile, ClassFile):
             raise TypeError("ResolvedClass.from_classfile expects a Rust ClassFile")
-        return _resolved_class_from_rust(_rust.rust_resolved_classfile(bytes(classfile.to_bytes())))
+        return _resolved_class_from_rust(_rust.rust_resolved_classfile(classfile))
 
     @classmethod
     def from_model(cls, model: object) -> ResolvedClass:

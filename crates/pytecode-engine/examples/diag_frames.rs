@@ -29,7 +29,7 @@ fn main() {
             continue;
         };
         for method in &model.methods {
-            let Some(code) = &method.code else {
+            let Some(code) = method.code() else {
                 continue;
             };
             match recompute_frames(

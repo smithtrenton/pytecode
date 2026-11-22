@@ -29,7 +29,7 @@ fn first_method_with_code(model: &mut ClassModel) -> &mut pytecode_engine::model
     model
         .methods
         .iter_mut()
-        .find(|method| method.code.is_some())
+        .find(|method| method.has_code())
         .expect("fixture should contain method with code")
 }
 
@@ -45,12 +45,12 @@ fn first_method_with_code_index(model: &ClassModel) -> usize {
     model
         .methods
         .iter()
-        .position(|method| method.code.is_some())
+        .position(|method| method.has_code())
         .expect("fixture should contain method with code")
 }
 
 fn code_mut(method: &mut MethodModel) -> &mut CodeModel {
-    method.code.as_mut().expect("method should have code")
+    method.code_mut().expect("method should have code")
 }
 
 fn strip_code_attr_named(code: &mut CodeModel, name: &str) {
@@ -295,7 +295,7 @@ fn static_interface_methods_preserve_interface_ref_invocations() {
     );
     let model = ClassModel::from_bytes(&bytes).expect("fixture should lift");
     let found = model.methods.iter().any(|method| {
-        method.code.as_ref().is_some_and(|code| {
+        method.code().is_some_and(|code| {
             code.instructions.iter().any(|item| {
                 matches!(
                     item,
@@ -311,7 +311,7 @@ fn static_interface_methods_preserve_interface_ref_invocations() {
     let lowered = model.to_bytes().expect("fixture should lower");
     let roundtripped = ClassModel::from_bytes(&lowered).expect("lowered bytes should still lift");
     let found_again = roundtripped.methods.iter().any(|method| {
-        method.code.as_ref().is_some_and(|code| {
+        method.code().is_some_and(|code| {
             code.instructions.iter().any(|item| {
                 matches!(
                     item,
@@ -335,7 +335,7 @@ fn stale_debug_info_flags_strip_lowered_debug_attributes_without_mutating_lists(
     let method_index = first_method_with_code_index(&model);
     let (original_line_numbers, original_local_variables, original_local_variable_types) = {
         let method = &model.methods[method_index];
-        let code = method.code.as_ref().expect("method should have code");
+        let code = method.code().expect("method should have code");
         assert!(!code.line_numbers.is_empty());
         (
             code.line_numbers.clone(),
@@ -365,7 +365,7 @@ fn stale_debug_info_flags_strip_lowered_debug_attributes_without_mutating_lists(
     assert!(!has_code_debug_info(&lowered_code.attributes));
 
     let method = first_method_with_code(&mut model);
-    let code = method.code.as_ref().expect("method should still have code");
+    let code = method.code().expect("method should still have code");
     assert_eq!(code.line_numbers, original_line_numbers);
     assert_eq!(code.local_variables, original_local_variables);
     assert_eq!(code.local_variable_types, original_local_variable_types);
@@ -378,7 +378,7 @@ fn strip_policy_removes_debug_info_without_mutating_model() {
     assert!(has_class_debug_info(&model.attributes));
 
     let method = first_method_with_code(&mut model);
-    let code = method.code.as_ref().expect("method should have code");
+    let code = method.code().expect("method should have code");
     assert!(!code.line_numbers.is_empty());
     let original_line_numbers = code.line_numbers.clone();
 
@@ -399,7 +399,7 @@ fn strip_policy_removes_debug_info_without_mutating_model() {
     assert!(!has_code_debug_info(&lowered_code.attributes));
 
     let method = first_method_with_code(&mut model);
-    let code = method.code.as_ref().expect("method should still have code");
+    let code = method.code().expect("method should still have code");
     assert_eq!(code.line_numbers, original_line_numbers);
 }
 
@@ -488,7 +488,7 @@ fn legacy_jsr_ret_methods_roundtrip_with_recomputed_frames_on_old_versions() {
         .methods
         .iter()
         .find(|method| method.name == "branch")
-        .and_then(|method| method.code.as_ref())
+        .and_then(|method| method.code())
         .expect("re-lifted branch method should have code");
     assert!(
         lifted_code
@@ -542,8 +542,7 @@ fn ldc_integer_and_long_constants_lift_as_signed_values() {
             .find(|method| method.name == method_name)
             .unwrap_or_else(|| panic!("method {method_name} not found"));
         let code = method
-            .code
-            .as_ref()
+            .code()
             .unwrap_or_else(|| panic!("method {method_name} should have code"));
         let values: Vec<_> = code
             .instructions

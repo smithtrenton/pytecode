@@ -3,6 +3,9 @@ use pyo3::types::{PyAny, PyBytes, PyString};
 use pytecode_engine::modified_utf8::JavaString;
 
 pub(crate) fn from_python(value: &Bound<'_, PyString>) -> PyResult<JavaString> {
+    if let Ok(text) = value.to_str() {
+        return Ok(JavaString::from_utf16(text.encode_utf16().collect()));
+    }
     let bytes: Vec<u8> = value
         .py()
         .get_type::<PyString>()
@@ -19,6 +22,9 @@ pub(crate) fn from_python(value: &Bound<'_, PyString>) -> PyResult<JavaString> {
 }
 
 pub(crate) fn to_python(py: Python<'_>, value: &JavaString) -> PyResult<Py<PyAny>> {
+    if let Ok(text) = String::from_utf16(value.as_utf16()) {
+        return Ok(PyString::new(py, &text).into_any().unbind());
+    }
     let bytes: Vec<u8> = value
         .as_utf16()
         .iter()

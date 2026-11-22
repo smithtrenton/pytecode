@@ -13,14 +13,21 @@ from pathlib import Path
 import pytest
 
 import pytecode.model as model_api
-from pytecode._rust import ClassTransform, Pipeline
 from pytecode.transforms import (
+    ClassTransform,
     CodeTransform,
+    FieldTransform,
     InsnMatcher,
+    MethodTransform,
+    Pipeline,
     PipelineBuilder,
     add_access_flags,
     add_interface,
+    class_any,
     class_named,
+    code_transform,
+    field_any,
+    method_any,
     method_named,
     remove_access_flags,
     remove_field,
@@ -576,6 +583,8 @@ class TestPipelineApply:
         method = next(
             method for method in model.methods if method.code is not None and len(method.code.instructions) >= 4
         )
+        method_name = method.name
+        method_descriptor = method.descriptor
         code = method.code
         assert code is not None
         start, pattern, replacement = _find_unique_sequence(code)
@@ -584,7 +593,7 @@ class TestPipelineApply:
         (
             PipelineBuilder()
             .on_code(
-                method_named(method.name),
+                method_named(method_name),
                 CodeTransform.replace_sequence(pattern, replacement),
                 owner_matcher=class_named(model.name),
             )
@@ -592,7 +601,9 @@ class TestPipelineApply:
             .apply(model)
         )
 
-        updated_code = next(m for m in model.methods if m.name == method.name).code
+        updated_code = next(
+            m for m in model.methods if m.name == method_name and m.descriptor == method_descriptor
+        ).code
         assert updated_code is not None
         assert len(updated_code.instructions) == original_len - len(pattern) + len(replacement)
         assert start not in updated_code.find_sequences(pattern)
@@ -604,6 +615,8 @@ class TestPipelineApply:
         method = next(
             method for method in model.methods if method.code is not None and len(method.code.instructions) >= 4
         )
+        method_name = method.name
+        method_descriptor = method.descriptor
         code = method.code
         assert code is not None
         _, pattern, _ = _find_unique_sequence(code)
@@ -614,15 +627,17 @@ class TestPipelineApply:
                 class_named(model.name),
                 ClassTransform.code_transform(
                     CodeTransform.remove_sequence(pattern),
-                    method_name=method.name,
-                    method_descriptor=method.descriptor,
+                    method_name=method_name,
+                    method_descriptor=method_descriptor,
                 ),
             )
             .build()
             .apply(model)
         )
 
-        updated_code = next(m for m in model.methods if m.name == method.name).code
+        updated_code = next(
+            m for m in model.methods if m.name == method_name and m.descriptor == method_descriptor
+        ).code
         assert updated_code is not None
         assert not updated_code.find_sequences(pattern)
 
@@ -962,3 +977,163 @@ class TestCustomCallbacks:
         assert added >= before
         assert cp.count() == before + 1
         assert len(m.to_bytes()) > 0
+
+
+class TestMemberScopedAndExtendedTransforms:
+    """Tests for member-scoped transforms, direct .apply(), surrogates, and edge cases."""
+
+    def test_field_transform_is_member_scoped(self) -> None:
+        model = model_api.ClassModel(
+            "pkg/Fields",
+            fields=[
+                model_api.FieldModel("keep", "I", 0x0001),
+                model_api.FieldModel("target", "I", 0x0001),
+                model_api.FieldModel("dropMe", "J", 0x0002),
+            ],
+        )
+        step = FieldTransform.sequence(
+            [
+                FieldTransform.rename("renamed"),
+                FieldTransform.set_descriptor("Ljava/lang/String;"),
+                FieldTransform.set_access_flags(0x0002),
+                FieldTransform.add_access_flags(0x0010),
+                FieldTransform.remove_access_flags(0x0002),
+            ]
+        )
+        pipeline = (
+            PipelineBuilder()
+            .on_fields(field_named("target"), step)
+            .on_fields(field_named("dropMe"), FieldTransform.remove())
+            .build()
+        )
+        pipeline.apply(model)
+
+        names = [f.name for f in model.fields]
+        assert names == ["keep", "renamed"]
+        kept, renamed = model.fields[0], model.fields[1]
+        assert (kept.descriptor, kept.access_flags) == ("I", 0x0001)
+        assert (renamed.descriptor, renamed.access_flags) == ("Ljava/lang/String;", 0x0010)
+
+    def test_method_transform_is_member_scoped(self) -> None:
+        code_a = model_api.CodeModel(1, 1, [model_api.RawInsn(0x00), model_api.RawInsn(0xB1)])
+        code_b = model_api.CodeModel(1, 1, [model_api.RawInsn(0x00), model_api.RawInsn(0xB1)])
+        m_keep = model_api.MethodModel("keep", "()V", 0x0001)
+        m_keep.code = code_a
+        m_edit = model_api.MethodModel("target", "()V", 0x0001)
+        m_edit.code = code_b
+        m_drop = model_api.MethodModel("dropMe", "()V", 0x0002)
+        model = model_api.ClassModel("pkg/Methods", methods=[m_keep, m_edit, m_drop])
+
+        step = MethodTransform.sequence(
+            [
+                MethodTransform.rename("renamed"),
+                MethodTransform.set_descriptor("(I)V"),
+                MethodTransform.set_access_flags(0x0008),
+                MethodTransform.add_access_flags(0x0001),
+                MethodTransform.remove_access_flags(0x0008),
+                MethodTransform.code_transform(CodeTransform.remove_insn(InsnMatcher.opcode(0x00))),
+            ]
+        )
+        pipeline = (
+            PipelineBuilder()
+            .on_methods(method_named("target"), step)
+            .on_methods(method_named("dropMe"), MethodTransform.remove())
+            .build()
+        )
+        pipeline.apply(model)
+
+        assert [m.name for m in model.methods] == ["keep", "renamed"]
+        assert model.methods[0].code is not None and len(model.methods[0].code.instructions) == 2
+        edited = model.methods[1]
+        assert (edited.descriptor, edited.access_flags) == ("(I)V", 0x0001)
+        assert edited.code is not None and len(edited.code.instructions) == 1
+
+    def test_on_code_custom_short_circuits_on_error(self) -> None:
+        model = model_api.ClassModel(
+            "pkg/CodeCb",
+            methods=[
+                model_api.MethodModel("first", "()V", 0x0009),
+                model_api.MethodModel("second", "()V", 0x0009),
+            ],
+        )
+        model.methods[0].set_raw_code(1, 1, b"\x00\xb1")
+        model.methods[1].set_raw_code(1, 1, b"\x00\xb1")
+        calls: list[int] = []
+
+        def fail_first(code: model_api.CodeModel) -> None:
+            calls.append(1)
+            code.instructions = [model_api.RawInsn(0xB1)]
+            raise ValueError("stop-now")
+
+        def never_called(model_arg: model_api.ClassModel) -> None:
+            calls.append(2)
+
+        pipeline = (
+            PipelineBuilder()
+            .on_code_custom(method_named("first"), fail_first)
+            .on_classes_custom(class_any(), never_called)
+            .build()
+        )
+        with pytest.raises(ValueError, match="stop-now"):
+            pipeline.apply(model)
+        assert calls == [1]
+
+    def test_pipeline_builder_build_returns_isolated_snapshot(self) -> None:
+        builder = PipelineBuilder().on_classes(class_any(), rename_class("pkg/One"))
+        p1 = builder.build()
+        builder.on_classes(class_any(), add_access_flags(0x0010))
+        p2 = builder.build()
+        assert len(p1) == 1
+        assert len(p2) == 2
+
+    def test_direct_apply_redirects_surrogates_and_generator_apply_all(self) -> None:
+        code = model_api.CodeModel(
+            max_stack=2,
+            max_locals=1,
+            instructions=[
+                model_api.MethodInsn(0xB8, "old/Cls", "call", "()V", False),
+                model_api.FieldInsn(0xB2, "old/Cls", "fld", "I"),
+                model_api.LdcInsn.string("hi\ud800"),
+                model_api.RawInsn(0xB1),
+            ],
+        )
+        CodeTransform.redirect_method_call("old/Cls", "call", "()V", "new/Iface", "call", to_is_interface=True).apply(
+            code
+        )
+        CodeTransform.redirect_field_access(
+            "old/Cls", "fld", "new/Cls", "fld2", from_descriptor="I", to_descriptor="J"
+        ).apply(code)
+        CodeTransform.replace_string("hi\ud800", "bye\udc00").apply(code)
+
+        insns = code.instructions.to_list()
+        m_insn = insns[0]
+        f_insn = insns[1]
+        ldc_insn = insns[2]
+        assert isinstance(m_insn, model_api.MethodInsn) and m_insn.owner == "new/Iface" and m_insn.is_interface
+        assert isinstance(f_insn, model_api.FieldInsn) and f_insn.name == "fld2" and f_insn.descriptor == "J"
+        assert isinstance(ldc_insn, model_api.LdcInsn) and ldc_insn.value == "bye\udc00"
+
+        m1 = model_api.ClassModel("pkg/GenOne")
+        m2 = model_api.ClassModel("pkg/GenTwo")
+        code_transform(CodeTransform.remove_insn(InsnMatcher.is_label())).apply(m1)
+        ClassTransform.rename_class("pkg/DirectApplied").apply(m1)
+        assert m1.name == "pkg/DirectApplied"
+
+        pipe = (
+            PipelineBuilder()
+            .on_fields(field_any(), FieldTransform.set_access_flags(0x0001))
+            .on_methods(method_any(), MethodTransform.set_access_flags(0x0001))
+            .build()
+        )
+        pipe.apply_all(m for m in (m1, m2))
+        compiled = pipe.compile()
+        compiled.apply_all(m for m in (m1, m2))
+
+        with pytest.raises(TypeError, match="callable"):
+            PipelineBuilder().on_classes_custom(class_any(), 123)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="callable"):
+            PipelineBuilder().on_fields_custom(field_any(), "no")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="callable"):
+            PipelineBuilder().on_methods_custom(method_any(), None)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="callable"):
+            PipelineBuilder().on_code_custom(method_any(), 42)  # type: ignore[arg-type]

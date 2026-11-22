@@ -10,7 +10,7 @@ use pytecode_engine::error::{EngineError, EngineErrorKind};
 use pytecode_engine::model::ClassModel;
 use pytecode_engine::transform::ApplyClassTransform;
 use pytecode_engine::transform::pipeline_spec::CompiledPipeline;
-use pytecode_engine::transform::transform_spec::ClassTransformSpec;
+use pytecode_engine::transform::transform_spec::CompiledClassTransform;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use zip::{CompressionMethod, DateTime, System};
@@ -42,6 +42,19 @@ impl PyPreparedArchiveRewrite {
             .to_path_buf())
     }
 
+    fn entries(&self) -> PyResult<Vec<PyArchiveEntryState>> {
+        let prepared = self
+            .prepared
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("rewrite already committed"))?;
+        prepared
+            .entries()
+            .iter()
+            .cloned()
+            .map(PyArchiveEntryState::from_jar_info)
+            .collect()
+    }
+
     fn commit(&mut self) -> PyResult<PathBuf> {
         self.prepared
             .take()
@@ -57,6 +70,7 @@ fn archive_error_to_py(error: ArchiveError) -> PyErr {
         ArchiveError::EmptyFilename
         | ArchiveError::AbsolutePath(_)
         | ArchiveError::ParentTraversal(_)
+        | ArchiveError::InvalidFilename(_)
         | ArchiveError::InvalidTimestamp(_)
         | ArchiveError::NonUtf8Comment(_) => PyValueError::new_err(error.to_string()),
         other => PyOSError::new_err(other.to_string()),
@@ -108,6 +122,7 @@ impl PyArchiveEntryState {
             original_index,
         }
     }
+
     #[getter]
     fn filename(&self) -> String {
         self.filename.clone()
@@ -246,13 +261,12 @@ struct CompiledPipelineArchiveTransform<'a> {
 
 impl ApplyClassTransform for CompiledPipelineArchiveTransform<'_> {
     fn apply(&mut self, model: &mut ClassModel) -> pytecode_engine::Result<()> {
-        self.inner.apply(model);
-        Ok(())
+        self.inner.apply(model)
     }
 }
 
 struct ClassTransformArchiveTransform<'a> {
-    inner: &'a ClassTransformSpec,
+    inner: &'a CompiledClassTransform,
 }
 
 impl ApplyClassTransform for ClassTransformArchiveTransform<'_> {
@@ -385,8 +399,8 @@ fn rewrite_with_pipeline(
     output_path: Option<PathBuf>,
     options: RewriteOptions<'_>,
 ) -> PyResult<PreparedRewrite> {
-    if pipeline.contains_python_callbacks() {
-        let compiled = pipeline.compile_internal();
+    let compiled = pipeline.compile_internal()?;
+    if compiled.contains_python_callbacks {
         let callback_error = Arc::new(Mutex::new(None));
         let mut wrapped = CallbackCompiledPipelineArchiveTransform {
             inner: &compiled,
@@ -401,8 +415,9 @@ fn rewrite_with_pipeline(
         );
     }
 
-    let compiled = pipeline.spec.compile();
-    let mut wrapped = CompiledPipelineArchiveTransform { inner: &compiled };
+    let mut wrapped = CompiledPipelineArchiveTransform {
+        inner: &compiled.inner,
+    };
     jar.prepare_rewrite(output_path.as_deref(), Some(&mut wrapped), options)
         .map_err(archive_error_to_py)
 }
@@ -452,7 +467,7 @@ fn rewrite_with_python_callable(
 fn rewrite_options<'a>(
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&'a PyMappingClassResolver>,
-    debug_info: &str,
+    debug_info: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<RewriteOptions<'a>> {
     let debug_info = parse_debug_info_policy(debug_info)?;
     let frame_mode = parse_frame_computation_mode(frame_mode)?;
@@ -472,6 +487,10 @@ fn rewrite_with_transform(
 ) -> PyResult<PreparedRewrite> {
     if let Ok(owner) = transform.getattr("__self__")
         && !owner.is_none()
+        && transform
+            .getattr("__name__")
+            .and_then(|name| name.extract::<String>())
+            .is_ok_and(|name| name == "apply")
     {
         if let Ok(pipeline) = owner.extract::<PyRef<'_, PyPipeline>>() {
             return rewrite_with_pipeline(jar, pipeline, output_path, options);
@@ -490,9 +509,11 @@ fn rewrite_with_transform(
     }
 
     if let Ok(transform) = transform.extract::<PyRef<'_, PyClassTransform>>() {
-        let mut wrapped = ClassTransformArchiveTransform {
-            inner: &transform.spec,
-        };
+        let compiled = transform
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?;
+        let mut wrapped = ClassTransformArchiveTransform { inner: &compiled };
         return jar
             .prepare_rewrite(output_path.as_deref(), Some(&mut wrapped), options)
             .map_err(archive_error_to_py);
@@ -503,7 +524,7 @@ fn rewrite_with_transform(
     }
 
     Err(PyTypeError::new_err(
-        "rewrite_archive_with_rust_transform() expected a callable, ClassTransform, Pipeline, CompiledPipeline, or bound .apply method",
+        "expected a callable, ClassTransform, Pipeline, CompiledPipeline, or bound .apply method",
     ))
 }
 
@@ -511,34 +532,77 @@ fn jar_from_state(
     py: Python<'_>,
     source_path: PathBuf,
     entries: Vec<Py<PyArchiveEntryState>>,
+    comment: Option<Vec<u8>>,
 ) -> PyResult<JarFile> {
     let mut jar_entries = Vec::with_capacity(entries.len());
     for entry in entries {
         let entry = entry.borrow(py);
         jar_entries.push(entry.to_jar_info()?);
     }
-    Ok(JarFile::from_entries(source_path, jar_entries))
+    let mut jar = JarFile::from_entries(source_path, jar_entries);
+    if let Some(comment) = comment {
+        jar.comment = comment;
+    }
+    Ok(jar)
 }
 
+/// Open, transform, and rewrite a JAR archive using a Rust transform, pipeline, or callable.
 #[pyfunction]
-#[pyo3(signature = (source_path, transform, output_path=None, frame_mode=None, resolver=None, debug_info="preserve"))]
+#[pyo3(signature = (
+    source_path,
+    transform,
+    output_path=None,
+    frame_mode=None,
+    resolver=None,
+    debug_info=None,
+    *,
+    max_entries=100_000,
+    max_entry_bytes=268_435_456,
+    max_total_bytes=1_073_741_824,
+))]
+#[allow(clippy::too_many_arguments)]
 fn rewrite_archive_with_rust_transform(
     source_path: PathBuf,
     transform: &Bound<'_, PyAny>,
     output_path: Option<PathBuf>,
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
-    debug_info: &str,
+    debug_info: Option<&Bound<'_, PyAny>>,
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
 ) -> PyResult<PathBuf> {
     let options = rewrite_options(frame_mode, resolver, debug_info)?;
-    let mut jar = JarFile::open(&source_path).map_err(archive_error_to_py)?;
+    let mut jar = JarFile::open_with_limits(
+        &source_path,
+        ArchiveReadLimits {
+            max_entries,
+            max_entry_bytes,
+            max_total_bytes,
+        },
+    )
+    .map_err(archive_error_to_py)?;
     rewrite_with_transform(&mut jar, transform, output_path, options)?
         .commit(&mut jar)
         .map_err(archive_error_to_py)
 }
 
+/// Prepare an atomic archive rewrite from edited in-memory entry states.
 #[pyfunction]
-#[pyo3(signature = (source_path, entries, transform=None, output_path=None, frame_mode=None, resolver=None, debug_info="preserve", *, max_entries=100_000, max_entry_bytes=268_435_456, max_total_bytes=1_073_741_824))]
+#[pyo3(signature = (
+    source_path,
+    entries,
+    transform=None,
+    output_path=None,
+    frame_mode=None,
+    resolver=None,
+    debug_info=None,
+    *,
+    comment=None,
+    max_entries=100_000,
+    max_entry_bytes=268_435_456,
+    max_total_bytes=1_073_741_824,
+))]
 #[allow(clippy::too_many_arguments)]
 fn rewrite_archive_state(
     py: Python<'_>,
@@ -548,13 +612,14 @@ fn rewrite_archive_state(
     output_path: Option<PathBuf>,
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
-    debug_info: &str,
+    debug_info: Option<&Bound<'_, PyAny>>,
+    comment: Option<Vec<u8>>,
     max_entries: usize,
     max_entry_bytes: u64,
     max_total_bytes: u64,
 ) -> PyResult<PyPreparedArchiveRewrite> {
     let options = rewrite_options(frame_mode, resolver, debug_info)?;
-    let mut jar = jar_from_state(py, source_path, entries)?;
+    let mut jar = jar_from_state(py, source_path, entries, comment)?;
     jar.read_limits = ArchiveReadLimits {
         max_entries,
         max_entry_bytes,
@@ -572,6 +637,7 @@ fn rewrite_archive_state(
     })
 }
 
+/// Read all archive entries from disk into ``_ArchiveEntryState`` snapshots.
 #[pyfunction]
 #[pyo3(signature = (source_path, *, max_entries=100_000, max_entry_bytes=268_435_456, max_total_bytes=1_073_741_824))]
 fn read_archive_state(
@@ -595,10 +661,39 @@ fn read_archive_state(
         .collect::<PyResult<Vec<_>>>()
 }
 
+/// Read all archive entries and the archive-level ZIP comment in one pass.
+#[pyfunction]
+#[pyo3(signature = (source_path, *, max_entries=100_000, max_entry_bytes=268_435_456, max_total_bytes=1_073_741_824))]
+fn read_archive_info<'py>(
+    py: Python<'py>,
+    source_path: PathBuf,
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+) -> PyResult<(Vec<PyArchiveEntryState>, Py<PyBytes>)> {
+    let jar = JarFile::open_with_limits(
+        &source_path,
+        ArchiveReadLimits {
+            max_entries,
+            max_entry_bytes,
+            max_total_bytes,
+        },
+    )
+    .map_err(archive_error_to_py)?;
+    let comment = PyBytes::new(py, &jar.comment).unbind();
+    let entries = jar
+        .entries
+        .into_iter()
+        .map(PyArchiveEntryState::from_jar_info)
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok((entries, comment))
+}
+
 pub(crate) fn register(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPreparedArchiveRewrite>()?;
     module.add_class::<PyArchiveEntryState>()?;
     module.add_function(wrap_pyfunction!(read_archive_state, module)?)?;
+    module.add_function(wrap_pyfunction!(read_archive_info, module)?)?;
     module.add_function(wrap_pyfunction!(
         rewrite_archive_with_rust_transform,
         module

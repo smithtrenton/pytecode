@@ -12,7 +12,7 @@ lower-level transform APIs::
 
 from __future__ import annotations
 
-from pytecode._rust import ClassTransform
+from pytecode._rust import ClassTransform, CodeTransform
 
 
 def rename_class(name: str) -> ClassTransform:
@@ -78,6 +78,15 @@ def set_method_access_flags(name: str, flags: int) -> ClassTransform:
 def set_field_access_flags(name: str, flags: int) -> ClassTransform:
     """Replace the access flags of fields named ``name`` with ``flags``."""
     return ClassTransform.set_field_access_flags(name, flags)
+
+
+def code_transform(
+    transform: CodeTransform,
+    method_name: str | None = None,
+    method_descriptor: str | None = None,
+) -> ClassTransform:
+    """Apply ``transform`` to method bodies matching optional ``method_name`` and ``method_descriptor``."""
+    return ClassTransform.code_transform(transform, method_name=method_name, method_descriptor=method_descriptor)
 
 
 def sequence(*transforms: ClassTransform) -> ClassTransform:

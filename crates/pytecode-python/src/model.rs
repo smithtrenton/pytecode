@@ -1,19 +1,22 @@
 mod constant_pool;
-use constant_pool::PyConstantPoolBuilder;
+pub(crate) use constant_pool::PyConstantPoolBuilder;
 
-use pyo3::exceptions::{PyIndexError, PyRuntimeError};
+use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyString};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PySlice, PyString};
 use pyo3::wrap_pyfunction;
-use pytecode_engine::analysis::MappingClassResolver;
+use pytecode_engine::analysis::{MappingClassResolver, ResolvedClass};
+use pytecode_engine::constants::ClassAccessFlags;
 use pytecode_engine::indexes::BootstrapMethodIndex;
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
     DebugInfoState, DynamicValue, ExceptionHandler, FieldInsn, FieldModel, FrameComputationMode,
-    IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn, Label, LdcInsn, LdcValue, LookupSwitchInsn,
-    MethodHandleValue, MethodInsn, MethodModel, MultiANewArrayInsn, TableSwitchInsn, TypeInsn,
-    VarInsn,
+    IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn, Label, LdcInsn, LdcValue, LineNumberEntry,
+    LocalVariableEntry, LocalVariableTypeEntry, LookupSwitchInsn, MethodHandleValue, MethodInsn,
+    MethodModel, MultiANewArrayInsn, TableSwitchInsn, TypeInsn, VarInsn,
 };
+use pytecode_engine::parse_class;
 use pytecode_engine::raw::{ArrayType, ClassFile, Instruction, NewArrayInsn};
 use pytecode_engine::write_class;
 use std::cell::RefCell;
@@ -22,48 +25,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::PyClassFile;
+use crate::analysis::{analysis_error_to_py, resolved_class_to_py};
 use crate::transforms::PyInsnMatcher;
 
 type PyObject = Py<PyAny>;
 
-// ---------------------------------------------------------------------------
-// Helper: convert EngineError → PyErr
-// ---------------------------------------------------------------------------
-
-fn analysis_error_to_py(e: pytecode_engine::analysis::AnalysisError) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-}
-
-fn resolved_method_to_py(
-    py: Python<'_>,
-    method: &pytecode_engine::analysis::ResolvedMethod,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    dict.set_item("name", &method.name)?;
-    dict.set_item("descriptor", &method.descriptor)?;
-    dict.set_item("access_flags", method.access_flags.bits())?;
-    Ok(dict.into_any().unbind())
-}
-
-fn resolved_class_to_py(
-    py: Python<'_>,
-    resolved: &pytecode_engine::analysis::ResolvedClass,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
-    let methods = resolved
-        .methods
-        .iter()
-        .map(|method| resolved_method_to_py(py, method))
-        .collect::<PyResult<Vec<_>>>()?;
-    dict.set_item("name", &resolved.name)?;
-    dict.set_item("super_name", &resolved.super_name)?;
-    dict.set_item("interfaces", &resolved.interfaces)?;
-    dict.set_item("access_flags", resolved.access_flags.bits())?;
-    dict.set_item("methods", methods)?;
-    Ok(dict.into_any().unbind())
-}
-
 type SharedClassState = Rc<RefCell<ClassModelState>>;
+type OwnedCodeState = Rc<RefCell<Option<CodeModel>>>;
 
 struct ClassModelState {
     inner: Option<ClassModel>,
@@ -83,16 +51,42 @@ impl ClassModelState {
     }
 }
 
+struct ClassModelRestoreGuard {
+    state: SharedClassState,
+    inner: Option<ClassModel>,
+}
+
+impl Drop for ClassModelRestoreGuard {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take()
+            && let Ok(mut borrowed) = self.state.try_borrow_mut()
+        {
+            borrowed.inner = Some(inner);
+            borrowed.interfaces_generation += 1;
+            borrowed.fields_generation += 1;
+            borrowed.methods_generation += 1;
+        }
+    }
+}
+
 fn dead_model_err() -> PyErr {
-    PyErr::new::<PyRuntimeError, _>("ClassModel is no longer live")
+    PyRuntimeError::new_err("ClassModel is no longer live")
+}
+
+fn dead_code_err() -> PyErr {
+    PyRuntimeError::new_err("CodeModel is no longer live")
+}
+
+fn borrow_err(kind: &str) -> PyErr {
+    PyRuntimeError::new_err(format!("{kind} is already mutably borrowed"))
 }
 
 fn stale_ref_err(kind: &str) -> PyErr {
-    PyErr::new::<PyRuntimeError, _>(format!("{kind} is stale after structural mutation"))
+    PyRuntimeError::new_err(format!("{kind} is stale after structural mutation"))
 }
 
 fn index_err(index: isize, len: usize) -> PyErr {
-    PyErr::new::<PyIndexError, _>(format!("index {index} out of range for length {len}"))
+    PyIndexError::new_err(format!("index {index} out of range for length {len}"))
 }
 
 fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
@@ -107,11 +101,22 @@ fn normalize_index(index: isize, len: usize) -> PyResult<usize> {
     Ok(normalized as usize)
 }
 
+fn slice_indices(slice: &Bound<'_, PySlice>, len: usize) -> PyResult<Vec<usize>> {
+    let info = slice.indices(len as isize)?;
+    let mut out = Vec::with_capacity(info.slicelength);
+    let mut current = info.start;
+    for _ in 0..info.slicelength {
+        out.push(current as usize);
+        current += info.step;
+    }
+    Ok(out)
+}
+
 fn with_live_model<R>(
     state: &SharedClassState,
     f: impl FnOnce(&ClassModelState) -> PyResult<R>,
 ) -> PyResult<R> {
-    let borrowed = state.borrow();
+    let borrowed = state.try_borrow().map_err(|_| borrow_err("ClassModel"))?;
     if borrowed.inner.is_none() {
         return Err(dead_model_err());
     }
@@ -122,7 +127,9 @@ fn with_live_model_mut<R>(
     state: &SharedClassState,
     f: impl FnOnce(&mut ClassModelState) -> PyResult<R>,
 ) -> PyResult<R> {
-    let mut borrowed = state.borrow_mut();
+    let mut borrowed = state
+        .try_borrow_mut()
+        .map_err(|_| borrow_err("ClassModel"))?;
     if borrowed.inner.is_none() {
         return Err(dead_model_err());
     }
@@ -186,6 +193,7 @@ fn wrap_local_variable_type(
 // PyLabel
 // ---------------------------------------------------------------------------
 
+/// Symbolic branch and debug-range anchor inside a ``CodeModel``.
 #[pyclass(from_py_object, name = "Label", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLabel {
@@ -213,6 +221,7 @@ impl PyLabel {
         }
     }
 
+    /// Construct a symbolic label carrying an optional diagnostic name.
     #[staticmethod]
     fn named(name: &str) -> Self {
         Self {
@@ -220,11 +229,13 @@ impl PyLabel {
         }
     }
 
+    /// Optional symbolic name assigned to this label.
     #[getter]
     fn name(&self) -> Option<String> {
         self.inner.name.clone()
     }
 
+    /// Item discriminator tag (``"label"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "label"
@@ -249,9 +260,10 @@ impl PyLabel {
 }
 
 // ---------------------------------------------------------------------------
-// PyModelExceptionHandler
+// PyModelExceptionHandler & debug entries
 // ---------------------------------------------------------------------------
 
+/// Symbolic exception handler range in a ``CodeModel``.
 #[pyclass(from_py_object, name = "ExceptionHandler", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyModelExceptionHandler {
@@ -260,27 +272,49 @@ pub struct PyModelExceptionHandler {
 
 #[pymethods]
 impl PyModelExceptionHandler {
+    #[new]
+    #[pyo3(signature = (start, end, handler, catch_type=None))]
+    fn new(start: PyLabel, end: PyLabel, handler: PyLabel, catch_type: Option<String>) -> Self {
+        Self {
+            inner: ExceptionHandler {
+                start: start.inner,
+                end: end.inner,
+                handler: handler.inner,
+                catch_type,
+            },
+        }
+    }
+
+    /// Inclusive start label of the ``try`` block.
     #[getter]
     fn start(&self) -> PyLabel {
         PyLabel::from(self.inner.start.clone())
     }
 
+    /// Exclusive end label of the ``try`` block.
     #[getter]
     fn end(&self) -> PyLabel {
         PyLabel::from(self.inner.end.clone())
     }
 
+    /// Target label where control transfers on exception dispatch.
     #[getter]
     fn handler(&self) -> PyLabel {
         PyLabel::from(self.inner.handler.clone())
     }
 
+    /// Internal class name of the caught exception, or ``None`` for catch-all.
     #[getter]
     fn catch_type(&self) -> Option<String> {
         self.inner.catch_type.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!("ExceptionHandler(catch_type={:?})", self.inner.catch_type)
+    }
 }
 
+/// Symbolic line-number entry anchored to a ``Label`` in a ``CodeModel``.
 #[pyclass(from_py_object, name = "LineNumberEntry", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLineNumberEntry {
@@ -298,17 +332,24 @@ impl PyLineNumberEntry {
         }
     }
 
+    /// Label marking the start of this source line.
     #[getter]
     fn label(&self) -> PyLabel {
         PyLabel::from(self.label.clone())
     }
 
+    /// 1-based source line number.
     #[getter]
     fn line_number(&self) -> u16 {
         self.line_number
     }
+
+    fn __repr__(&self) -> String {
+        format!("LineNumberEntry(line_number={})", self.line_number)
+    }
 }
 
+/// Symbolic local-variable debug entry anchored to start and end ``Label`` instances.
 #[pyclass(from_py_object, name = "LocalVariableEntry", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLocalVariableEntry {
@@ -332,32 +373,45 @@ impl PyLocalVariableEntry {
         }
     }
 
+    /// Label marking the start of the variable's live range.
     #[getter]
     fn start(&self) -> PyLabel {
         PyLabel::from(self.start.clone())
     }
 
+    /// Label marking the end of the variable's live range.
     #[getter]
     fn end(&self) -> PyLabel {
         PyLabel::from(self.end.clone())
     }
 
+    /// Source name of the local variable.
     #[getter]
     fn name(&self) -> String {
         self.name.clone()
     }
 
+    /// JVM field descriptor of the local variable.
     #[getter]
     fn descriptor(&self) -> String {
         self.descriptor.clone()
     }
 
+    /// Local-variable slot index.
     #[getter]
     fn index(&self) -> u16 {
         self.index
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LocalVariableEntry(name={:?}, descriptor={:?}, index={})",
+            self.name, self.descriptor, self.index
+        )
+    }
 }
 
+/// Symbolic generic-signature debug entry for a local variable.
 #[pyclass(
     from_py_object,
     name = "LocalVariableTypeEntry",
@@ -385,36 +439,58 @@ impl PyLocalVariableTypeEntry {
         }
     }
 
+    /// Label marking the start of the variable's live range.
     #[getter]
     fn start(&self) -> PyLabel {
         PyLabel::from(self.start.clone())
     }
 
+    /// Label marking the end of the variable's live range.
     #[getter]
     fn end(&self) -> PyLabel {
         PyLabel::from(self.end.clone())
     }
 
+    /// Source name of the local variable.
     #[getter]
     fn name(&self) -> String {
         self.name.clone()
     }
 
+    /// JVM generic type signature of the local variable.
     #[getter]
     fn signature(&self) -> String {
         self.signature.clone()
     }
 
+    /// Local-variable slot index.
     #[getter]
     fn index(&self) -> u16 {
         self.index
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LocalVariableTypeEntry(name={:?}, signature={:?}, index={})",
+            self.name, self.signature, self.index
+        )
+    }
 }
 
+/// Symbolic representation of a ``CONSTANT_MethodHandle_info`` constant payload.
 #[pyclass(from_py_object, name = "MethodHandleValue", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodHandleValue {
     inner: MethodHandleValue,
+}
+
+fn validate_reference_kind(reference_kind: u8) -> PyResult<()> {
+    if !(1..=9).contains(&reference_kind) {
+        return Err(code_item_value_error(format!(
+            "method handle reference_kind must be in 1..=9, got {reference_kind}"
+        )));
+    }
+    Ok(())
 }
 
 #[pymethods]
@@ -426,8 +502,9 @@ impl PyMethodHandleValue {
         name: String,
         descriptor: String,
         is_interface: bool,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        validate_reference_kind(reference_kind)?;
+        Ok(Self {
             inner: MethodHandleValue {
                 reference_kind,
                 owner,
@@ -435,35 +512,48 @@ impl PyMethodHandleValue {
                 descriptor,
                 is_interface,
             },
-        }
+        })
     }
 
+    /// JVMS reference kind tag in ``1..=9``.
     #[getter]
     fn reference_kind(&self) -> u8 {
         self.inner.reference_kind
     }
 
+    /// Internal JVM name of the target member's owner class.
     #[getter]
     fn owner(&self) -> String {
         self.inner.owner.clone()
     }
 
+    /// Target field or method name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// Target field or method descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
 
+    /// Whether the target reference uses ``InterfaceMethodref``.
     #[getter]
     fn is_interface(&self) -> bool {
         self.inner.is_interface
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MethodHandleValue(reference_kind={}, owner={:?}, name={:?})",
+            self.inner.reference_kind, self.inner.owner, self.inner.name
+        )
+    }
 }
 
+/// Symbolic representation of a ``CONSTANT_Dynamic_info`` constant payload.
 #[pyclass(from_py_object, name = "DynamicValue", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyDynamicValue {
@@ -483,22 +573,138 @@ impl PyDynamicValue {
         }
     }
 
+    /// Index into the class's ``BootstrapMethods`` attribute table.
     #[getter]
     fn bootstrap_method_attr_index(&self) -> u16 {
         self.inner.bootstrap_method_attr_index.value()
     }
 
+    /// Constant name passed to the bootstrap method.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// Field descriptor of the resolved dynamic constant.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DynamicValue(bootstrap_method_attr_index={}, name={:?}, descriptor={:?})",
+            self.inner.bootstrap_method_attr_index.value(),
+            self.inner.name,
+            self.inner.descriptor
+        )
+    }
 }
 
+// ---------------------------------------------------------------------------
+// Symbolic instructions
+// ---------------------------------------------------------------------------
+
+fn validate_raw_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(
+        opcode,
+        0x00..=0x0F | 0x1A..=0x35 | 0x3B..=0x83 | 0x85..=0x98 | 0xAC..=0xB1 | 0xBE | 0xBF | 0xC2 | 0xC3
+    ) {
+        return Err(code_item_value_error(format!(
+            "invalid simple raw instruction opcode 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_byte_opcode(opcode: u8) -> PyResult<()> {
+    if opcode != 0x10 {
+        return Err(code_item_value_error(format!(
+            "ByteInsn requires opcode 0x10 (bipush), got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_short_opcode(opcode: u8) -> PyResult<()> {
+    if opcode != 0x11 {
+        return Err(code_item_value_error(format!(
+            "ShortInsn requires opcode 0x11 (sipush), got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_field_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(opcode, 0xB2..=0xB5) {
+        return Err(code_item_value_error(format!(
+            "FieldInsn requires opcode in 0xB2..=0xB5, got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_method_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(opcode, 0xB6..=0xB8) {
+        return Err(code_item_value_error(format!(
+            "MethodInsn requires opcode in 0xB6..=0xB8, got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_type_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(opcode, 0xBB | 0xBD | 0xC0 | 0xC1) {
+        return Err(code_item_value_error(format!(
+            "TypeInsn requires opcode in {{0xBB, 0xBD, 0xC0, 0xC1}}, got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_var_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(opcode, 0x15..=0x19 | 0x36..=0x3A | 0xA9) {
+        return Err(code_item_value_error(format!(
+            "VarInsn requires var/ret opcode in 0x15..=0x19, 0x36..=0x3A, or 0xA9, got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_branch_opcode(opcode: u8) -> PyResult<()> {
+    if !matches!(opcode, 0x99..=0xA8 | 0xC6..=0xC9) {
+        return Err(code_item_value_error(format!(
+            "BranchInsn requires branch opcode in 0x99..=0xA8 or 0xC6..=0xC9, got 0x{opcode:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_multianewarray_dimensions(dimensions: u8) -> PyResult<()> {
+    if dimensions < 1 {
+        return Err(code_item_value_error(
+            "MultiANewArrayInsn dimensions must be at least 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tableswitch_bounds(low: i32, high: i32, targets_len: usize) -> PyResult<()> {
+    if low > high {
+        return Err(code_item_value_error(format!(
+            "TableSwitchInsn requires low <= high, got low={low}, high={high}"
+        )));
+    }
+    let expected_len = i64::from(high) - i64::from(low) + 1;
+    if i64::try_from(targets_len) != Ok(expected_len) {
+        return Err(code_item_value_error(format!(
+            "TableSwitchInsn expected {expected_len} target(s) for range {low}..={high}, got {targets_len}"
+        )));
+    }
+    Ok(())
+}
+
+/// Symbolic zero-operand JVM instruction.
 #[pyclass(from_py_object, name = "RawInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyRawInsn {
@@ -508,21 +714,29 @@ pub struct PyRawInsn {
 #[pymethods]
 impl PyRawInsn {
     #[new]
-    fn new(opcode: u8) -> Self {
-        Self { opcode }
+    fn new(opcode: u8) -> PyResult<Self> {
+        validate_raw_opcode(opcode)?;
+        Ok(Self { opcode })
     }
 
+    /// Item discriminator tag (``"raw"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "raw"
     }
 
+    /// Raw JVM opcode byte.
     #[getter]
     fn opcode(&self) -> u8 {
         self.opcode
     }
+
+    fn __repr__(&self) -> String {
+        format!("RawInsn(opcode=0x{:02x})", self.opcode)
+    }
 }
 
+/// Symbolic signed-byte-immediate instruction (``bipush``).
 #[pyclass(from_py_object, name = "ByteInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyByteInsn {
@@ -533,26 +747,38 @@ pub struct PyByteInsn {
 #[pymethods]
 impl PyByteInsn {
     #[new]
-    fn new(opcode: u8, value: i8) -> Self {
-        Self { opcode, value }
+    fn new(opcode: u8, value: i8) -> PyResult<Self> {
+        validate_byte_opcode(opcode)?;
+        Ok(Self { opcode, value })
     }
 
+    /// Item discriminator tag (``"byte"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "byte"
     }
 
+    /// Raw JVM opcode byte.
     #[getter]
     fn opcode(&self) -> u8 {
         self.opcode
     }
 
+    /// Signed 8-bit immediate operand.
     #[getter]
     fn value(&self) -> i8 {
         self.value
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ByteInsn(opcode=0x{:02x}, value={})",
+            self.opcode, self.value
+        )
+    }
 }
 
+/// Symbolic signed-short-immediate instruction (``sipush``).
 #[pyclass(from_py_object, name = "ShortInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyShortInsn {
@@ -563,26 +789,38 @@ pub struct PyShortInsn {
 #[pymethods]
 impl PyShortInsn {
     #[new]
-    fn new(opcode: u8, value: i16) -> Self {
-        Self { opcode, value }
+    fn new(opcode: u8, value: i16) -> PyResult<Self> {
+        validate_short_opcode(opcode)?;
+        Ok(Self { opcode, value })
     }
 
+    /// Item discriminator tag (``"short"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "short"
     }
 
+    /// Raw JVM opcode byte.
     #[getter]
     fn opcode(&self) -> u8 {
         self.opcode
     }
 
+    /// Signed 16-bit immediate operand.
     #[getter]
     fn value(&self) -> i16 {
         self.value
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ShortInsn(opcode=0x{:02x}, value={})",
+            self.opcode, self.value
+        )
+    }
 }
 
+/// Symbolic ``newarray`` instruction allocating a primitive array.
 #[pyclass(from_py_object, name = "NewArrayInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyNewArrayInsn {
@@ -598,17 +836,24 @@ impl PyNewArrayInsn {
             .map_err(|err| code_item_value_error(format!("invalid newarray atype: {err}")))
     }
 
+    /// Item discriminator tag (``"newarray"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "newarray"
     }
 
+    /// Primitive array element type code (``4..=11``).
     #[getter]
     fn atype(&self) -> u8 {
         self.atype
     }
+
+    fn __repr__(&self) -> String {
+        format!("NewArrayInsn(atype={})", self.atype)
+    }
 }
 
+/// Symbolic field-access instruction (``getstatic``, ``putstatic``, ``getfield``, ``putfield``).
 #[pyclass(from_py_object, name = "FieldInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyFieldInsn {
@@ -618,43 +863,57 @@ pub struct PyFieldInsn {
 #[pymethods]
 impl PyFieldInsn {
     #[new]
-    fn new(opcode: u8, owner: String, name: String, descriptor: String) -> Self {
-        Self {
+    fn new(opcode: u8, owner: String, name: String, descriptor: String) -> PyResult<Self> {
+        validate_field_opcode(opcode)?;
+        Ok(Self {
             inner: FieldInsn {
                 opcode,
                 owner,
                 name,
                 descriptor,
             },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"field"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "field"
     }
 
+    /// Field-access opcode (``0xB2..=0xB5``).
     #[getter]
     fn opcode(&self) -> u8 {
         self.inner.opcode
     }
 
+    /// Internal JVM name of the declaring class.
     #[getter]
     fn owner(&self) -> String {
         self.inner.owner.clone()
     }
 
+    /// Field name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// JVM field descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "FieldInsn(opcode=0x{:02x}, owner={:?}, name={:?}, descriptor={:?})",
+            self.inner.opcode, self.inner.owner, self.inner.name, self.inner.descriptor
+        )
+    }
 }
 
+/// Symbolic method invocation instruction (``invokevirtual``, ``invokespecial``, ``invokestatic``).
 #[pyclass(from_py_object, name = "MethodInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMethodInsn {
@@ -671,8 +930,9 @@ impl PyMethodInsn {
         name: String,
         descriptor: String,
         is_interface: bool,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        validate_method_opcode(opcode)?;
+        Ok(Self {
             inner: MethodInsn {
                 opcode,
                 owner,
@@ -680,40 +940,58 @@ impl PyMethodInsn {
                 descriptor,
                 is_interface,
             },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"method"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "method"
     }
 
+    /// Method invocation opcode (``0xB6..=0xB8``).
     #[getter]
     fn opcode(&self) -> u8 {
         self.inner.opcode
     }
 
+    /// Internal JVM name of the declaring class or interface.
     #[getter]
     fn owner(&self) -> String {
         self.inner.owner.clone()
     }
 
+    /// Method name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// JVM method descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
 
+    /// Whether the constant-pool target uses ``InterfaceMethodref``.
     #[getter]
     fn is_interface(&self) -> bool {
         self.inner.is_interface
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MethodInsn(opcode=0x{:02x}, owner={:?}, name={:?}, descriptor={:?}, is_interface={})",
+            self.inner.opcode,
+            self.inner.owner,
+            self.inner.name,
+            self.inner.descriptor,
+            self.inner.is_interface
+        )
+    }
 }
 
+/// Symbolic ``invokeinterface`` instruction.
 #[pyclass(
     from_py_object,
     name = "InterfaceMethodInsn",
@@ -737,27 +1015,39 @@ impl PyInterfaceMethodInsn {
         }
     }
 
+    /// Item discriminator tag (``"interface_method"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "interface_method"
     }
 
+    /// Internal JVM name of the declaring interface.
     #[getter]
     fn owner(&self) -> String {
         self.inner.owner.clone()
     }
 
+    /// Interface method name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// JVM method descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "InterfaceMethodInsn(owner={:?}, name={:?}, descriptor={:?})",
+            self.inner.owner, self.inner.name, self.inner.descriptor
+        )
+    }
 }
 
+/// Symbolic type-operand instruction (``new``, ``anewarray``, ``checkcast``, ``instanceof``).
 #[pyclass(from_py_object, name = "TypeInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyTypeInsn {
@@ -767,28 +1057,40 @@ pub struct PyTypeInsn {
 #[pymethods]
 impl PyTypeInsn {
     #[new]
-    fn new(opcode: u8, descriptor: String) -> Self {
-        Self {
+    fn new(opcode: u8, descriptor: String) -> PyResult<Self> {
+        validate_type_opcode(opcode)?;
+        Ok(Self {
             inner: TypeInsn { opcode, descriptor },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"type"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "type"
     }
 
+    /// Type instruction opcode (``0xBB``, ``0xBD``, ``0xC0``, or ``0xC1``).
     #[getter]
     fn opcode(&self) -> u8 {
         self.inner.opcode
     }
 
+    /// Internal class name or array descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TypeInsn(opcode=0x{:02x}, descriptor={:?})",
+            self.inner.opcode, self.inner.descriptor
+        )
+    }
 }
 
+/// Symbolic local-variable instruction (``iload``, ``istore``, ..., ``ret``).
 #[pyclass(from_py_object, name = "VarInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyVarInsn {
@@ -798,28 +1100,40 @@ pub struct PyVarInsn {
 #[pymethods]
 impl PyVarInsn {
     #[new]
-    fn new(opcode: u8, slot: u16) -> Self {
-        Self {
+    fn new(opcode: u8, slot: u16) -> PyResult<Self> {
+        validate_var_opcode(opcode)?;
+        Ok(Self {
             inner: VarInsn { opcode, slot },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"var"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "var"
     }
 
+    /// Canonical local-variable opcode (automatically widened if ``slot > 255``).
     #[getter]
     fn opcode(&self) -> u8 {
         self.inner.opcode
     }
 
+    /// Local-variable slot index.
     #[getter]
     fn slot(&self) -> u16 {
         self.inner.slot
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "VarInsn(opcode=0x{:02x}, slot={})",
+            self.inner.opcode, self.inner.slot
+        )
+    }
 }
 
+/// Symbolic ``iinc`` instruction incrementing a local integer variable.
 #[pyclass(from_py_object, name = "IIncInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyIIncInsn {
@@ -835,22 +1149,33 @@ impl PyIIncInsn {
         }
     }
 
+    /// Item discriminator tag (``"iinc"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "iinc"
     }
 
+    /// Local-variable slot index.
     #[getter]
     fn slot(&self) -> u16 {
         self.inner.slot
     }
 
+    /// Signed increment delta (automatically widened when outside ``i8`` or ``slot > 255``).
     #[getter]
     fn value(&self) -> i16 {
         self.inner.value
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "IIncInsn(slot={}, value={})",
+            self.inner.slot, self.inner.value
+        )
+    }
 }
 
+/// Symbolic constant-loading instruction (``ldc``, ``ldc_w``, or ``ldc2_w``).
 #[pyclass(from_py_object, name = "LdcInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLdcInsn {
@@ -859,6 +1184,7 @@ pub struct PyLdcInsn {
 
 #[pymethods]
 impl PyLdcInsn {
+    /// Construct an ``ldc`` holding a signed 32-bit integer constant.
     #[staticmethod]
     fn int(value: i32) -> Self {
         Self {
@@ -868,6 +1194,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc`` holding a float constant from raw IEEE 754 bits.
     #[staticmethod]
     fn float_bits(value: u32) -> Self {
         Self {
@@ -877,6 +1204,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc2_w`` holding a signed 64-bit integer constant.
     #[staticmethod]
     fn long(value: i64) -> Self {
         Self {
@@ -886,6 +1214,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc2_w`` holding a double constant from raw 64-bit IEEE 754 bits.
     #[staticmethod]
     fn double_bits(value: u64) -> Self {
         Self {
@@ -895,6 +1224,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc`` holding a string literal (preserving lone surrogates).
     #[staticmethod]
     fn string(value: &Bound<'_, PyString>) -> PyResult<Self> {
         Ok(Self {
@@ -904,6 +1234,7 @@ impl PyLdcInsn {
         })
     }
 
+    /// Construct an ``ldc`` holding a class literal in internal JVM form.
     #[staticmethod]
     fn class_value(value: String) -> Self {
         Self {
@@ -913,6 +1244,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc`` holding a ``MethodType`` descriptor constant.
     #[staticmethod]
     fn method_type(value: String) -> Self {
         Self {
@@ -922,6 +1254,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc`` holding a ``MethodHandle`` constant.
     #[staticmethod]
     fn method_handle(
         reference_kind: u8,
@@ -929,8 +1262,9 @@ impl PyLdcInsn {
         name: String,
         descriptor: String,
         is_interface: bool,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        validate_reference_kind(reference_kind)?;
+        Ok(Self {
             inner: LdcInsn {
                 value: LdcValue::MethodHandle(MethodHandleValue {
                     reference_kind,
@@ -940,9 +1274,10 @@ impl PyLdcInsn {
                     is_interface,
                 }),
             },
-        }
+        })
     }
 
+    /// Construct an ``ldc`` / ``ldc2_w`` holding a dynamic constant.
     #[staticmethod]
     fn dynamic(bootstrap_method_attr_index: u16, name: String, descriptor: String) -> Self {
         Self {
@@ -958,11 +1293,13 @@ impl PyLdcInsn {
         }
     }
 
+    /// Item discriminator tag (``"ldc"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "ldc"
     }
 
+    /// Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.).
     #[getter]
     fn value_type(&self) -> &'static str {
         match &self.inner.value {
@@ -978,6 +1315,7 @@ impl PyLdcInsn {
         }
     }
 
+    /// Payload decoded according to ``value_type``.
     #[getter]
     fn value(&self, py: Python<'_>) -> PyResult<PyObject> {
         match &self.inner.value {
@@ -992,8 +1330,13 @@ impl PyLdcInsn {
             LdcValue::Dynamic(value) => wrap_dynamic_value(py, value),
         }
     }
+
+    fn __repr__(&self) -> String {
+        format!("LdcInsn(value_type={:?})", self.value_type())
+    }
 }
 
+/// Symbolic ``invokedynamic`` instruction.
 #[pyclass(from_py_object, name = "InvokeDynamicInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyInvokeDynamicInsn {
@@ -1013,27 +1356,41 @@ impl PyInvokeDynamicInsn {
         }
     }
 
+    /// Item discriminator tag (``"invokedynamic"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "invokedynamic"
     }
 
+    /// Index into the class's ``BootstrapMethods`` attribute table.
     #[getter]
     fn bootstrap_method_attr_index(&self) -> u16 {
         self.inner.bootstrap_method_attr_index.value()
     }
 
+    /// Call-site method name.
     #[getter]
     fn name(&self) -> String {
         self.inner.name.clone()
     }
 
+    /// Call-site method descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "InvokeDynamicInsn(bootstrap_method_attr_index={}, name={:?}, descriptor={:?})",
+            self.inner.bootstrap_method_attr_index.value(),
+            self.inner.name,
+            self.inner.descriptor
+        )
+    }
 }
 
+/// Symbolic ``multianewarray`` instruction allocating a multidimensional array.
 #[pyclass(from_py_object, name = "MultiANewArrayInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyMultiANewArrayInsn {
@@ -1043,31 +1400,43 @@ pub struct PyMultiANewArrayInsn {
 #[pymethods]
 impl PyMultiANewArrayInsn {
     #[new]
-    fn new(descriptor: String, dimensions: u8) -> Self {
-        Self {
+    fn new(descriptor: String, dimensions: u8) -> PyResult<Self> {
+        validate_multianewarray_dimensions(dimensions)?;
+        Ok(Self {
             inner: MultiANewArrayInsn {
                 descriptor,
                 dimensions,
             },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"multianewarray"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "multianewarray"
     }
 
+    /// Array type descriptor.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
     }
 
+    /// Number of array dimensions to allocate (>= 1).
     #[getter]
     fn dimensions(&self) -> u8 {
         self.inner.dimensions
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MultiANewArrayInsn(descriptor={:?}, dimensions={})",
+            self.inner.descriptor, self.inner.dimensions
+        )
+    }
 }
 
+/// Symbolic branch instruction targeting a ``Label``.
 #[pyclass(from_py_object, name = "BranchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyBranchInsn {
@@ -1077,31 +1446,40 @@ pub struct PyBranchInsn {
 #[pymethods]
 impl PyBranchInsn {
     #[new]
-    fn new(opcode: u8, target: PyLabel) -> Self {
-        Self {
+    fn new(opcode: u8, target: PyLabel) -> PyResult<Self> {
+        validate_branch_opcode(opcode)?;
+        Ok(Self {
             inner: BranchInsn {
                 opcode,
                 target: target.inner,
             },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"branch"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "branch"
     }
 
+    /// Branch opcode (automatically widened/inverted on lowering if needed).
     #[getter]
     fn opcode(&self) -> u8 {
         self.inner.opcode
     }
 
+    /// Symbolic target ``Label``.
     #[getter]
     fn target(&self) -> PyLabel {
         PyLabel::from(self.inner.target.clone())
     }
+
+    fn __repr__(&self) -> String {
+        format!("BranchInsn(opcode=0x{:02x})", self.inner.opcode)
+    }
 }
 
+/// Symbolic ``lookupswitch`` instruction with key-to-label targets.
 #[pyclass(from_py_object, name = "LookupSwitchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyLookupSwitchInsn {
@@ -1123,16 +1501,19 @@ impl PyLookupSwitchInsn {
         }
     }
 
+    /// Item discriminator tag (``"lookupswitch"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "lookupswitch"
     }
 
+    /// Default jump target ``Label``.
     #[getter]
     fn default_target(&self) -> PyLabel {
         PyLabel::from(self.inner.default_target.clone())
     }
 
+    /// Key-label dispatch pairs.
     #[getter]
     fn pairs(&self) -> Vec<(i32, PyLabel)> {
         self.inner
@@ -1141,8 +1522,13 @@ impl PyLookupSwitchInsn {
             .map(|(key, label)| (*key, PyLabel::from(label.clone())))
             .collect()
     }
+
+    fn __repr__(&self) -> String {
+        format!("LookupSwitchInsn(pairs={})", self.inner.pairs.len())
+    }
 }
 
+/// Symbolic ``tableswitch`` instruction covering an inclusive integer range.
 #[pyclass(from_py_object, name = "TableSwitchInsn", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyTableSwitchInsn {
@@ -1152,37 +1538,43 @@ pub struct PyTableSwitchInsn {
 #[pymethods]
 impl PyTableSwitchInsn {
     #[new]
-    fn new(default_target: PyLabel, low: i32, high: i32, targets: Vec<PyLabel>) -> Self {
-        Self {
+    fn new(default_target: PyLabel, low: i32, high: i32, targets: Vec<PyLabel>) -> PyResult<Self> {
+        validate_tableswitch_bounds(low, high, targets.len())?;
+        Ok(Self {
             inner: TableSwitchInsn {
                 default_target: default_target.inner,
                 low,
                 high,
                 targets: targets.into_iter().map(|label| label.inner).collect(),
             },
-        }
+        })
     }
 
+    /// Item discriminator tag (``"tableswitch"``).
     #[getter]
     fn kind(&self) -> &'static str {
         "tableswitch"
     }
 
+    /// Default jump target ``Label``.
     #[getter]
     fn default_target(&self) -> PyLabel {
         PyLabel::from(self.inner.default_target.clone())
     }
 
+    /// Inclusive lower bound of the jump table.
     #[getter]
     fn low(&self) -> i32 {
         self.inner.low
     }
 
+    /// Inclusive upper bound of the jump table.
     #[getter]
     fn high(&self) -> i32 {
         self.inner.high
     }
 
+    /// Ordered branch target labels covering ``low..=high``.
     #[getter]
     fn targets(&self) -> Vec<PyLabel> {
         self.inner
@@ -1192,10 +1584,19 @@ impl PyTableSwitchInsn {
             .map(PyLabel::from)
             .collect()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TableSwitchInsn(low={}, high={}, targets={})",
+            self.inner.low,
+            self.inner.high,
+            self.inner.targets.len()
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
-// CodeItem → Python dict helper
+// CodeItem <-> Python helpers
 // ---------------------------------------------------------------------------
 
 fn wrap_label(py: Python<'_>, label: &Label) -> PyResult<PyObject> {
@@ -1223,7 +1624,7 @@ fn wrap_dynamic_value(py: Python<'_>, value: &DynamicValue) -> PyResult<PyObject
 }
 
 fn code_item_value_error(message: impl Into<String>) -> PyErr {
-    PyErr::new::<pyo3::exceptions::PyValueError, _>(message.into())
+    PyValueError::new_err(message.into())
 }
 
 fn required_code_item_key<'py>(
@@ -1247,20 +1648,29 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
         "label" => Ok(CodeItem::Label(extract_label(&required_code_item_key(
             dict, "label",
         )?)?)),
-        "raw" => Ok(CodeItem::Raw(Instruction::Simple {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            offset: 0,
-        })),
-        "byte" => Ok(CodeItem::Raw(Instruction::Byte {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            offset: 0,
-            value: required_code_item_key(dict, "value")?.extract()?,
-        })),
-        "short" => Ok(CodeItem::Raw(Instruction::Short {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            offset: 0,
-            value: required_code_item_key(dict, "value")?.extract()?,
-        })),
+        "raw" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_raw_opcode(opcode)?;
+            Ok(CodeItem::Raw(Instruction::Simple { opcode, offset: 0 }))
+        }
+        "byte" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_byte_opcode(opcode)?;
+            Ok(CodeItem::Raw(Instruction::Byte {
+                opcode,
+                offset: 0,
+                value: required_code_item_key(dict, "value")?.extract()?,
+            }))
+        }
+        "short" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_short_opcode(opcode)?;
+            Ok(CodeItem::Raw(Instruction::Short {
+                opcode,
+                offset: 0,
+                value: required_code_item_key(dict, "value")?.extract()?,
+            }))
+        }
         "newarray" => {
             let atype =
                 ArrayType::try_from(required_code_item_key(dict, "atype")?.extract::<u8>()?)
@@ -1272,32 +1682,48 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
                 atype,
             })))
         }
-        "field" => Ok(CodeItem::Field(FieldInsn {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            owner: required_code_item_key(dict, "owner")?.extract()?,
-            name: required_code_item_key(dict, "name")?.extract()?,
-            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
-        })),
-        "method" => Ok(CodeItem::Method(MethodInsn {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            owner: required_code_item_key(dict, "owner")?.extract()?,
-            name: required_code_item_key(dict, "name")?.extract()?,
-            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
-            is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
-        })),
+        "field" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_field_opcode(opcode)?;
+            Ok(CodeItem::Field(FieldInsn {
+                opcode,
+                owner: required_code_item_key(dict, "owner")?.extract()?,
+                name: required_code_item_key(dict, "name")?.extract()?,
+                descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+            }))
+        }
+        "method" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_method_opcode(opcode)?;
+            Ok(CodeItem::Method(MethodInsn {
+                opcode,
+                owner: required_code_item_key(dict, "owner")?.extract()?,
+                name: required_code_item_key(dict, "name")?.extract()?,
+                descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+                is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
+            }))
+        }
         "interface_method" => Ok(CodeItem::InterfaceMethod(InterfaceMethodInsn {
             owner: required_code_item_key(dict, "owner")?.extract()?,
             name: required_code_item_key(dict, "name")?.extract()?,
             descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
         })),
-        "type" => Ok(CodeItem::Type(TypeInsn {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
-        })),
-        "var" => Ok(CodeItem::Var(VarInsn {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            slot: required_code_item_key(dict, "slot")?.extract()?,
-        })),
+        "type" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_type_opcode(opcode)?;
+            Ok(CodeItem::Type(TypeInsn {
+                opcode,
+                descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+            }))
+        }
+        "var" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_var_opcode(opcode)?;
+            Ok(CodeItem::Var(VarInsn {
+                opcode,
+                slot: required_code_item_key(dict, "slot")?.extract()?,
+            }))
+        }
         "iinc" => Ok(CodeItem::IInc(IIncInsn {
             slot: required_code_item_key(dict, "slot")?.extract()?,
             value: required_code_item_key(dict, "value")?.extract()?,
@@ -1316,13 +1742,18 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
                 "method_type" => {
                     LdcValue::MethodType(required_code_item_key(dict, "value")?.extract()?)
                 }
-                "method_handle" => LdcValue::MethodHandle(MethodHandleValue {
-                    reference_kind: required_code_item_key(dict, "reference_kind")?.extract()?,
-                    owner: required_code_item_key(dict, "owner")?.extract()?,
-                    name: required_code_item_key(dict, "name")?.extract()?,
-                    descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
-                    is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
-                }),
+                "method_handle" => {
+                    let reference_kind: u8 =
+                        required_code_item_key(dict, "reference_kind")?.extract()?;
+                    validate_reference_kind(reference_kind)?;
+                    LdcValue::MethodHandle(MethodHandleValue {
+                        reference_kind,
+                        owner: required_code_item_key(dict, "owner")?.extract()?,
+                        name: required_code_item_key(dict, "name")?.extract()?,
+                        descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+                        is_interface: required_code_item_key(dict, "is_interface")?.extract()?,
+                    })
+                }
                 "dynamic" => LdcValue::Dynamic(DynamicValue {
                     bootstrap_method_attr_index: BootstrapMethodIndex::new(
                         required_code_item_key(dict, "bootstrap_method_attr_index")?.extract()?,
@@ -1345,14 +1776,22 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
             name: required_code_item_key(dict, "name")?.extract()?,
             descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
         })),
-        "multianewarray" => Ok(CodeItem::MultiANewArray(MultiANewArrayInsn {
-            descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
-            dimensions: required_code_item_key(dict, "dimensions")?.extract()?,
-        })),
-        "branch" => Ok(CodeItem::Branch(BranchInsn {
-            opcode: required_code_item_key(dict, "opcode")?.extract()?,
-            target: extract_label(&required_code_item_key(dict, "target")?)?,
-        })),
+        "multianewarray" => {
+            let dimensions: u8 = required_code_item_key(dict, "dimensions")?.extract()?;
+            validate_multianewarray_dimensions(dimensions)?;
+            Ok(CodeItem::MultiANewArray(MultiANewArrayInsn {
+                descriptor: required_code_item_key(dict, "descriptor")?.extract()?,
+                dimensions,
+            }))
+        }
+        "branch" => {
+            let opcode: u8 = required_code_item_key(dict, "opcode")?.extract()?;
+            validate_branch_opcode(opcode)?;
+            Ok(CodeItem::Branch(BranchInsn {
+                opcode,
+                target: extract_label(&required_code_item_key(dict, "target")?)?,
+            }))
+        }
         "lookupswitch" => {
             let pairs = required_code_item_key(dict, "pairs")?
                 .cast::<PyList>()
@@ -1375,10 +1814,13 @@ fn extract_code_item_dict(dict: &Bound<'_, PyDict>) -> PyResult<CodeItem> {
                 .iter()
                 .map(|target| extract_label(&target))
                 .collect::<PyResult<Vec<_>>>()?;
+            let low: i32 = required_code_item_key(dict, "low")?.extract()?;
+            let high: i32 = required_code_item_key(dict, "high")?.extract()?;
+            validate_tableswitch_bounds(low, high, targets.len())?;
             Ok(CodeItem::TableSwitch(TableSwitchInsn {
                 default_target: extract_label(&required_code_item_key(dict, "default_target")?)?,
-                low: required_code_item_key(dict, "low")?.extract()?,
-                high: required_code_item_key(dict, "high")?.extract()?,
+                low,
+                high,
                 targets,
             }))
         }
@@ -1464,10 +1906,10 @@ pub(crate) fn extract_code_item(item: &Bound<'_, PyAny>) -> PyResult<CodeItem> {
     ))
 }
 
-pub(crate) fn extract_code_items(py: Python<'_>, items: Vec<PyObject>) -> PyResult<Vec<CodeItem>> {
+pub(crate) fn extract_code_items_iter(items: &Bound<'_, PyAny>) -> PyResult<Vec<CodeItem>> {
     items
-        .into_iter()
-        .map(|item| extract_code_item(item.bind(py)))
+        .try_iter()?
+        .map(|entry| extract_code_item(&entry?))
         .collect()
 }
 
@@ -1563,6 +2005,7 @@ enum CodeAccess {
         methods_generation: u64,
     },
     OwnedMethod(Rc<RefCell<MethodModel>>),
+    Owned(OwnedCodeState),
 }
 
 #[derive(Clone)]
@@ -1591,6 +2034,8 @@ enum AttributeOwner {
     },
     OwnedField(Rc<RefCell<FieldModel>>),
     OwnedMethod(Rc<RefCell<MethodModel>>),
+    OwnedMethodCode(Rc<RefCell<MethodModel>>),
+    OwnedCode(OwnedCodeState),
 }
 
 #[derive(Clone, Copy)]
@@ -1606,6 +2051,7 @@ enum CodeListKind {
 // View objects
 // ---------------------------------------------------------------------------
 
+/// Live read-only sequence view over interface names on a ``ClassModel``.
 #[pyclass(
     from_py_object,
     name = "StringListView",
@@ -1629,16 +2075,35 @@ impl PyStringListView {
         })
     }
 
-    fn __getitem__(&self, index: isize) -> PyResult<String> {
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         with_live_model(&self.state, |model_state| {
             if model_state.interfaces_generation != self.generation {
                 return Err(stale_ref_err("interface view"));
             }
             let interfaces = &model_state.inner.as_ref().unwrap().interfaces;
-            Ok(interfaces[normalize_index(index, interfaces.len())?].clone())
+            if let Ok(slice) = key.cast::<PySlice>() {
+                let items: Vec<String> = slice_indices(slice, interfaces.len())?
+                    .into_iter()
+                    .map(|idx| interfaces[idx].clone())
+                    .collect();
+                return Ok(PyList::new(py, items)?.into_any().unbind());
+            }
+            let index: isize = key.extract()?;
+            let normalized = normalize_index(index, interfaces.len())?;
+            Ok(interfaces[normalized]
+                .clone()
+                .into_pyobject(py)?
+                .unbind()
+                .into())
         })
     }
 
+    fn __iter__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let items = self.to_list()?;
+        Ok(PyList::new(py, items)?.call_method0("__iter__")?.unbind())
+    }
+
+    /// Materialize the current view items into a detached Python ``list``.
     fn to_list(&self) -> PyResult<Vec<String>> {
         with_live_model(&self.state, |model_state| {
             if model_state.interfaces_generation != self.generation {
@@ -1647,8 +2112,13 @@ impl PyStringListView {
             Ok(model_state.inner.as_ref().unwrap().interfaces.clone())
         })
     }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("StringListView(len={})", self.__len__()?))
+    }
 }
 
+/// Live read-only sequence view over ``FieldModel`` entries on a ``ClassModel``.
 #[pyclass(
     from_py_object,
     name = "FieldListView",
@@ -1672,30 +2142,62 @@ impl PyFieldListView {
         })
     }
 
-    fn __getitem__(&self, index: isize) -> PyResult<PyFieldModel> {
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         with_live_model(&self.state, |model_state| {
             if model_state.fields_generation != self.generation {
                 return Err(stale_ref_err("field view"));
             }
-            let fields = &model_state.inner.as_ref().unwrap().fields;
-            Ok(PyFieldModel {
+            let len = model_state.inner.as_ref().unwrap().fields.len();
+            if let Ok(slice) = key.cast::<PySlice>() {
+                let items: Vec<PyFieldModel> = slice_indices(slice, len)?
+                    .into_iter()
+                    .map(|index| PyFieldModel {
+                        access: FieldAccess::Shared {
+                            state: self.state.clone(),
+                            index,
+                            generation: self.generation,
+                        },
+                    })
+                    .collect();
+                return Ok(PyList::new(py, items)?.into_any().unbind());
+            }
+            let index: isize = key.extract()?;
+            let item = PyFieldModel {
                 access: FieldAccess::Shared {
                     state: self.state.clone(),
-                    index: normalize_index(index, fields.len())?,
+                    index: normalize_index(index, len)?,
                     generation: self.generation,
                 },
-            })
+            };
+            Ok(Py::new(py, item)?.into_any())
         })
     }
 
+    fn __iter__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let items = self.to_list()?;
+        Ok(PyList::new(py, items)?.call_method0("__iter__")?.unbind())
+    }
+
+    /// Materialize the current view items into a detached Python ``list``.
     fn to_list(&self) -> PyResult<Vec<PyFieldModel>> {
         let len = self.__len__()?;
-        (0..len)
-            .map(|index| self.__getitem__(index as isize))
-            .collect::<PyResult<Vec<_>>>()
+        Ok((0..len)
+            .map(|index| PyFieldModel {
+                access: FieldAccess::Shared {
+                    state: self.state.clone(),
+                    index,
+                    generation: self.generation,
+                },
+            })
+            .collect())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("FieldListView(len={})", self.__len__()?))
     }
 }
 
+/// Live read-only sequence view over ``MethodModel`` entries on a ``ClassModel``.
 #[pyclass(
     from_py_object,
     name = "MethodListView",
@@ -1719,35 +2221,69 @@ impl PyMethodListView {
         })
     }
 
-    fn __getitem__(&self, index: isize) -> PyResult<PyMethodModel> {
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         with_live_model(&self.state, |model_state| {
             if model_state.methods_generation != self.generation {
                 return Err(stale_ref_err("method view"));
             }
-            let methods = &model_state.inner.as_ref().unwrap().methods;
-            Ok(PyMethodModel {
+            let len = model_state.inner.as_ref().unwrap().methods.len();
+            if let Ok(slice) = key.cast::<PySlice>() {
+                let items: Vec<PyMethodModel> = slice_indices(slice, len)?
+                    .into_iter()
+                    .map(|index| PyMethodModel {
+                        access: MethodAccess::Shared {
+                            state: self.state.clone(),
+                            index,
+                            generation: self.generation,
+                        },
+                    })
+                    .collect();
+                return Ok(PyList::new(py, items)?.into_any().unbind());
+            }
+            let index: isize = key.extract()?;
+            let item = PyMethodModel {
                 access: MethodAccess::Shared {
                     state: self.state.clone(),
-                    index: normalize_index(index, methods.len())?,
+                    index: normalize_index(index, len)?,
                     generation: self.generation,
                 },
-            })
+            };
+            Ok(Py::new(py, item)?.into_any())
         })
     }
 
+    fn __iter__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let items = self.to_list()?;
+        Ok(PyList::new(py, items)?.call_method0("__iter__")?.unbind())
+    }
+
+    /// Materialize the current view items into a detached Python ``list``.
     fn to_list(&self) -> PyResult<Vec<PyMethodModel>> {
         let len = self.__len__()?;
-        (0..len)
-            .map(|index| self.__getitem__(index as isize))
-            .collect::<PyResult<Vec<_>>>()
+        Ok((0..len)
+            .map(|index| PyMethodModel {
+                access: MethodAccess::Shared {
+                    state: self.state.clone(),
+                    index,
+                    generation: self.generation,
+                },
+            })
+            .collect())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("MethodListView(len={})", self.__len__()?))
     }
 }
 
 impl AttributeOwner {
-    fn len(&self) -> PyResult<usize> {
+    fn with_attrs<R>(
+        &self,
+        f: impl FnOnce(&[pytecode_engine::raw::AttributeInfo]) -> PyResult<R>,
+    ) -> PyResult<R> {
         match self {
             AttributeOwner::Class(state) => with_live_model(state, |model_state| {
-                Ok(model_state.inner.as_ref().unwrap().attributes.len())
+                f(&model_state.inner.as_ref().unwrap().attributes)
             }),
             AttributeOwner::Field {
                 state,
@@ -1757,9 +2293,14 @@ impl AttributeOwner {
                 if model_state.fields_generation != *generation {
                     return Err(stale_ref_err("field attribute view"));
                 }
-                Ok(model_state.inner.as_ref().unwrap().fields[*index]
-                    .attributes
-                    .len())
+                let field = model_state
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .fields
+                    .get(*index)
+                    .ok_or_else(|| stale_ref_err("field attribute view"))?;
+                f(&field.attributes)
             }),
             AttributeOwner::Method {
                 state,
@@ -1769,9 +2310,14 @@ impl AttributeOwner {
                 if model_state.methods_generation != *generation {
                     return Err(stale_ref_err("method attribute view"));
                 }
-                Ok(model_state.inner.as_ref().unwrap().methods[*index]
-                    .attributes
-                    .len())
+                let method = model_state
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .methods
+                    .get(*index)
+                    .ok_or_else(|| stale_ref_err("method attribute view"))?;
+                f(&method.attributes)
             }),
             AttributeOwner::Code {
                 state,
@@ -1781,76 +2327,45 @@ impl AttributeOwner {
                 if model_state.methods_generation != *methods_generation {
                     return Err(stale_ref_err("code attribute view"));
                 }
-                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
-                let code = method
-                    .code
+                let method = model_state
+                    .inner
                     .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                Ok(code.attributes.len())
-            }),
-            AttributeOwner::OwnedField(field) => Ok(field.borrow().attributes.len()),
-            AttributeOwner::OwnedMethod(method) => Ok(method.borrow().attributes.len()),
-        }
-    }
-
-    fn get(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
-        match self {
-            AttributeOwner::Class(state) => with_live_model(state, |model_state| {
-                let attrs = &model_state.inner.as_ref().unwrap().attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
-            }),
-            AttributeOwner::Field {
-                state,
-                index: field_index,
-                generation,
-            } => with_live_model(state, |model_state| {
-                if model_state.fields_generation != *generation {
-                    return Err(stale_ref_err("field attribute view"));
-                }
-                let attrs = &model_state.inner.as_ref().unwrap().fields[*field_index].attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
-            }),
-            AttributeOwner::Method {
-                state,
-                index: method_index,
-                generation,
-            } => with_live_model(state, |model_state| {
-                if model_state.methods_generation != *generation {
-                    return Err(stale_ref_err("method attribute view"));
-                }
-                let attrs = &model_state.inner.as_ref().unwrap().methods[*method_index].attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
-            }),
-            AttributeOwner::Code {
-                state,
-                method_index,
-                methods_generation,
-            } => with_live_model(state, |model_state| {
-                if model_state.methods_generation != *methods_generation {
-                    return Err(stale_ref_err("code attribute view"));
-                }
-                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
+                    .unwrap()
+                    .methods
+                    .get(*method_index)
+                    .ok_or_else(|| stale_ref_err("code attribute view"))?;
                 let code = method
-                    .code
-                    .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                let attrs = &code.attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+                    .code()
+                    .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+                f(&code.attributes)
             }),
             AttributeOwner::OwnedField(field) => {
-                let borrowed = field.borrow();
-                let attrs = &borrowed.attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+                let borrowed = field.try_borrow().map_err(|_| borrow_err("FieldModel"))?;
+                f(&borrowed.attributes)
             }
             AttributeOwner::OwnedMethod(method) => {
-                let borrowed = method.borrow();
-                let attrs = &borrowed.attributes;
-                crate::wrap_attribute(py, &attrs[normalize_index(index, attrs.len())?])
+                let borrowed = method.try_borrow().map_err(|_| borrow_err("MethodModel"))?;
+                f(&borrowed.attributes)
+            }
+            AttributeOwner::OwnedMethodCode(method) => {
+                let borrowed = method.try_borrow().map_err(|_| borrow_err("MethodModel"))?;
+                let code = borrowed
+                    .code()
+                    .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+                f(&code.attributes)
+            }
+            AttributeOwner::OwnedCode(code_state) => {
+                let borrowed = code_state
+                    .try_borrow()
+                    .map_err(|_| borrow_err("CodeModel"))?;
+                let code = borrowed.as_ref().ok_or_else(dead_code_err)?;
+                f(&code.attributes)
             }
         }
     }
 }
 
+/// Live read-only sequence view over raw attributes attached to a model element.
 #[pyclass(
     from_py_object,
     name = "AttributeListView",
@@ -1865,21 +2380,89 @@ pub struct PyAttributeListView {
 #[pymethods]
 impl PyAttributeListView {
     fn __len__(&self) -> PyResult<usize> {
-        self.owner.len()
+        self.owner.with_attrs(|attrs| Ok(attrs.len()))
     }
 
-    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
-        self.owner.get(py, index)
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.owner.with_attrs(|attrs| {
+            if let Ok(slice) = key.cast::<PySlice>() {
+                let items = slice_indices(slice, attrs.len())?
+                    .into_iter()
+                    .map(|idx| crate::wrap_attribute(py, &attrs[idx]))
+                    .collect::<PyResult<Vec<_>>>()?;
+                return Ok(PyList::new(py, items)?.into_any().unbind());
+            }
+            let index: isize = key.extract()?;
+            let normalized = normalize_index(index, attrs.len())?;
+            crate::wrap_attribute(py, &attrs[normalized])
+        })
     }
 
+    fn __iter__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let items = self.to_list(py)?;
+        Ok(PyList::new(py, items)?.call_method0("__iter__")?.unbind())
+    }
+
+    /// Materialize the current view items into a detached Python ``list``.
     fn to_list(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        let len = self.__len__()?;
-        (0..len)
-            .map(|index| self.__getitem__(py, index as isize))
-            .collect::<PyResult<Vec<_>>>()
+        self.owner.with_attrs(|attrs| {
+            attrs
+                .iter()
+                .map(|attr| crate::wrap_attribute(py, attr))
+                .collect()
+        })
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("AttributeListView(len={})", self.__len__()?))
     }
 }
 
+fn wrap_code_list_item(
+    py: Python<'_>,
+    code: &CodeModel,
+    kind: CodeListKind,
+    index: usize,
+) -> PyResult<PyObject> {
+    match kind {
+        CodeListKind::Instructions => wrap_code_item(py, &code.instructions[index]),
+        CodeListKind::ExceptionHandlers => Ok(Py::new(
+            py,
+            PyModelExceptionHandler {
+                inner: code.exception_handlers[index].clone(),
+            },
+        )?
+        .into_any()),
+        CodeListKind::LineNumbers => {
+            let item = &code.line_numbers[index];
+            wrap_line_number(py, &item.label, item.line_number)
+        }
+        CodeListKind::LocalVariables => {
+            let item = &code.local_variables[index];
+            wrap_local_variable(
+                py,
+                &item.start,
+                &item.end,
+                &item.name,
+                &item.descriptor,
+                item.index,
+            )
+        }
+        CodeListKind::LocalVariableTypes => {
+            let item = &code.local_variable_types[index];
+            wrap_local_variable_type(
+                py,
+                &item.start,
+                &item.end,
+                &item.name,
+                &item.signature,
+                item.index,
+            )
+        }
+    }
+}
+
+/// Live read-only sequence view over code items or debug entries on a ``CodeModel``.
 #[pyclass(
     from_py_object,
     name = "CodeListView",
@@ -1895,99 +2478,143 @@ pub struct PyCodeListView {
 #[pymethods]
 impl PyCodeListView {
     fn __len__(&self) -> PyResult<usize> {
+        self.with_code(|code| Ok(Self::len_for_code(code, self.kind)))
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         self.with_code(|code| {
-            Ok(match self.kind {
-                CodeListKind::Instructions => code.instructions.len(),
-                CodeListKind::ExceptionHandlers => code.exception_handlers.len(),
-                CodeListKind::LineNumbers => code.line_numbers.len(),
-                CodeListKind::LocalVariables => code.local_variables.len(),
-                CodeListKind::LocalVariableTypes => code.local_variable_types.len(),
-            })
+            let len = Self::len_for_code(code, self.kind);
+            if let Ok(slice) = key.cast::<PySlice>() {
+                let items = slice_indices(slice, len)?
+                    .into_iter()
+                    .map(|idx| wrap_code_list_item(py, code, self.kind, idx))
+                    .collect::<PyResult<Vec<_>>>()?;
+                return Ok(PyList::new(py, items)?.into_any().unbind());
+            }
+            let index: isize = key.extract()?;
+            let normalized = normalize_index(index, len)?;
+            wrap_code_list_item(py, code, self.kind, normalized)
         })
     }
 
-    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyObject> {
-        self.with_code(|code| match self.kind {
-            CodeListKind::Instructions => wrap_code_item(
-                py,
-                &code.instructions[normalize_index(index, code.instructions.len())?],
-            ),
-            CodeListKind::ExceptionHandlers => {
-                let item = &code.exception_handlers
-                    [normalize_index(index, code.exception_handlers.len())?];
-                Ok(Py::new(
-                    py,
-                    PyModelExceptionHandler {
-                        inner: item.clone(),
-                    },
-                )?
-                .into_any())
-            }
-            CodeListKind::LineNumbers => {
-                let item = &code.line_numbers[normalize_index(index, code.line_numbers.len())?];
-                wrap_line_number(py, &item.label, item.line_number)
-            }
-            CodeListKind::LocalVariables => {
-                let item =
-                    &code.local_variables[normalize_index(index, code.local_variables.len())?];
-                wrap_local_variable(
-                    py,
-                    &item.start,
-                    &item.end,
-                    &item.name,
-                    &item.descriptor,
-                    item.index,
-                )
-            }
-            CodeListKind::LocalVariableTypes => {
-                let item = &code.local_variable_types
-                    [normalize_index(index, code.local_variable_types.len())?];
-                wrap_local_variable_type(
-                    py,
-                    &item.start,
-                    &item.end,
-                    &item.name,
-                    &item.signature,
-                    item.index,
-                )
-            }
-        })
+    fn __iter__(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let items = self.to_list(py)?;
+        Ok(PyList::new(py, items)?.call_method0("__iter__")?.unbind())
     }
 
+    /// Materialize the current view items into a detached Python ``list``.
     fn to_list(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        let len = self.__len__()?;
-        (0..len)
-            .map(|index| self.__getitem__(py, index as isize))
-            .collect::<PyResult<Vec<_>>>()
+        self.with_code(|code| {
+            let len = Self::len_for_code(code, self.kind);
+            (0..len)
+                .map(|idx| wrap_code_list_item(py, code, self.kind, idx))
+                .collect()
+        })
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("CodeListView(len={})", self.__len__()?))
     }
 }
 
 impl PyCodeListView {
+    fn len_for_code(code: &CodeModel, kind: CodeListKind) -> usize {
+        match kind {
+            CodeListKind::Instructions => code.instructions.len(),
+            CodeListKind::ExceptionHandlers => code.exception_handlers.len(),
+            CodeListKind::LineNumbers => code.line_numbers.len(),
+            CodeListKind::LocalVariables => code.local_variables.len(),
+            CodeListKind::LocalVariableTypes => code.local_variable_types.len(),
+        }
+    }
+
     fn with_code<R>(&self, f: impl FnOnce(&CodeModel) -> PyResult<R>) -> PyResult<R> {
-        match &self.access {
-            CodeAccess::Shared {
-                state,
-                method_index,
-                methods_generation,
-            } => with_live_model(state, |model_state| {
-                if model_state.methods_generation != *methods_generation {
-                    return Err(stale_ref_err("code view"));
-                }
-                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
-                let code = method
-                    .code
-                    .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                f(code)
-            }),
-            CodeAccess::OwnedMethod(method) => {
-                let borrowed = method.borrow();
-                let code = borrowed
-                    .code
-                    .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                f(code)
+        with_code_access(&self.access, f)
+    }
+}
+
+fn with_code_access<R>(
+    access: &CodeAccess,
+    f: impl FnOnce(&CodeModel) -> PyResult<R>,
+) -> PyResult<R> {
+    match access {
+        CodeAccess::Shared {
+            state,
+            method_index,
+            methods_generation,
+        } => with_live_model(state, |model_state| {
+            if model_state.methods_generation != *methods_generation {
+                return Err(stale_ref_err("code ref"));
             }
+            let method = model_state
+                .inner
+                .as_ref()
+                .unwrap()
+                .methods
+                .get(*method_index)
+                .ok_or_else(|| stale_ref_err("code ref"))?;
+            let code = method
+                .code()
+                .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+            f(code)
+        }),
+        CodeAccess::OwnedMethod(method) => {
+            let borrowed = method.try_borrow().map_err(|_| borrow_err("MethodModel"))?;
+            let code = borrowed
+                .code()
+                .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+            f(code)
+        }
+        CodeAccess::Owned(code_state) => {
+            let borrowed = code_state
+                .try_borrow()
+                .map_err(|_| borrow_err("CodeModel"))?;
+            let code = borrowed.as_ref().ok_or_else(dead_code_err)?;
+            f(code)
+        }
+    }
+}
+
+fn with_code_access_mut<R>(
+    access: &CodeAccess,
+    f: impl FnOnce(&mut CodeModel) -> PyResult<R>,
+) -> PyResult<R> {
+    match access {
+        CodeAccess::Shared {
+            state,
+            method_index,
+            methods_generation,
+        } => with_live_model_mut(state, |model_state| {
+            if model_state.methods_generation != *methods_generation {
+                return Err(stale_ref_err("code ref"));
+            }
+            let method = model_state
+                .inner
+                .as_mut()
+                .unwrap()
+                .methods
+                .get_mut(*method_index)
+                .ok_or_else(|| stale_ref_err("code ref"))?;
+            let code = method
+                .code_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+            f(code)
+        }),
+        CodeAccess::OwnedMethod(method) => {
+            let mut borrowed = method
+                .try_borrow_mut()
+                .map_err(|_| borrow_err("MethodModel"))?;
+            let code = borrowed
+                .code_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("method has no code"))?;
+            f(code)
+        }
+        CodeAccess::Owned(code_state) => {
+            let mut borrowed = code_state
+                .try_borrow_mut()
+                .map_err(|_| borrow_err("CodeModel"))?;
+            let code = borrowed.as_mut().ok_or_else(dead_code_err)?;
+            f(code)
         }
     }
 }
@@ -1996,6 +2623,34 @@ impl PyCodeListView {
 // PyCodeModel
 // ---------------------------------------------------------------------------
 
+fn compile_insn_matcher(
+    matcher: &PyInsnMatcher,
+) -> PyResult<pytecode_engine::transform::InsnMatcher> {
+    let compiled = Arc::new(
+        matcher
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?,
+    );
+    Ok(pytecode_engine::transform::Matcher::of(
+        move |item| compiled.matches(item),
+        matcher.spec.to_string(),
+    ))
+}
+
+fn compile_insn_matcher_seq(
+    pattern: &Bound<'_, PyAny>,
+) -> PyResult<Vec<pytecode_engine::transform::InsnMatcher>> {
+    pattern
+        .try_iter()?
+        .map(|entry| {
+            let matcher: PyRef<'_, PyInsnMatcher> = entry?.extract()?;
+            compile_insn_matcher(&matcher)
+        })
+        .collect()
+}
+
+/// Mutable symbolic representation of a method's ``Code`` attribute.
 #[pyclass(
     from_py_object,
     name = "CodeModel",
@@ -2008,47 +2663,153 @@ pub struct PyCodeModel {
 }
 
 impl PyCodeModel {
-    fn with_code<R>(&self, f: impl FnOnce(&CodeModel) -> PyResult<R>) -> PyResult<R> {
-        match &self.access {
-            CodeAccess::Shared {
-                state,
-                method_index,
-                methods_generation,
-            } => with_live_model(state, |model_state| {
-                if model_state.methods_generation != *methods_generation {
-                    return Err(stale_ref_err("code ref"));
-                }
-                let method = &model_state.inner.as_ref().unwrap().methods[*method_index];
-                let code = method
-                    .code
-                    .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                f(code)
-            }),
-            CodeAccess::OwnedMethod(method) => {
-                let borrowed = method.borrow();
-                let code = borrowed
-                    .code
-                    .as_ref()
-                    .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("method has no code"))?;
-                f(code)
-            }
+    pub(crate) fn from_owned(code: CodeModel) -> Self {
+        Self {
+            access: CodeAccess::Owned(Rc::new(RefCell::new(Some(code)))),
         }
+    }
+
+    pub(crate) fn with_code<R>(&self, f: impl FnOnce(&CodeModel) -> PyResult<R>) -> PyResult<R> {
+        with_code_access(&self.access, f)
+    }
+
+    pub(crate) fn with_code_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut CodeModel) -> PyResult<R>,
+    ) -> PyResult<R> {
+        with_code_access_mut(&self.access, f)
+    }
+
+    pub(crate) fn take_owned(&mut self) -> PyResult<CodeModel> {
+        match &self.access {
+            CodeAccess::Owned(code_state) => {
+                let mut borrowed = code_state
+                    .try_borrow_mut()
+                    .map_err(|_| borrow_err("CodeModel"))?;
+                borrowed.take().ok_or_else(dead_code_err)
+            }
+            _ => Err(PyRuntimeError::new_err(
+                "cannot move ownership out of a borrowed CodeModel",
+            )),
+        }
+    }
+
+    fn clone_inner(&self) -> PyResult<CodeModel> {
+        self.with_code(|code| Ok(code.clone()))
     }
 }
 
 #[pymethods]
 impl PyCodeModel {
+    #[new]
+    #[pyo3(signature = (
+        max_stack=0,
+        max_locals=0,
+        instructions=None,
+        exception_handlers=None,
+        line_numbers=None,
+        local_variables=None,
+        local_variable_types=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        max_stack: u16,
+        max_locals: u16,
+        instructions: Option<&Bound<'_, PyAny>>,
+        exception_handlers: Option<&Bound<'_, PyAny>>,
+        line_numbers: Option<&Bound<'_, PyAny>>,
+        local_variables: Option<&Bound<'_, PyAny>>,
+        local_variable_types: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut code = CodeModel::new(max_stack, max_locals, DebugInfoState::Fresh);
+        if let Some(items) = instructions {
+            code.instructions = extract_code_items_iter(items)?;
+        }
+        if let Some(items) = exception_handlers {
+            code.exception_handlers = items
+                .try_iter()?
+                .map(|entry| {
+                    Ok(entry?
+                        .extract::<PyRef<'_, PyModelExceptionHandler>>()?
+                        .inner
+                        .clone())
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        if let Some(items) = line_numbers {
+            code.line_numbers = items
+                .try_iter()?
+                .map(|entry| {
+                    let entry: PyRef<'_, PyLineNumberEntry> = entry?.extract()?;
+                    Ok(LineNumberEntry {
+                        label: entry.label.clone(),
+                        line_number: entry.line_number,
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        if let Some(items) = local_variables {
+            code.local_variables = items
+                .try_iter()?
+                .map(|entry| {
+                    let entry: PyRef<'_, PyLocalVariableEntry> = entry?.extract()?;
+                    Ok(LocalVariableEntry {
+                        start: entry.start.clone(),
+                        end: entry.end.clone(),
+                        name: entry.name.clone(),
+                        descriptor: entry.descriptor.clone(),
+                        index: entry.index,
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        if let Some(items) = local_variable_types {
+            code.local_variable_types = items
+                .try_iter()?
+                .map(|entry| {
+                    let entry: PyRef<'_, PyLocalVariableTypeEntry> = entry?.extract()?;
+                    Ok(LocalVariableTypeEntry {
+                        start: entry.start.clone(),
+                        end: entry.end.clone(),
+                        name: entry.name.clone(),
+                        signature: entry.signature.clone(),
+                        index: entry.index,
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        Ok(Self::from_owned(code))
+    }
+
+    /// Declared or recomputed maximum operand-stack depth.
     #[getter]
     fn max_stack(&self) -> PyResult<u16> {
         self.with_code(|code| Ok(code.max_stack))
     }
 
+    #[setter]
+    fn set_max_stack(&mut self, value: u16) -> PyResult<()> {
+        self.with_code_mut(|code| {
+            code.max_stack = value;
+            Ok(())
+        })
+    }
+
+    /// Declared or recomputed maximum local-variable slots.
     #[getter]
     fn max_locals(&self) -> PyResult<u16> {
         self.with_code(|code| Ok(code.max_locals))
     }
 
+    #[setter]
+    fn set_max_locals(&mut self, value: u16) -> PyResult<()> {
+        self.with_code_mut(|code| {
+            code.max_locals = value;
+            Ok(())
+        })
+    }
+
+    /// Live view of the symbolic instruction and label sequence.
     #[getter]
     fn instructions(&self) -> PyCodeListView {
         PyCodeListView {
@@ -2057,6 +2818,16 @@ impl PyCodeModel {
         }
     }
 
+    #[setter]
+    fn set_instructions(&mut self, items: &Bound<'_, PyAny>) -> PyResult<()> {
+        let extracted = extract_code_items_iter(items)?;
+        self.with_code_mut(|code| {
+            code.instructions = extracted;
+            Ok(())
+        })
+    }
+
+    /// Live view of symbolic exception handlers.
     #[getter]
     fn exception_handlers(&self) -> PyCodeListView {
         PyCodeListView {
@@ -2065,6 +2836,24 @@ impl PyCodeModel {
         }
     }
 
+    #[setter]
+    fn set_exception_handlers(&mut self, items: &Bound<'_, PyAny>) -> PyResult<()> {
+        let extracted = items
+            .try_iter()?
+            .map(|entry| {
+                Ok(entry?
+                    .extract::<PyRef<'_, PyModelExceptionHandler>>()?
+                    .inner
+                    .clone())
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        self.with_code_mut(|code| {
+            code.exception_handlers = extracted;
+            Ok(())
+        })
+    }
+
+    /// Live view of symbolic line-number entries.
     #[getter]
     fn line_numbers(&self) -> PyCodeListView {
         PyCodeListView {
@@ -2073,6 +2862,25 @@ impl PyCodeModel {
         }
     }
 
+    #[setter]
+    fn set_line_numbers(&mut self, items: &Bound<'_, PyAny>) -> PyResult<()> {
+        let extracted = items
+            .try_iter()?
+            .map(|entry| {
+                let entry: PyRef<'_, PyLineNumberEntry> = entry?.extract()?;
+                Ok(LineNumberEntry {
+                    label: entry.label.clone(),
+                    line_number: entry.line_number,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        self.with_code_mut(|code| {
+            code.line_numbers = extracted;
+            Ok(())
+        })
+    }
+
+    /// Live view of symbolic local-variable debug entries.
     #[getter]
     fn local_variables(&self) -> PyCodeListView {
         PyCodeListView {
@@ -2081,6 +2889,28 @@ impl PyCodeModel {
         }
     }
 
+    #[setter]
+    fn set_local_variables(&mut self, items: &Bound<'_, PyAny>) -> PyResult<()> {
+        let extracted = items
+            .try_iter()?
+            .map(|entry| {
+                let entry: PyRef<'_, PyLocalVariableEntry> = entry?.extract()?;
+                Ok(LocalVariableEntry {
+                    start: entry.start.clone(),
+                    end: entry.end.clone(),
+                    name: entry.name.clone(),
+                    descriptor: entry.descriptor.clone(),
+                    index: entry.index,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        self.with_code_mut(|code| {
+            code.local_variables = extracted;
+            Ok(())
+        })
+    }
+
+    /// Live view of symbolic local-variable generic signature entries.
     #[getter]
     fn local_variable_types(&self) -> PyCodeListView {
         PyCodeListView {
@@ -2089,6 +2919,28 @@ impl PyCodeModel {
         }
     }
 
+    #[setter]
+    fn set_local_variable_types(&mut self, items: &Bound<'_, PyAny>) -> PyResult<()> {
+        let extracted = items
+            .try_iter()?
+            .map(|entry| {
+                let entry: PyRef<'_, PyLocalVariableTypeEntry> = entry?.extract()?;
+                Ok(LocalVariableTypeEntry {
+                    start: entry.start.clone(),
+                    end: entry.end.clone(),
+                    name: entry.name.clone(),
+                    signature: entry.signature.clone(),
+                    index: entry.index,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        self.with_code_mut(|code| {
+            code.local_variable_types = extracted;
+            Ok(())
+        })
+    }
+
+    /// Live view of non-debug custom attributes nested on this ``Code`` attribute.
     #[getter]
     fn attributes(&self) -> PyAttributeListView {
         let owner = match &self.access {
@@ -2101,11 +2953,13 @@ impl PyCodeModel {
                 method_index: *method_index,
                 methods_generation: *methods_generation,
             },
-            CodeAccess::OwnedMethod(method) => AttributeOwner::OwnedMethod(method.clone()),
+            CodeAccess::OwnedMethod(method) => AttributeOwner::OwnedMethodCode(method.clone()),
+            CodeAccess::Owned(code) => AttributeOwner::OwnedCode(code.clone()),
         };
         PyAttributeListView { owner }
     }
 
+    /// Debug-info freshness marker (``"fresh"`` or ``"stale"``).
     #[getter]
     fn debug_info_state(&self) -> PyResult<&'static str> {
         self.with_code(|code| {
@@ -2116,6 +2970,7 @@ impl PyCodeModel {
         })
     }
 
+    /// Ordered nested code attribute category layout preserved from the source classfile.
     #[getter]
     fn nested_attribute_layout(&self) -> PyResult<Vec<String>> {
         self.with_code(|code| {
@@ -2127,62 +2982,85 @@ impl PyCodeModel {
         })
     }
 
+    /// Return indices of all instructions matching ``matcher``.
     fn find_insns(&self, matcher: &PyInsnMatcher) -> PyResult<Vec<usize>> {
-        let matcher = matcher.spec.compile();
+        let compiled = matcher
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?;
         self.with_code(|code| {
             Ok(code
                 .instructions
                 .iter()
                 .enumerate()
-                .filter_map(|(index, item)| matcher.matches(item).then_some(index))
+                .filter_map(|(index, item)| compiled.matches(item).then_some(index))
                 .collect())
         })
     }
 
+    /// Return the first index at or after ``start`` matching ``matcher``, or ``None``.
     #[pyo3(signature = (matcher, start=0))]
     fn find_insn(&self, matcher: &PyInsnMatcher, start: usize) -> PyResult<Option<usize>> {
-        let matcher = matcher.spec.compile();
+        let compiled = matcher
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?;
         self.with_code(|code| {
             Ok(code
                 .instructions
                 .iter()
                 .enumerate()
                 .skip(start)
-                .find_map(|(index, item)| matcher.matches(item).then_some(index)))
+                .find_map(|(index, item)| compiled.matches(item).then_some(index)))
         })
     }
 
+    /// Return whether any instruction matches ``matcher``.
     fn contains_insn(&self, matcher: &PyInsnMatcher) -> PyResult<bool> {
-        let matcher = matcher.spec.compile();
-        self.with_code(|code| Ok(code.instructions.iter().any(|item| matcher.matches(item))))
+        let compiled = matcher
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?;
+        self.with_code(|code| Ok(code.instructions.iter().any(|item| compiled.matches(item))))
     }
 
+    /// Count instructions matching ``matcher``.
     fn count_insns(&self, matcher: &PyInsnMatcher) -> PyResult<usize> {
-        let matcher = matcher.spec.compile();
+        let compiled = matcher
+            .spec
+            .try_compile()
+            .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))?;
         self.with_code(|code| {
             Ok(code
                 .instructions
                 .iter()
-                .filter(|item| matcher.matches(item))
+                .filter(|item| compiled.matches(item))
                 .count())
         })
     }
 
-    fn find_sequences(&self, matchers: Vec<PyInsnMatcher>) -> PyResult<Vec<usize>> {
-        let matchers = matchers
-            .into_iter()
-            .map(|matcher| matcher.spec.compile())
-            .collect::<Vec<_>>();
+    /// Find all starting indices of contiguous instruction sequences matching ``matchers``.
+    fn find_sequences(&self, matchers: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+        let compiled = matchers
+            .try_iter()?
+            .map(|entry| {
+                let matcher: PyRef<'_, PyInsnMatcher> = entry?.extract()?;
+                matcher
+                    .spec
+                    .try_compile()
+                    .map_err(|e| PyValueError::new_err(format!("invalid regex pattern: {e}")))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
         self.with_code(|code| {
-            if matchers.is_empty() || matchers.len() > code.instructions.len() {
+            if compiled.is_empty() || compiled.len() > code.instructions.len() {
                 return Ok(Vec::new());
             }
             Ok(code
                 .instructions
-                .windows(matchers.len())
+                .windows(compiled.len())
                 .enumerate()
                 .filter_map(|(index, window)| {
-                    matchers
+                    compiled
                         .iter()
                         .zip(window.iter())
                         .all(|(matcher, item)| matcher.matches(item))
@@ -2191,12 +3069,80 @@ impl PyCodeModel {
                 .collect())
         })
     }
+
+    /// Replace every instruction matching ``matcher`` with ``replacement``; returns replacement count.
+    fn replace_insns(
+        &mut self,
+        matcher: &PyInsnMatcher,
+        replacement: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        let compiled = compile_insn_matcher(matcher)?;
+        let replacement = extract_code_items_iter(replacement)?;
+        self.with_code_mut(|code| Ok(code.replace_insns(&compiled, &replacement)))
+    }
+
+    /// Remove every instruction matching ``matcher``; returns removed count.
+    fn remove_insns(&mut self, matcher: &PyInsnMatcher) -> PyResult<usize> {
+        let compiled = compile_insn_matcher(matcher)?;
+        self.with_code_mut(|code| Ok(code.remove_insns(&compiled)))
+    }
+
+    /// Insert ``items`` immediately before every instruction matching ``matcher``; returns insertion site count.
+    fn insert_before(
+        &mut self,
+        matcher: &PyInsnMatcher,
+        items: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        let compiled = compile_insn_matcher(matcher)?;
+        let items = extract_code_items_iter(items)?;
+        self.with_code_mut(|code| Ok(code.insert_before(&compiled, &items)))
+    }
+
+    /// Insert ``items`` immediately after every instruction matching ``matcher``; returns insertion site count.
+    fn insert_after(
+        &mut self,
+        matcher: &PyInsnMatcher,
+        items: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        let compiled = compile_insn_matcher(matcher)?;
+        let items = extract_code_items_iter(items)?;
+        self.with_code_mut(|code| Ok(code.insert_after(&compiled, &items)))
+    }
+
+    /// Replace every non-overlapping sequence matching ``pattern`` with ``replacement``; returns site count.
+    fn replace_sequences(
+        &mut self,
+        pattern: &Bound<'_, PyAny>,
+        replacement: &Bound<'_, PyAny>,
+    ) -> PyResult<usize> {
+        let compiled = compile_insn_matcher_seq(pattern)?;
+        let replacement = extract_code_items_iter(replacement)?;
+        self.with_code_mut(|code| Ok(code.replace_sequences(&compiled, &replacement)))
+    }
+
+    /// Remove every non-overlapping sequence matching ``pattern``; returns site count.
+    fn remove_sequences(&mut self, pattern: &Bound<'_, PyAny>) -> PyResult<usize> {
+        let compiled = compile_insn_matcher_seq(pattern)?;
+        self.with_code_mut(|code| Ok(code.remove_sequences(&compiled)))
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        self.with_code(|code| {
+            Ok(format!(
+                "CodeModel(max_stack={}, max_locals={}, insns={})",
+                code.max_stack,
+                code.max_locals,
+                code.instructions.len()
+            ))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // PyFieldModel
 // ---------------------------------------------------------------------------
 
+/// Mutable symbolic representation of a field declaration on a ``ClassModel``.
 #[pyclass(
     from_py_object,
     name = "FieldModel",
@@ -2219,9 +3165,19 @@ impl PyFieldModel {
                 if model_state.fields_generation != *generation {
                     return Err(stale_ref_err("field ref"));
                 }
-                f(&model_state.inner.as_ref().unwrap().fields[*index])
+                let field = model_state
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .fields
+                    .get(*index)
+                    .ok_or_else(|| stale_ref_err("field ref"))?;
+                f(field)
             }),
-            FieldAccess::Owned(field) => f(&field.borrow()),
+            FieldAccess::Owned(field) => {
+                let borrowed = field.try_borrow().map_err(|_| borrow_err("FieldModel"))?;
+                f(&borrowed)
+            }
         }
     }
 
@@ -2237,11 +3193,20 @@ impl PyFieldModel {
                     if model_state.fields_generation != generation {
                         return Err(stale_ref_err("field ref"));
                     }
-                    f(&mut model_state.inner.as_mut().unwrap().fields[index])
+                    let field = model_state
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .fields
+                        .get_mut(index)
+                        .ok_or_else(|| stale_ref_err("field ref"))?;
+                    f(field)
                 })
             }
             FieldAccess::Owned(field) => {
-                let mut borrowed = field.borrow_mut();
+                let mut borrowed = field
+                    .try_borrow_mut()
+                    .map_err(|_| borrow_err("FieldModel"))?;
                 f(&mut borrowed)
             }
         }
@@ -2269,6 +3234,7 @@ impl PyFieldModel {
         }
     }
 
+    /// Raw JVM field access flags bitset.
     #[getter]
     fn access_flags(&self) -> PyResult<u16> {
         self.with_field(|field| Ok(field.access_flags.bits()))
@@ -2283,6 +3249,7 @@ impl PyFieldModel {
         })
     }
 
+    /// Field identifier name.
     #[getter]
     fn name(&self) -> PyResult<String> {
         self.with_field(|field| Ok(field.name.clone()))
@@ -2296,6 +3263,7 @@ impl PyFieldModel {
         })
     }
 
+    /// JVM field descriptor.
     #[getter]
     fn descriptor(&self) -> PyResult<String> {
         self.with_field(|field| Ok(field.descriptor.clone()))
@@ -2309,6 +3277,7 @@ impl PyFieldModel {
         })
     }
 
+    /// Live view of raw attributes attached to this field.
     #[getter]
     fn attributes(&self) -> PyAttributeListView {
         let owner = match &self.access {
@@ -2325,12 +3294,24 @@ impl PyFieldModel {
         };
         PyAttributeListView { owner }
     }
+
+    fn __repr__(&self) -> PyResult<String> {
+        self.with_field(|field| {
+            Ok(format!(
+                "FieldModel(name={:?}, descriptor={:?}, access_flags=0x{:04x})",
+                field.name,
+                field.descriptor,
+                field.access_flags.bits()
+            ))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // PyMethodModel
 // ---------------------------------------------------------------------------
 
+/// Mutable symbolic representation of a method declaration on a ``ClassModel``.
 #[pyclass(
     from_py_object,
     name = "MethodModel",
@@ -2353,9 +3334,19 @@ impl PyMethodModel {
                 if model_state.methods_generation != *generation {
                     return Err(stale_ref_err("method ref"));
                 }
-                f(&model_state.inner.as_ref().unwrap().methods[*index])
+                let method = model_state
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .methods
+                    .get(*index)
+                    .ok_or_else(|| stale_ref_err("method ref"))?;
+                f(method)
             }),
-            MethodAccess::Owned(method) => f(&method.borrow()),
+            MethodAccess::Owned(method) => {
+                let borrowed = method.try_borrow().map_err(|_| borrow_err("MethodModel"))?;
+                f(&borrowed)
+            }
         }
     }
 
@@ -2371,11 +3362,20 @@ impl PyMethodModel {
                     if model_state.methods_generation != generation {
                         return Err(stale_ref_err("method ref"));
                     }
-                    f(&mut model_state.inner.as_mut().unwrap().methods[index])
+                    let method = model_state
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .methods
+                        .get_mut(index)
+                        .ok_or_else(|| stale_ref_err("method ref"))?;
+                    f(method)
                 })
             }
             MethodAccess::Owned(method) => {
-                let mut borrowed = method.borrow_mut();
+                let mut borrowed = method
+                    .try_borrow_mut()
+                    .map_err(|_| borrow_err("MethodModel"))?;
                 f(&mut borrowed)
             }
         }
@@ -2402,6 +3402,7 @@ impl PyMethodModel {
         }
     }
 
+    /// Raw JVM method access flags bitset.
     #[getter]
     fn access_flags(&self) -> PyResult<u16> {
         self.with_method(|method| Ok(method.access_flags.bits()))
@@ -2416,6 +3417,7 @@ impl PyMethodModel {
         })
     }
 
+    /// Method name (including ``<init>`` and ``<clinit>``).
     #[getter]
     fn name(&self) -> PyResult<String> {
         self.with_method(|method| Ok(method.name.clone()))
@@ -2429,6 +3431,7 @@ impl PyMethodModel {
         })
     }
 
+    /// JVM method descriptor.
     #[getter]
     fn descriptor(&self) -> PyResult<String> {
         self.with_method(|method| Ok(method.descriptor.clone()))
@@ -2442,6 +3445,13 @@ impl PyMethodModel {
         })
     }
 
+    /// Whether this method currently has a symbolic or prebuilt body.
+    #[getter]
+    fn has_code(&self) -> PyResult<bool> {
+        self.with_method(|method| Ok(method.has_code()))
+    }
+
+    /// Editable symbolic ``CodeModel`` for this method, or ``None``.
     #[getter]
     fn code(&self) -> PyResult<Option<PyCodeModel>> {
         match &self.access {
@@ -2453,8 +3463,14 @@ impl PyMethodModel {
                 if model_state.methods_generation != *generation {
                     return Err(stale_ref_err("method ref"));
                 }
-                let method = &model_state.inner.as_ref().unwrap().methods[*index];
-                Ok(method.code.as_ref().map(|_| PyCodeModel {
+                let method = model_state
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .methods
+                    .get(*index)
+                    .ok_or_else(|| stale_ref_err("method ref"))?;
+                Ok(method.code().map(|_| PyCodeModel {
                     access: CodeAccess::Shared {
                         state: state.clone(),
                         method_index: *index,
@@ -2463,37 +3479,80 @@ impl PyMethodModel {
                 }))
             }),
             MethodAccess::Owned(method) => {
-                let has_code = method.borrow().code.is_some();
-                Ok(has_code.then(|| PyCodeModel {
+                let borrowed = method.try_borrow().map_err(|_| borrow_err("MethodModel"))?;
+                let has_symbolic = borrowed.code().is_some();
+                Ok(has_symbolic.then(|| PyCodeModel {
                     access: CodeAccess::OwnedMethod(method.clone()),
                 }))
             }
         }
     }
 
-    fn set_raw_code(&mut self, max_stack: u16, max_locals: u16, code_bytes: &[u8]) -> PyResult<()> {
-        let cp = match &self.access {
-            MethodAccess::Shared { state, .. } => with_live_model(state, |model_state| {
-                Ok(model_state.inner.as_ref().unwrap().constant_pool.clone())
-            })?,
-            MethodAccess::Owned(_) => ConstantPoolBuilder::new(),
-        };
-        let code_model = CodeModel::from_raw_code(max_stack, max_locals, code_bytes, &cp)
-            .map_err(crate::engine_error_to_py)?;
+    #[setter]
+    fn set_code(&mut self, value: Option<PyCodeModel>) -> PyResult<()> {
+        let code = value.map(|c| c.clone_inner()).transpose()?;
         self.with_method_mut(|method| {
-            method.code = Some(code_model);
-            method.pre_built_code_bytes = None;
+            method.set_code(code);
             Ok(())
         })
     }
 
-    fn set_prebuilt_code(&mut self, code_body_bytes: &[u8]) -> PyResult<()> {
+    /// Lift raw JVM instruction bytes into this method's symbolic ``CodeModel``.
+    #[pyo3(signature = (max_stack, max_locals, code_bytes, cp=None))]
+    fn set_raw_code(
+        &mut self,
+        max_stack: u16,
+        max_locals: u16,
+        code_bytes: &Bound<'_, PyAny>,
+        cp: Option<&PyConstantPoolBuilder>,
+    ) -> PyResult<()> {
+        let code_model = crate::with_bytes(code_bytes, |raw| {
+            if let Some(cp_builder) = cp {
+                cp_builder.with_builder(|builder| {
+                    CodeModel::from_raw_code(max_stack, max_locals, raw, builder)
+                        .map_err(crate::engine_error_to_py)
+                })
+            } else {
+                match &self.access {
+                    MethodAccess::Shared {
+                        state,
+                        index,
+                        generation,
+                    } => with_live_model(state, |model_state| {
+                        if model_state.methods_generation != *generation {
+                            return Err(stale_ref_err("method ref"));
+                        }
+                        let model = model_state.inner.as_ref().unwrap();
+                        if model.methods.get(*index).is_none() {
+                            return Err(stale_ref_err("method ref"));
+                        }
+                        CodeModel::from_raw_code(max_stack, max_locals, raw, &model.constant_pool)
+                            .map_err(crate::engine_error_to_py)
+                    }),
+                    MethodAccess::Owned(_) => {
+                        let empty = ConstantPoolBuilder::new();
+                        CodeModel::from_raw_code(max_stack, max_locals, raw, &empty)
+                            .map_err(crate::engine_error_to_py)
+                    }
+                }
+            }
+        })?;
         self.with_method_mut(|method| {
-            method.set_prebuilt_code_bytes(code_body_bytes.to_vec());
+            method.set_code(Some(code_model));
             Ok(())
         })
     }
 
+    /// Attach raw prebuilt ``Code`` attribute payload bytes to this method.
+    fn set_prebuilt_code(&mut self, code_body_bytes: &Bound<'_, PyAny>) -> PyResult<()> {
+        let bytes = crate::extract_bytes(code_body_bytes)?;
+        self.with_method_mut(|method| {
+            method.set_prebuilt_code_bytes(bytes);
+            Ok(())
+        })
+    }
+
+    /// Live view of raw attributes attached to this method declaration.
     #[getter]
     fn attributes(&self) -> PyAttributeListView {
         let owner = match &self.access {
@@ -2510,12 +3569,25 @@ impl PyMethodModel {
         };
         PyAttributeListView { owner }
     }
+
+    fn __repr__(&self) -> PyResult<String> {
+        self.with_method(|method| {
+            Ok(format!(
+                "MethodModel(name={:?}, descriptor={:?}, access_flags=0x{:04x}, has_code={})",
+                method.name,
+                method.descriptor,
+                method.access_flags.bits(),
+                method.has_code()
+            ))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // PyMappingClassResolver
 // ---------------------------------------------------------------------------
 
+/// Pre-resolved in-memory class hierarchy map indexed by internal JVM class name.
 #[pyclass(
     from_py_object,
     name = "MappingClassResolver",
@@ -2529,35 +3601,58 @@ pub struct PyMappingClassResolver {
 #[pymethods]
 impl PyMappingClassResolver {
     #[new]
-    fn new() -> PyResult<Self> {
+    fn new(py: Python<'_>) -> PyResult<Self> {
         Ok(Self {
-            inner: MappingClassResolver::new(std::iter::empty()).map_err(analysis_error_to_py)?,
+            inner: MappingClassResolver::new(std::iter::empty())
+                .map_err(|e| analysis_error_to_py(py, e))?,
         })
     }
 
+    /// Build a resolver from an iterable of raw classfile ``bytes`` or ``bytearray`` payloads.
     #[staticmethod]
-    fn from_bytes(class_bytes_list: Vec<Vec<u8>>) -> PyResult<Self> {
-        let models: Vec<ClassModel> = class_bytes_list
-            .iter()
-            .map(|bytes| ClassModel::from_bytes(bytes).map_err(crate::engine_error_to_py))
-            .collect::<PyResult<Vec<_>>>()?;
-        let resolver = MappingClassResolver::from_models(models).map_err(analysis_error_to_py)?;
+    fn from_bytes(py: Python<'_>, class_bytes_list: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut resolved = Vec::new();
+        for item in class_bytes_list.try_iter()? {
+            let item = item?;
+            let rc = crate::with_bytes(&item, |bytes| {
+                let classfile = parse_class(bytes).map_err(crate::engine_error_to_py)?;
+                ResolvedClass::from_classfile(&classfile).map_err(crate::engine_error_to_py)
+            })?;
+            resolved.push(rc);
+        }
+        let resolver =
+            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
         Ok(Self { inner: resolver })
     }
 
+    /// Build a resolver from an iterable of mutable ``ClassModel`` instances.
     #[staticmethod]
-    fn from_models(py: Python<'_>, models: Vec<Py<PyClassModel>>) -> PyResult<Self> {
-        let models = models
-            .into_iter()
-            .map(|model| {
-                let model = model.bind(py).borrow();
-                model.with_class_model(|inner| Ok(inner.clone()))
-            })
-            .collect::<PyResult<Vec<_>>>()?;
-        let resolver = MappingClassResolver::from_models(models).map_err(analysis_error_to_py)?;
+    fn from_models(py: Python<'_>, models: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut resolved = Vec::new();
+        for item in models.try_iter()? {
+            let model: PyRef<'_, PyClassModel> = item?.extract()?;
+            resolved.push(model.with_class_model(|inner| Ok(ResolvedClass::from_model(inner)))?);
+        }
+        let resolver =
+            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
         Ok(Self { inner: resolver })
     }
 
+    /// Build a resolver from an iterable of raw ``ClassFile`` instances.
+    #[staticmethod]
+    fn from_classfiles(py: Python<'_>, classfiles: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut resolved = Vec::new();
+        for item in classfiles.try_iter()? {
+            let cf: PyRef<'_, PyClassFile> = item?.extract()?;
+            resolved
+                .push(ResolvedClass::from_classfile(&cf.inner).map_err(crate::engine_error_to_py)?);
+        }
+        let resolver =
+            MappingClassResolver::new(resolved).map_err(|e| analysis_error_to_py(py, e))?;
+        Ok(Self { inner: resolver })
+    }
+
+    /// Resolve a class snapshot dictionary by internal JVM name, or ``None``.
     fn resolve_class(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyObject>> {
         use pytecode_engine::analysis::ClassResolver;
         match self.inner.resolve_class(name) {
@@ -2565,56 +3660,76 @@ impl PyMappingClassResolver {
             None => Ok(None),
         }
     }
+
+    fn __repr__(&self) -> &'static str {
+        "MappingClassResolver()"
+    }
 }
 
 // ---------------------------------------------------------------------------
-// PyClassModel
+// Lowering & policy options
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_debug_info_policy(s: &str) -> PyResult<DebugInfoPolicy> {
-    match s {
+fn cached_archive_policy_type<'py>(
+    cell: &'static PyOnceLock<Py<PyAny>>,
+    py: Python<'py>,
+    name: &str,
+) -> PyResult<&'py Py<PyAny>> {
+    crate::cached_py_attr(cell, py, "pytecode.archive", name)
+}
+
+pub(crate) fn parse_debug_info_policy(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<DebugInfoPolicy> {
+    static POLICY_ENUM: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let Some(obj) = value else {
+        return Ok(DebugInfoPolicy::Preserve);
+    };
+    let s = if let Ok(raw) = obj.extract::<String>() {
+        raw
+    } else {
+        let enum_cls = cached_archive_policy_type(&POLICY_ENUM, obj.py(), "DebugInfoPolicy")?;
+        if !obj.is_instance(enum_cls.bind(obj.py()))? {
+            return Err(PyTypeError::new_err(
+                "debug_info must be a pytecode.archive.DebugInfoPolicy or 'preserve'/'strip'",
+            ));
+        }
+        obj.getattr("value")?.extract::<String>()?
+    };
+    match s.as_str() {
         "preserve" => Ok(DebugInfoPolicy::Preserve),
         "strip" => Ok(DebugInfoPolicy::Strip),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+        _ => Err(PyValueError::new_err(format!(
             "invalid debug info policy: {s:?}, expected \"preserve\" or \"strip\""
         ))),
     }
 }
 
-fn parse_frame_mode_str(s: &str) -> PyResult<FrameComputationMode> {
-    match s {
+pub(crate) fn parse_frame_computation_mode(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<FrameComputationMode> {
+    static MODE_ENUM: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let Some(obj) = value else {
+        return Ok(FrameComputationMode::Preserve);
+    };
+    let s = if let Ok(raw) = obj.extract::<String>() {
+        raw
+    } else {
+        let enum_cls = cached_archive_policy_type(&MODE_ENUM, obj.py(), "FrameComputationMode")?;
+        if !obj.is_instance(enum_cls.bind(obj.py()))? {
+            return Err(PyTypeError::new_err(
+                "frame_mode must be a pytecode.archive.FrameComputationMode or 'preserve'/'recompute'",
+            ));
+        }
+        obj.getattr("value")?.extract::<String>()?
+    };
+    match s.as_str() {
         "preserve" => Ok(FrameComputationMode::Preserve),
         "recompute" => Ok(FrameComputationMode::Recompute),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+        _ => Err(PyValueError::new_err(format!(
             "invalid frame mode: {s:?}, expected \"preserve\" or \"recompute\""
         ))),
     }
-}
-
-fn parse_frame_mode_value(frame_mode: &Bound<'_, PyAny>) -> PyResult<FrameComputationMode> {
-    let value = frame_mode
-        .getattr("value")
-        .map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                "frame_mode must be a pytecode.archive.FrameComputationMode",
-            )
-        })?
-        .extract::<String>()
-        .map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                "frame_mode must be a pytecode.archive.FrameComputationMode",
-            )
-        })?;
-    parse_frame_mode_str(&value)
-}
-
-pub(crate) fn parse_frame_computation_mode(
-    frame_mode: Option<&Bound<'_, PyAny>>,
-) -> PyResult<FrameComputationMode> {
-    Ok(match frame_mode {
-        Some(value) => parse_frame_mode_value(value)?,
-        None => FrameComputationMode::Preserve,
-    })
 }
 
 fn lower_class_model_bytes(
@@ -2657,54 +3772,59 @@ fn lower_class_model(
     })
 }
 
+/// Lower an iterable of ``ClassModel`` objects into raw ``ClassFile`` structures.
 #[pyfunction]
-#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = "preserve"))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None))]
 fn rust_lower_classmodels(
-    models: &Bound<'_, PyList>,
+    models: &Bound<'_, PyAny>,
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
-    debug_info: &str,
+    debug_info: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyClassFile>> {
     let policy = parse_debug_info_policy(debug_info)?;
     let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
 
-    models
-        .iter()
-        .map(|item| {
-            let model: PyRef<'_, PyClassModel> = item.extract()?;
-            Ok(PyClassFile {
-                inner: Arc::new(lower_class_model(&model, policy, frame_mode, resolver)?),
-            })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for item in models.try_iter()? {
+        let model: PyRef<'_, PyClassModel> = item?.extract()?;
+        out.push(PyClassFile {
+            inner: Arc::new(lower_class_model(&model, policy, frame_mode, resolver)?),
+        });
+    }
+    Ok(out)
 }
 
+/// Lower an iterable of ``ClassModel`` objects directly into serialized classfile ``bytes``.
 #[pyfunction]
-#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = "preserve"))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None))]
 fn rust_lower_classmodels_to_bytes<'py>(
     py: Python<'py>,
-    models: &Bound<'py, PyList>,
+    models: &Bound<'py, PyAny>,
     frame_mode: Option<&Bound<'py, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
-    debug_info: &str,
+    debug_info: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Vec<Py<PyBytes>>> {
     let policy = parse_debug_info_policy(debug_info)?;
     let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
 
-    models
-        .iter()
-        .map(|item| {
-            let model: PyRef<'_, PyClassModel> = item.extract()?;
-            let bytes = lower_class_model_bytes(&model, policy, frame_mode, resolver)?;
-            Ok(PyBytes::new(py, &bytes).unbind())
-        })
-        .collect()
+    let mut out = Vec::new();
+    for item in models.try_iter()? {
+        let model: PyRef<'_, PyClassModel> = item?.extract()?;
+        let bytes = lower_class_model_bytes(&model, policy, frame_mode, resolver)?;
+        out.push(PyBytes::new(py, &bytes).unbind());
+    }
+    Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// PyClassModel
+// ---------------------------------------------------------------------------
+
+/// Mutable symbolic view of a class for structural edits and lowering.
 #[pyclass(
     from_py_object,
     name = "ClassModel",
@@ -2736,29 +3856,117 @@ impl PyClassModel {
         &mut self,
         f: impl FnOnce(&mut ClassModel) -> PyResult<R>,
     ) -> PyResult<R> {
-        with_live_model_mut(&self.state, |model_state| {
-            f(model_state.inner.as_mut().unwrap())
-        })
+        let inner = {
+            let mut borrowed = self
+                .state
+                .try_borrow_mut()
+                .map_err(|_| borrow_err("ClassModel"))?;
+            borrowed.inner.take().ok_or_else(dead_model_err)?
+        };
+        let mut guard = ClassModelRestoreGuard {
+            state: self.state.clone(),
+            inner: Some(inner),
+        };
+        f(guard.inner.as_mut().unwrap())
     }
 
     pub(crate) fn take_inner(&mut self) -> PyResult<ClassModel> {
-        let mut borrowed = self.state.borrow_mut();
+        let mut borrowed = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| borrow_err("ClassModel"))?;
         borrowed.inner.take().ok_or_else(dead_model_err)
     }
 }
 
 #[pymethods]
 impl PyClassModel {
+    #[new]
+    #[pyo3(signature = (
+        name,
+        *,
+        super_name = Some("java/lang/Object".to_owned()),
+        access_flags = 0x0021,
+        version = (52, 0),
+        interfaces = None,
+        fields = None,
+        methods = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        name: String,
+        super_name: Option<String>,
+        access_flags: u16,
+        version: (u16, u16),
+        interfaces: Option<&Bound<'_, PyAny>>,
+        fields: Option<&Bound<'_, PyAny>>,
+        methods: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let interfaces = match interfaces {
+            Some(items) => items
+                .try_iter()?
+                .map(|entry| entry?.extract::<String>())
+                .collect::<PyResult<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        let fields = match fields {
+            Some(items) => items
+                .try_iter()?
+                .map(|entry| {
+                    let field: PyRef<'_, PyFieldModel> = entry?.extract()?;
+                    field.clone_inner()
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        let methods = match methods {
+            Some(items) => items
+                .try_iter()?
+                .map(|entry| {
+                    let method: PyRef<'_, PyMethodModel> = entry?.extract()?;
+                    method.clone_inner()
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            None => Vec::new(),
+        };
+        Ok(Self::from_model(ClassModel {
+            entry_name: String::new(),
+            original_byte_len: 0,
+            version,
+            access_flags: ClassAccessFlags::from_bits_truncate(access_flags),
+            name,
+            super_name,
+            interfaces,
+            fields,
+            methods,
+            attributes: Vec::new(),
+            constant_pool: ConstantPoolBuilder::new(),
+            debug_info_state: DebugInfoState::Fresh,
+        }))
+    }
+
     // -- constructors -------------------------------------------------------
 
+    /// Parse classfile ``bytes`` or ``bytearray`` into an editable class model.
     #[staticmethod]
-    fn from_bytes(data: &[u8]) -> PyResult<Self> {
-        let model = ClassModel::from_bytes(data).map_err(crate::engine_error_to_py)?;
+    fn from_bytes(data: &Bound<'_, PyAny>) -> PyResult<Self> {
+        crate::with_bytes(data, |bytes| {
+            let model = ClassModel::from_bytes(bytes).map_err(crate::engine_error_to_py)?;
+            Ok(Self::from_model(model))
+        })
+    }
+
+    /// Lift a raw ``ClassFile`` into an editable class model.
+    #[staticmethod]
+    fn from_classfile(classfile: &PyClassFile) -> PyResult<Self> {
+        let model =
+            ClassModel::from_classfile(&classfile.inner).map_err(crate::engine_error_to_py)?;
         Ok(Self::from_model(model))
     }
 
     // -- serialisation ------------------------------------------------------
 
+    /// Lower the current model to classfile bytes with default options.
     fn to_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
         let bytes = lower_class_model_bytes(
             self,
@@ -2769,6 +3977,7 @@ impl PyClassModel {
         Ok(PyBytes::new(py, &bytes).unbind())
     }
 
+    /// Lower the current model to a raw ``ClassFile`` object.
     fn to_classfile(&self) -> PyResult<PyClassFile> {
         Ok(PyClassFile {
             inner: Arc::new(lower_class_model(
@@ -2780,13 +3989,14 @@ impl PyClassModel {
         })
     }
 
-    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = "preserve"))]
+    /// Lower the model to bytes with explicit frame and debug-info options.
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None))]
     fn to_bytes_with_options<'py>(
         &self,
         py: Python<'py>,
         frame_mode: Option<&Bound<'py, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
-        debug_info: &str,
+        debug_info: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Py<PyBytes>> {
         let policy = parse_debug_info_policy(debug_info)?;
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
@@ -2799,12 +4009,13 @@ impl PyClassModel {
         Ok(PyBytes::new(py, &bytes).unbind())
     }
 
-    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = "preserve"))]
+    /// Lower the model to a raw ``ClassFile`` object with explicit lowering options.
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None))]
     fn to_classfile_with_options(
         &self,
         frame_mode: Option<&Bound<'_, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
-        debug_info: &str,
+        debug_info: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyClassFile> {
         let policy = parse_debug_info_policy(debug_info)?;
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
@@ -2820,6 +4031,7 @@ impl PyClassModel {
 
     // -- getters ------------------------------------------------------------
 
+    /// Original archive entry name associated with this class model.
     #[getter]
     fn entry_name(&self) -> PyResult<String> {
         with_live_model(&self.state, |model_state| {
@@ -2827,6 +4039,7 @@ impl PyClassModel {
         })
     }
 
+    /// Size in bytes of the classfile this model was originally parsed from.
     #[getter]
     fn original_byte_len(&self) -> PyResult<usize> {
         with_live_model(&self.state, |model_state| {
@@ -2834,6 +4047,7 @@ impl PyClassModel {
         })
     }
 
+    /// Classfile version as ``(major, minor)``.
     #[getter]
     fn version(&self) -> PyResult<(u16, u16)> {
         with_live_model(&self.state, |model_state| {
@@ -2841,6 +4055,7 @@ impl PyClassModel {
         })
     }
 
+    /// Raw JVM access-flag bitset for the class declaration.
     #[getter]
     fn access_flags(&self) -> PyResult<u16> {
         with_live_model(&self.state, |model_state| {
@@ -2848,6 +4063,7 @@ impl PyClassModel {
         })
     }
 
+    /// Internal JVM name of the class, such as ``pkg/Example``.
     #[getter]
     fn name(&self) -> PyResult<String> {
         with_live_model(&self.state, |model_state| {
@@ -2855,6 +4071,7 @@ impl PyClassModel {
         })
     }
 
+    /// Internal JVM name of the direct superclass, or ``None`` for ``java/lang/Object``.
     #[getter]
     fn super_name(&self) -> PyResult<Option<String>> {
         with_live_model(&self.state, |model_state| {
@@ -2862,6 +4079,7 @@ impl PyClassModel {
         })
     }
 
+    /// Live view of declared interface names in internal JVM format.
     #[getter]
     fn interfaces(&self) -> PyResult<PyStringListView> {
         with_live_model(&self.state, |model_state| {
@@ -2872,6 +4090,7 @@ impl PyClassModel {
         })
     }
 
+    /// Live view of the class's field models.
     #[getter]
     fn fields(&self) -> PyResult<PyFieldListView> {
         with_live_model(&self.state, |model_state| {
@@ -2882,6 +4101,7 @@ impl PyClassModel {
         })
     }
 
+    /// Live view of the class's method models.
     #[getter]
     fn methods(&self) -> PyResult<PyMethodListView> {
         with_live_model(&self.state, |model_state| {
@@ -2892,6 +4112,7 @@ impl PyClassModel {
         })
     }
 
+    /// Live view of raw class-level attributes.
     #[getter]
     fn attributes(&self) -> PyAttributeListView {
         PyAttributeListView {
@@ -2899,11 +4120,13 @@ impl PyClassModel {
         }
     }
 
+    /// Mutable constant-pool builder used when lowering edited models.
     #[getter]
     fn constant_pool(&self) -> PyConstantPoolBuilder {
         PyConstantPoolBuilder::from_shared(self.state.clone())
     }
 
+    /// Debug-info freshness marker, typically ``fresh`` or ``stale``.
     #[getter]
     fn debug_info_state(&self) -> PyResult<&'static str> {
         with_live_model(&self.state, |model_state| {
@@ -2945,7 +4168,7 @@ impl PyClassModel {
     fn set_access_flags(&mut self, value: u16) -> PyResult<()> {
         with_live_model_mut(&self.state, |model_state| {
             model_state.inner.as_mut().unwrap().access_flags =
-                pytecode_engine::constants::ClassAccessFlags::from_bits_truncate(value);
+                ClassAccessFlags::from_bits_truncate(value);
             Ok(())
         })
     }
@@ -2981,6 +4204,19 @@ impl PyClassModel {
             model_state.inner.as_mut().unwrap().methods = methods;
             model_state.methods_generation += 1;
             Ok(())
+        })
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        with_live_model(&self.state, |model_state| {
+            let inner = model_state.inner.as_ref().unwrap();
+            Ok(format!(
+                "ClassModel(name={:?}, version={:?}, fields={}, methods={})",
+                inner.name,
+                inner.version,
+                inner.fields.len(),
+                inner.methods.len()
+            ))
         })
     }
 }

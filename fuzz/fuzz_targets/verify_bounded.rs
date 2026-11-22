@@ -20,19 +20,19 @@ fuzz_target!(|data: &[u8]| {
             let instructions: usize = model
                 .methods
                 .iter()
-                .filter_map(|method| method.code.as_ref())
+                .filter_map(|method| method.code())
                 .map(|code| code.instructions.len())
                 .sum();
             let handlers: usize = model
                 .methods
                 .iter()
-                .filter_map(|method| method.code.as_ref())
+                .filter_map(|method| method.code())
                 .map(|code| code.exception_handlers.len())
                 .sum();
             let bounded_slots = model
                 .methods
                 .iter()
-                .filter_map(|method| method.code.as_ref())
+                .filter_map(|method| method.code())
                 .flat_map(|code| &code.instructions)
                 .all(|item| match item {
                     pytecode_engine::model::CodeItem::Var(var) => var.slot < 256,

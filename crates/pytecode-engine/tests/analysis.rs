@@ -60,12 +60,12 @@ fn method_code_named<'a>(
         .methods
         .iter()
         .find(|method| method.name == name)
-        .and_then(|method| method.code.as_ref())
+        .and_then(|method| method.code())
         .unwrap_or_else(|| panic!("method {name} not found"))
 }
 
 fn code_mut(method: &mut pytecode_engine::model::MethodModel) -> &mut CodeModel {
-    method.code.as_mut().expect("method should have code")
+    method.code_mut().expect("method should have code")
 }
 
 fn install_jsr_subroutine(code: &mut CodeModel) {

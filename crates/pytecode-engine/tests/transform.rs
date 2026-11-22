@@ -3,7 +3,7 @@ use pytecode_engine::fixtures::compiled_fixture_paths_for;
 use pytecode_engine::model::{ClassModel, CodeItem, LdcInsn, LdcValue, MethodInsn};
 use pytecode_engine::raw::Instruction;
 use pytecode_engine::transform::matcher_spec::InsnMatcherSpec;
-use pytecode_engine::transform::pipeline_spec::PipelineSpec;
+use pytecode_engine::transform::pipeline_spec::{CodeTransformAction, PipelineSpec};
 use pytecode_engine::transform::transform_spec::{ClassTransformSpec, CodeTransformSpec};
 use pytecode_engine::transform::{
     Pipeline, class_named, insn_ldc_string, insn_method, method_is_public, method_is_static,
@@ -98,8 +98,7 @@ fn on_code_mutates_only_matching_method_code() -> TestResult<()> {
     let bytes = fixture_bytes("ControlFlowExample.java", "ControlFlowExample.class");
     let mut model = ClassModel::from_bytes(&bytes)?;
     let original_other_len = method_named_mut(&mut model, "denseSwitch")
-        .code
-        .as_ref()
+        .code()
         .expect("method should have code")
         .instructions
         .len();
@@ -129,7 +128,7 @@ fn on_code_mutates_only_matching_method_code() -> TestResult<()> {
     transform.apply(&mut model)?;
 
     let branch = method_named_mut(&mut model, "branch");
-    let branch_code = branch.code.as_ref().expect("branch should have code");
+    let branch_code = branch.code().expect("branch should have code");
     assert!(matches!(
         branch_code
             .instructions
@@ -138,8 +137,7 @@ fn on_code_mutates_only_matching_method_code() -> TestResult<()> {
         Some(CodeItem::Raw(Instruction::Simple { opcode: 0x00, .. }))
     ));
     let other_len = method_named_mut(&mut model, "denseSwitch")
-        .code
-        .as_ref()
+        .code()
         .expect("method should have code")
         .instructions
         .len();
@@ -188,8 +186,8 @@ fn code_transform_spec_rewrites_matching_method_body() -> TestResult<()> {
         method_descriptor: Some("([Ljava/lang/String;)V".to_owned()),
         transform: CodeTransformSpec::Sequence(vec![
             CodeTransformSpec::ReplaceString {
-                from: "Hello from fixture".to_owned(),
-                to: "patched string".to_owned(),
+                from: "Hello from fixture".into(),
+                to: "patched string".into(),
             },
             CodeTransformSpec::RedirectMethodCall {
                 from_owner: "java/io/PrintStream".to_owned(),
@@ -198,13 +196,14 @@ fn code_transform_spec_rewrites_matching_method_body() -> TestResult<()> {
                 to_owner: "java/io/PrintStream".to_owned(),
                 to_name: "print".to_owned(),
                 to_descriptor: None,
+                to_is_interface: None,
             },
         ]),
     }
     .apply(&mut model);
 
     let main = method_named_mut(&mut model, "main");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(code.contains_insn(&insn_ldc_string("patched string")));
     assert!(code.contains_insn(&insn_method(
         "java/io/PrintStream",
@@ -223,7 +222,7 @@ fn code_transform_spec_replaces_matching_instruction_sequences() -> TestResult<(
         method_descriptor: Some("([Ljava/lang/String;)V".to_owned()),
         transform: CodeTransformSpec::ReplaceSequence {
             pattern: vec![
-                InsnMatcherSpec::LdcString("Hello from fixture".to_owned()),
+                InsnMatcherSpec::LdcString("Hello from fixture".into()),
                 InsnMatcherSpec::Method {
                     owner: "java/io/PrintStream".to_owned(),
                     name: "println".to_owned(),
@@ -247,7 +246,7 @@ fn code_transform_spec_replaces_matching_instruction_sequences() -> TestResult<(
     .apply(&mut model);
 
     let main = method_named_mut(&mut model, "main");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(!code.contains_insn(&insn_ldc_string("Hello from fixture")));
     assert!(code.contains_insn(&insn_ldc_string("patched sequence")));
     assert!(!code.contains_insn(&insn_method(
@@ -270,15 +269,75 @@ fn pipeline_spec_code_step_applies_to_matching_methods() -> TestResult<()> {
     let pipeline = PipelineSpec::new().on_code(
         pytecode_engine::transform::matcher_spec::MethodMatcherSpec::Named("main".to_owned()),
         pytecode_engine::transform::matcher_spec::ClassMatcherSpec::Named("HelloWorld".to_owned()),
-        CodeTransformSpec::RemoveInsn {
-            matcher: InsnMatcherSpec::LdcString("Hello from fixture".to_owned()),
-        },
+        CodeTransformAction::BuiltIn(CodeTransformSpec::RemoveInsn {
+            matcher: InsnMatcherSpec::LdcString("Hello from fixture".into()),
+        }),
     );
 
-    pipeline.apply(&mut model);
+    pipeline.apply(&mut model)?;
 
     let main = method_named_mut(&mut model, "main");
-    let code = main.code.as_ref().expect("main should have code");
+    let code = main.code().expect("main should have code");
     assert!(!code.contains_insn(&insn_ldc_string("Hello from fixture")));
+    Ok(())
+}
+
+#[test]
+fn redirect_method_call_switches_interface_boundary_and_field_descriptor() -> TestResult<()> {
+    let bytes = fixture_bytes("HelloWorld.java", "HelloWorld.class");
+    let mut model = ClassModel::from_bytes(&bytes)?;
+    let main = method_named_mut(&mut model, "main");
+    let code = main.code_mut().expect("main should have code");
+    code.instructions = vec![
+        CodeItem::Method(MethodInsn {
+            opcode: 0xB6,
+            owner: "pkg/Impl".into(),
+            name: "run".into(),
+            descriptor: "()V".into(),
+            is_interface: false,
+        }),
+        CodeItem::Field(pytecode_engine::model::FieldInsn {
+            opcode: 0xB2,
+            owner: "pkg/Config".into(),
+            name: "flag".into(),
+            descriptor: "Z".into(),
+        }),
+        CodeItem::Raw(Instruction::Simple {
+            opcode: 0xB1,
+            offset: 0,
+        }),
+    ];
+
+    CodeTransformSpec::Sequence(vec![
+        CodeTransformSpec::RedirectMethodCall {
+            from_owner: "pkg/Impl".into(),
+            from_name: "run".into(),
+            from_descriptor: "()V".into(),
+            to_owner: "pkg/Iface".into(),
+            to_name: "execute".into(),
+            to_descriptor: Some("(I)V".into()),
+            to_is_interface: Some(true),
+        },
+        CodeTransformSpec::RedirectFieldAccess {
+            from_owner: "pkg/Config".into(),
+            from_name: "flag".into(),
+            from_descriptor: Some("Z".into()),
+            to_owner: "pkg/Settings".into(),
+            to_name: "mode".into(),
+            to_descriptor: Some("I".into()),
+        },
+    ])
+    .apply(code);
+
+    assert!(matches!(
+        &code.instructions[0],
+        CodeItem::InterfaceMethod(insn)
+            if insn.owner == "pkg/Iface" && insn.name == "execute" && insn.descriptor == "(I)V"
+    ));
+    assert!(matches!(
+        &code.instructions[1],
+        CodeItem::Field(insn)
+            if insn.owner == "pkg/Settings" && insn.name == "mode" && insn.descriptor == "I"
+    ));
     Ok(())
 }

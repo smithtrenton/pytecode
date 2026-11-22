@@ -1,4 +1,6 @@
-use crate::raw::Instruction;
+use crate::constants::TargetType;
+use crate::indexes::Utf8Index;
+use crate::raw::{ElementValuePairInfo, Instruction, TargetInfo, TypePathInfo};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -28,6 +30,10 @@ impl Label {
             id: NEXT_LABEL_ID.fetch_add(1, Ordering::Relaxed),
             name: Some(name.into()),
         }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 }
 
@@ -101,6 +107,45 @@ pub struct LocalVariableTypeEntry {
     pub name: String,
     pub signature: String,
     pub index: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalvarTargetEntry {
+    Range {
+        start: Label,
+        end: Label,
+        index: u16,
+    },
+    NoLiveRange {
+        index: u16,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeTypeAnnotationTarget {
+    Localvar {
+        table: Vec<LocalvarTargetEntry>,
+    },
+    Catch {
+        exception_table_index: usize,
+    },
+    Offset {
+        target: Label,
+    },
+    TypeArgument {
+        target: Label,
+        type_argument_index: u8,
+    },
+    Other(TargetInfo),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeTypeAnnotation {
+    pub target_type: TargetType,
+    pub target: CodeTypeAnnotationTarget,
+    pub target_path: TypePathInfo,
+    pub type_index: Utf8Index,
+    pub element_value_pairs: Vec<ElementValuePairInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -3,12 +3,12 @@ use pytecode_archive::{JarFile, RewriteOptions};
 use pytecode_engine::constants::{ClassAccessFlags, FieldAccessFlags, MethodAccessFlags};
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, FieldInsn, FieldModel, FrameComputationMode,
-    IIncInsn, Label, LdcInsn, LdcValue, LookupSwitchInsn, MethodInsn, MethodModel, TableSwitchInsn,
-    TypeInsn, VarInsn,
+    IIncInsn, InterfaceMethodInsn, Label, LdcInsn, LdcValue, LookupSwitchInsn, MethodInsn,
+    MethodModel, TableSwitchInsn, TypeInsn, VarInsn,
 };
 use pytecode_engine::raw::Instruction;
-use pytecode_engine::transform::matcher_spec::InsnMatcherSpec;
-use pytecode_engine::transform::transform_spec::CodeTransformSpec;
+use pytecode_engine::transform::matcher_spec::{CompiledInsnMatcher, InsnMatcherSpec};
+use pytecode_engine::transform::transform_spec::{CodeTransformSpec, CompiledCodeTransform};
 use pytecode_engine::transform::{
     ClassMatcher, FieldMatcher, Matcher, MethodMatcher, Pipeline, all_of, class_access,
     class_access_any, class_name_matches, class_named, extends, field_access, field_access_any,
@@ -281,12 +281,18 @@ enum CodeAction {
         to_name: String,
         #[serde(default)]
         to_descriptor: Option<String>,
+        #[serde(default)]
+        to_is_interface: Option<bool>,
     },
     RedirectFieldAccess {
         from_owner: String,
         from_name: String,
+        #[serde(default)]
+        from_descriptor: Option<String>,
         to_owner: String,
         to_name: String,
+        #[serde(default)]
+        to_descriptor: Option<String>,
     },
     ReplaceString {
         from: String,
@@ -410,15 +416,14 @@ struct CodeSwitchPair {
     target: String,
 }
 
-#[derive(Debug, Clone)]
 enum CompiledCodeAction {
     Single {
-        matcher: InsnMatcherSpec,
-        transform: CodeTransformSpec,
+        matcher: CompiledInsnMatcher,
+        transform: CompiledCodeTransform,
     },
     Sequence {
-        pattern: Vec<InsnMatcherSpec>,
-        transform: CodeTransformSpec,
+        pattern: Vec<CompiledInsnMatcher>,
+        transform: CompiledCodeTransform,
     },
 }
 
@@ -465,6 +470,12 @@ pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarP
         .iter()
         .filter(|entry| !entry.metadata.is_dir && !entry.is_class())
         .count();
+    let frame_mode: FrameComputationMode = plan.options.frame_mode.into();
+    let resolver = if frame_mode == FrameComputationMode::Recompute {
+        Some(crate::build_jar_class_resolver(&jar_file)?)
+    } else {
+        None
+    };
     let (mut pipeline, stats_handles, names, kinds) = build_pipeline(&plan)?;
     let transform = if plan.rules.is_empty() {
         None
@@ -475,8 +486,10 @@ pub fn patch_jar(jar: &Path, output: &Path, rules_path: &Path) -> CliResult<JarP
         Some(output),
         transform,
         RewriteOptions {
-            frame_mode: plan.options.frame_mode.into(),
-            resolver: None,
+            frame_mode,
+            resolver: resolver
+                .as_ref()
+                .map(|resolver| resolver as &dyn pytecode_engine::analysis::ClassResolver),
             debug_info: plan.options.debug_info.into(),
         },
     )?;
@@ -771,7 +784,7 @@ fn build_method_matcher(config: &MethodRuleMatcher) -> CliResult<MethodMatcher> 
     }
     if let Some(has_code) = config.has_code {
         matchers.push(Matcher::of(
-            move |method: &MethodModel| method.code.is_some() == has_code,
+            move |method: &MethodModel| method.has_code() == has_code,
             format!("method_has_code({has_code})"),
         ));
     }
@@ -829,7 +842,7 @@ fn build_code_insn_matcher(config: &CodeInsnMatcher) -> CliResult<InsnMatcherSpe
         matchers.push(InsnMatcherSpec::TypeDescriptor(descriptor.clone()));
     }
     if let Some(value) = &config.ldc_string {
-        matchers.push(InsnMatcherSpec::LdcString(value.clone()));
+        matchers.push(InsnMatcherSpec::LdcString(value.clone().into()));
     }
     if let Some(value) = &config.ldc_class {
         matchers.push(InsnMatcherSpec::LdcClass(value.clone()));
@@ -915,13 +928,23 @@ fn build_code_replacement_item(
             name,
             descriptor,
             is_interface,
-        } => CodeItem::Method(MethodInsn {
-            opcode: *opcode,
-            owner: owner.clone(),
-            name: name.clone(),
-            descriptor: descriptor.clone(),
-            is_interface: *is_interface,
-        }),
+        } => {
+            if *opcode == 0xB9 {
+                CodeItem::InterfaceMethod(InterfaceMethodInsn {
+                    owner: owner.clone(),
+                    name: name.clone(),
+                    descriptor: descriptor.clone(),
+                })
+            } else {
+                CodeItem::Method(MethodInsn {
+                    opcode: *opcode,
+                    owner: owner.clone(),
+                    name: name.clone(),
+                    descriptor: descriptor.clone(),
+                    is_interface: *is_interface,
+                })
+            }
+        }
         CodeReplacementItem::Type { opcode, descriptor } => CodeItem::Type(TypeInsn {
             opcode: *opcode,
             descriptor: descriptor.clone(),
@@ -954,13 +977,13 @@ fn build_code_replacement_item(
             high,
             targets,
         } => {
-            let width = (*high)
-                .checked_sub(*low)
-                .and_then(|delta| delta.checked_add(1))
-                .ok_or_else(|| CliError::InvalidPatchPlan {
+            if *low > *high {
+                return Err(CliError::InvalidPatchPlan {
                     message: format!("invalid table-switch range {low}..={high}"),
-                })? as usize;
-            if targets.len() != width {
+                });
+            }
+            let width = i64::from(*high) - i64::from(*low) + 1;
+            if i64::try_from(targets.len()).ok() != Some(width) {
                 return Err(CliError::InvalidPatchPlan {
                     message: format!(
                         "table-switch target count {} does not match range {low}..={high}",
@@ -997,20 +1020,25 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
             replacement,
         } => {
             let matcher = build_code_insn_matcher(matcher)?;
-            vec![CompiledCodeAction::Single {
+            let transform = CodeTransformSpec::ReplaceInsn {
                 matcher: matcher.clone(),
-                transform: CodeTransformSpec::ReplaceInsn {
-                    matcher,
-                    replacement: build_code_replacement_items(replacement)?,
-                },
+                replacement: build_code_replacement_items(replacement)?,
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
             }]
         }
-        CodeAction::RemoveInsn { opcode } => vec![CompiledCodeAction::Single {
-            matcher: InsnMatcherSpec::Opcode(*opcode),
-            transform: CodeTransformSpec::RemoveInsn {
-                matcher: InsnMatcherSpec::Opcode(*opcode),
-            },
-        }],
+        CodeAction::RemoveInsn { opcode } => {
+            let matcher = InsnMatcherSpec::Opcode(*opcode);
+            let transform = CodeTransformSpec::RemoveInsn {
+                matcher: matcher.clone(),
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
+            }]
+        }
         CodeAction::InsertBefore { matcher, items } => {
             if items.is_empty() {
                 return Err(CliError::InvalidPatchPlan {
@@ -1018,12 +1046,13 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
                 });
             }
             let matcher = build_code_insn_matcher(matcher)?;
-            vec![CompiledCodeAction::Single {
+            let transform = CodeTransformSpec::InsertBefore {
                 matcher: matcher.clone(),
-                transform: CodeTransformSpec::InsertBefore {
-                    matcher,
-                    items: build_code_replacement_items(items)?,
-                },
+                items: build_code_replacement_items(items)?,
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
             }]
         }
         CodeAction::InsertAfter { matcher, items } => {
@@ -1033,12 +1062,13 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
                 });
             }
             let matcher = build_code_insn_matcher(matcher)?;
-            vec![CompiledCodeAction::Single {
+            let transform = CodeTransformSpec::InsertAfter {
                 matcher: matcher.clone(),
-                transform: CodeTransformSpec::InsertAfter {
-                    matcher,
-                    items: build_code_replacement_items(items)?,
-                },
+                items: build_code_replacement_items(items)?,
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
             }]
         }
         CodeAction::RemoveSequence { pattern } => {
@@ -1051,11 +1081,14 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
                     message: "remove-sequence pattern must not be empty".to_owned(),
                 });
             }
+            let compiled_pattern = pattern
+                .iter()
+                .map(InsnMatcherSpec::try_compile)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let transform = CodeTransformSpec::RemoveSequence { pattern };
             vec![CompiledCodeAction::Sequence {
-                transform: CodeTransformSpec::RemoveSequence {
-                    pattern: pattern.clone(),
-                },
-                pattern,
+                pattern: compiled_pattern,
+                transform: transform.try_compile()?,
             }]
         }
         CodeAction::ReplaceSequence {
@@ -1071,12 +1104,17 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
                     message: "replace-sequence pattern must not be empty".to_owned(),
                 });
             }
-            vec![CompiledCodeAction::Sequence {
-                transform: CodeTransformSpec::ReplaceSequence {
-                    pattern: pattern.clone(),
-                    replacement: build_code_replacement_items(replacement)?,
-                },
+            let compiled_pattern = pattern
+                .iter()
+                .map(InsnMatcherSpec::try_compile)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let transform = CodeTransformSpec::ReplaceSequence {
                 pattern,
+                replacement: build_code_replacement_items(replacement)?,
+            };
+            vec![CompiledCodeAction::Sequence {
+                pattern: compiled_pattern,
+                transform: transform.try_compile()?,
             }]
         }
         CodeAction::RedirectMethodCall {
@@ -1086,46 +1124,68 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
             to_owner,
             to_name,
             to_descriptor,
-        } => vec![CompiledCodeAction::Single {
-            matcher: InsnMatcherSpec::Method {
+            to_is_interface,
+        } => {
+            let matcher = InsnMatcherSpec::Method {
                 owner: from_owner.clone(),
                 name: from_name.clone(),
                 descriptor: from_descriptor.clone(),
-            },
-            transform: CodeTransformSpec::RedirectMethodCall {
+            };
+            let transform = CodeTransformSpec::RedirectMethodCall {
                 from_owner: from_owner.clone(),
                 from_name: from_name.clone(),
                 from_descriptor: from_descriptor.clone(),
                 to_owner: to_owner.clone(),
                 to_name: to_name.clone(),
                 to_descriptor: to_descriptor.clone(),
-            },
-        }],
+                to_is_interface: *to_is_interface,
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
+            }]
+        }
         CodeAction::RedirectFieldAccess {
             from_owner,
             from_name,
+            from_descriptor,
             to_owner,
             to_name,
-        } => vec![CompiledCodeAction::Single {
-            matcher: InsnMatcherSpec::And(vec![
+            to_descriptor,
+        } => {
+            let mut matchers = vec![
                 InsnMatcherSpec::IsFieldAccess,
                 InsnMatcherSpec::FieldOwner(from_owner.clone()),
                 InsnMatcherSpec::FieldNamed(from_name.clone()),
-            ]),
-            transform: CodeTransformSpec::RedirectFieldAccess {
+            ];
+            if let Some(descriptor) = from_descriptor {
+                matchers.push(InsnMatcherSpec::FieldDescriptor(descriptor.clone()));
+            }
+            let matcher = InsnMatcherSpec::And(matchers);
+            let transform = CodeTransformSpec::RedirectFieldAccess {
                 from_owner: from_owner.clone(),
                 from_name: from_name.clone(),
+                from_descriptor: from_descriptor.clone(),
                 to_owner: to_owner.clone(),
                 to_name: to_name.clone(),
-            },
-        }],
-        CodeAction::ReplaceString { from, to } => vec![CompiledCodeAction::Single {
-            matcher: InsnMatcherSpec::LdcString(from.clone()),
-            transform: CodeTransformSpec::ReplaceString {
-                from: from.clone(),
-                to: to.clone(),
-            },
-        }],
+                to_descriptor: to_descriptor.clone(),
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
+            }]
+        }
+        CodeAction::ReplaceString { from, to } => {
+            let matcher = InsnMatcherSpec::LdcString(from.clone().into());
+            let transform = CodeTransformSpec::ReplaceString {
+                from: from.clone().into(),
+                to: to.clone().into(),
+            };
+            vec![CompiledCodeAction::Single {
+                matcher: matcher.try_compile()?,
+                transform: transform.try_compile()?,
+            }]
+        }
         CodeAction::Sequence { actions } => actions
             .iter()
             .map(build_compiled_code_actions)
@@ -1136,27 +1196,17 @@ fn build_compiled_code_actions(action: &CodeAction) -> CliResult<Vec<CompiledCod
     })
 }
 
-fn compile_insn_matcher(spec: &InsnMatcherSpec) -> Matcher<CodeItem> {
-    let compiled = spec.compile();
-    Matcher::of(
-        move |item| compiled.matches(item),
-        "compiled_cli_insn_matcher",
-    )
-}
-
-fn count_matching_insns(code: &CodeModel, matcher: &InsnMatcherSpec) -> usize {
-    let matcher = compile_insn_matcher(matcher);
+fn count_matching_insns(code: &CodeModel, matcher: &CompiledInsnMatcher) -> usize {
     code.instructions
         .iter()
         .filter(|item| matcher.matches(item))
         .count()
 }
 
-fn count_matching_sequences(code: &CodeModel, pattern: &[InsnMatcherSpec]) -> usize {
+fn count_matching_sequences(code: &CodeModel, pattern: &[CompiledInsnMatcher]) -> usize {
     if pattern.is_empty() || pattern.len() > code.instructions.len() {
         return 0;
     }
-    let pattern = pattern.iter().map(compile_insn_matcher).collect::<Vec<_>>();
     let mut matches = 0_usize;
     let mut index = 0_usize;
     while index + pattern.len() <= code.instructions.len() {
@@ -1391,14 +1441,21 @@ fn apply_method_actions(
     let mut matched_targets = 0_usize;
     let mut changed_targets = 0_usize;
 
-    if let Some(action) = action {
+    if let Some(action @ MethodAction::Remove) = action {
         let (matched, changed) = apply_method_action(model, matcher, action);
         matched_targets += matched;
         changed_targets += changed;
+        return (matched_targets, changed_targets);
     }
 
     for code_action in code_actions {
         let (matched, changed) = apply_code_action(model, matcher, code_action);
+        matched_targets += matched;
+        changed_targets += changed;
+    }
+
+    if let Some(action) = action {
+        let (matched, changed) = apply_method_action(model, matcher, action);
         matched_targets += matched;
         changed_targets += changed;
     }
@@ -1418,7 +1475,7 @@ fn apply_code_action(
         if !matcher.matches(method) {
             continue;
         }
-        let Some(code) = method.code.as_mut() else {
+        let Some(code) = method.code_mut() else {
             continue;
         };
 
@@ -1430,11 +1487,14 @@ fn apply_code_action(
             continue;
         }
         matched += target_matches;
+        let before = code.instructions.clone();
         match action {
             CompiledCodeAction::Single { transform, .. }
             | CompiledCodeAction::Sequence { transform, .. } => transform.apply(code),
         }
-        changed += target_matches;
+        if code.instructions != before {
+            changed += target_matches;
+        }
     }
 
     (matched, changed)

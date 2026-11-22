@@ -105,6 +105,11 @@ def class_version_below(major: int) -> ClassMatcher:
     return ClassMatcher.version_below(major)
 
 
+def class_any() -> ClassMatcher:
+    """Match any class."""
+    return ClassMatcher.any()
+
+
 # ---------------------------------------------------------------------------
 # Field matchers
 # ---------------------------------------------------------------------------
@@ -188,6 +193,11 @@ def field_is_synthetic() -> FieldMatcher:
 def field_is_enum_constant() -> FieldMatcher:
     """Match enum constant backing fields."""
     return FieldMatcher.access_all(0x4000)
+
+
+def field_any() -> FieldMatcher:
+    """Match any field."""
+    return FieldMatcher.any()
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +318,8 @@ def is_static_initializer() -> MethodMatcher:
 def method_returns(descriptor: str) -> MethodMatcher:
     """Match methods whose return descriptor equals ``descriptor``."""
     return MethodMatcher.returns(descriptor)
+
+
+def method_any() -> MethodMatcher:
+    """Match any method."""
+    return MethodMatcher.any()

@@ -73,16 +73,6 @@ define_index!(
 );
 
 define_index!(
-    /// Index into a CONSTANT_Fieldref entry.
-    FieldRefIndex
-);
-
-define_index!(
-    /// Index into a CONSTANT_Methodref or CONSTANT_InterfaceMethodref entry.
-    MethodRefIndex
-);
-
-define_index!(
     /// Index into a CONSTANT_Module entry.
     ModuleIndex
 );
@@ -115,8 +105,6 @@ impl_into_cp_index!(
     Utf8Index,
     ClassIndex,
     NameAndTypeIndex,
-    FieldRefIndex,
-    MethodRefIndex,
     ModuleIndex,
     PackageIndex
 );
@@ -153,8 +141,6 @@ impl_into_pyobject!(
     Utf8Index,
     ClassIndex,
     NameAndTypeIndex,
-    FieldRefIndex,
-    MethodRefIndex,
     ModuleIndex,
     PackageIndex,
     BootstrapMethodIndex

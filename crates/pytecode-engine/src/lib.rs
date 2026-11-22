@@ -1,4 +1,4 @@
-//! Raw JVM classfile engine and phase scaffolding for the reduced Rust workspace.
+//! JVM classfile engine: parsing, writing, symbolic editing, transforms, and analysis.
 
 pub mod analysis;
 mod bytes;
@@ -19,8 +19,8 @@ pub mod writer;
 
 pub use error::{EngineError, EngineErrorKind, Result};
 pub use indexes::{
-    BootstrapMethodIndex, ClassIndex, CpIndex, FieldRefIndex, MethodRefIndex, ModuleIndex,
-    NameAndTypeIndex, PackageIndex, Utf8Index,
+    BootstrapMethodIndex, ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex,
+    Utf8Index,
 };
 pub use reader::{ClassReader, parse_class, parse_class_bytes, parse_instructions};
 pub use writer::{ClassWriter, write_class};

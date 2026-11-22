@@ -201,17 +201,18 @@ impl TargetType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum TargetInfoType {
-    TypeParameter,
-    Supertype,
-    TypeParameterBound,
-    Empty,
-    FormalParameter,
-    Throws,
-    Localvar,
-    Catch,
-    Offset,
-    TypeArgument,
+    TypeParameter = 0,
+    Supertype = 1,
+    TypeParameterBound = 2,
+    Empty = 3,
+    FormalParameter = 4,
+    Throws = 5,
+    Localvar = 6,
+    Catch = 7,
+    Offset = 8,
+    TypeArgument = 9,
 }
 
 impl TargetInfoType {
@@ -242,50 +243,7 @@ impl TargetInfoType {
     }
 
     pub const fn matches_target_type(self, target_type: TargetType) -> bool {
-        matches!(
-            (self, target_type),
-            (
-                Self::TypeParameter,
-                TargetType::TypeParameterGenericClassOrInterface
-                    | TargetType::TypeParameterGenericMethodOrConstructor,
-            ) | (Self::Supertype, TargetType::Supertype)
-                | (
-                    Self::TypeParameterBound,
-                    TargetType::TypeParameterBoundGenericClassOrInterface
-                        | TargetType::TypeParameterBoundGenericMethodOrConstructor,
-                )
-                | (
-                    Self::Empty,
-                    TargetType::TypeInFieldOrRecord
-                        | TargetType::ReturnOrObjectType
-                        | TargetType::ReceiverTypeMethodOrConstructor,
-                )
-                | (
-                    Self::FormalParameter,
-                    TargetType::FormalParameterMethodConstructorOrLambda,
-                )
-                | (Self::Throws, TargetType::TypeThrows)
-                | (
-                    Self::Localvar,
-                    TargetType::TypeLocalVariable | TargetType::TypeResourceVariable,
-                )
-                | (Self::Catch, TargetType::TypeExceptionParameter)
-                | (
-                    Self::Offset,
-                    TargetType::TypeInstanceOf
-                        | TargetType::TypeNew
-                        | TargetType::TypeMethodNew
-                        | TargetType::TypeMethodIdentifier,
-                )
-                | (
-                    Self::TypeArgument,
-                    TargetType::TypeCast
-                        | TargetType::TypeGenericConstructor
-                        | TargetType::TypeGenericMethod
-                        | TargetType::TypeGenericConstructorNew
-                        | TargetType::TypeGenericMethodIdentifier,
-                )
-        )
+        self as u8 == Self::from_target_type(target_type) as u8
     }
 }
 
@@ -316,7 +274,7 @@ pub const MAX_SUPPORTED_CLASS_MAJOR: u16 = 70;
 /// Versions accepted for inspection, including historical preview classfiles.
 pub const fn class_version_supported(major: u16, minor: u16) -> bool {
     match major {
-        45..=55 => true,
+        MIN_SUPPORTED_CLASS_MAJOR..=55 => true,
         56..=MAX_SUPPORTED_CLASS_MAJOR => minor == 0 || minor == u16::MAX,
         _ => false,
     }

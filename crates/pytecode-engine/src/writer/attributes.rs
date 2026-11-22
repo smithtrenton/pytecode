@@ -1,6 +1,7 @@
 //! Attribute payload emission and bounded nesting.
 use super::{checked_count, invalid_writer_state, write_instruction};
 use crate::bytes::ByteWriter;
+use crate::constants::TypePathKind;
 use crate::error::Result;
 use crate::raw::attributes::{
     AnnotationDefaultAttribute, AnnotationInfo, AttributeInfo, BootstrapMethodsAttribute,
@@ -24,7 +25,7 @@ pub(super) fn write_attributes(
 ) -> Result<()> {
     writer.write_u2(checked_count::<u16>(attributes.len(), "attributes")?);
     for attribute in attributes {
-        write_attribute(writer, attribute, depth + 1)?;
+        write_attribute(writer, attribute, depth)?;
     }
     Ok(())
 }
@@ -336,7 +337,9 @@ fn write_code_attribute(
     writer.write_u4(0);
     let code_start = writer.position();
     for instruction in &attribute.code {
-        write_instruction(writer, instruction)?;
+        let pc = u32::try_from(writer.position() - code_start)
+            .map_err(|_| invalid_writer_state("Code offset exceeds u32::MAX"))?;
+        write_instruction(writer, instruction, pc)?;
     }
     let code_length = writer.position() - code_start;
     if !(1..=65535).contains(&code_length) {
@@ -356,7 +359,7 @@ fn write_code_attribute(
         writer.write_u2(handler.handler_pc);
         writer.write_u2(handler.catch_type.into());
     }
-    write_attributes(writer, &attribute.attributes, depth)
+    write_attributes(writer, &attribute.attributes, depth + 1)
 }
 
 fn write_line_number_table_attribute(
@@ -591,6 +594,11 @@ fn write_module_info(writer: &mut ByteWriter, module: &ModuleAttributeModuleInfo
         "module.provides",
     )?);
     for provides in &module.provides {
+        if provides.provides_with_index.is_empty() {
+            return Err(invalid_writer_state(
+                "Module provides_with_count must be nonzero",
+            ));
+        }
         writer.write_u2(provides.provides_index.into());
         writer.write_u2(checked_count::<u16>(
             provides.provides_with_index.len(),
@@ -650,7 +658,7 @@ fn write_record_component_info(
 ) -> Result<()> {
     writer.write_u2(component.name_index.into());
     writer.write_u2(component.descriptor_index.into());
-    write_attributes(writer, &component.attributes, depth)
+    write_attributes(writer, &component.attributes, depth + 1)
 }
 
 fn write_permitted_subclasses_attribute(
@@ -700,15 +708,7 @@ fn write_type_annotation_info(
     write_target_info(writer, &annotation.target_info)?;
     write_type_path_info(writer, &annotation.target_path)?;
     writer.write_u2(annotation.type_index.into());
-    writer.write_u2(checked_count::<u16>(
-        annotation.element_value_pairs.len(),
-        "annotation.element_value_pairs",
-    )?);
-    for pair in &annotation.element_value_pairs {
-        writer.write_u2(pair.element_name_index.into());
-        write_element_value_info(writer, &pair.element_value, depth + 1)?;
-    }
-    Ok(())
+    write_element_value_pairs(writer, &annotation.element_value_pairs, depth)
 }
 
 fn write_target_info(writer: &mut ByteWriter, target_info: &TargetInfo) -> Result<()> {
@@ -756,10 +756,34 @@ fn write_target_info(writer: &mut ByteWriter, target_info: &TargetInfo) -> Resul
 fn write_type_path_info(writer: &mut ByteWriter, type_path: &TypePathInfo) -> Result<()> {
     writer.write_u1(checked_count::<u8>(type_path.path.len(), "type_path.path")?);
     for entry in &type_path.path {
+        if !matches!(entry.type_path_kind, TypePathKind::ParameterizedType)
+            && entry.type_argument_index != 0
+        {
+            return Err(invalid_writer_state(format!(
+                "type_path_kind {:?} requires type_argument_index 0, got {}",
+                entry.type_path_kind, entry.type_argument_index
+            )));
+        }
         writer.write_u1(entry.type_path_kind as u8);
         writer.write_u1(entry.type_argument_index);
     }
 
+    Ok(())
+}
+
+fn write_element_value_pairs(
+    writer: &mut ByteWriter,
+    pairs: &[crate::raw::attributes::ElementValuePairInfo],
+    depth: usize,
+) -> Result<()> {
+    writer.write_u2(checked_count::<u16>(
+        pairs.len(),
+        "annotation.element_value_pairs",
+    )?);
+    for pair in pairs {
+        writer.write_u2(pair.element_name_index.into());
+        write_element_value_info(writer, &pair.element_value, depth + 1)?;
+    }
     Ok(())
 }
 
@@ -799,15 +823,7 @@ fn write_annotation_info(
     depth: usize,
 ) -> Result<()> {
     writer.write_u2(annotation.type_index.into());
-    writer.write_u2(checked_count::<u16>(
-        annotation.element_value_pairs.len(),
-        "annotation.element_value_pairs",
-    )?);
-    for pair in &annotation.element_value_pairs {
-        writer.write_u2(pair.element_name_index.into());
-        write_element_value_info(writer, &pair.element_value, depth + 1)?;
-    }
-    Ok(())
+    write_element_value_pairs(writer, &annotation.element_value_pairs, depth)
 }
 
 fn write_element_value_info(

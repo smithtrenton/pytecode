@@ -20,6 +20,7 @@ from .. import _rust
 from .class_transforms import (
     add_access_flags,
     add_interface,
+    code_transform,
     remove_access_flags,
     remove_field,
     remove_interface,
@@ -36,6 +37,7 @@ from .class_transforms import (
 from .matchers import (
     class_access,
     class_access_any,
+    class_any,
     class_is_abstract,
     class_is_annotation,
     class_is_enum,
@@ -53,6 +55,7 @@ from .matchers import (
     extends,
     field_access,
     field_access_any,
+    field_any,
     field_descriptor,
     field_descriptor_matches,
     field_is_enum_constant,
@@ -73,6 +76,7 @@ from .matchers import (
     is_static_initializer,
     method_access,
     method_access_any,
+    method_any,
     method_descriptor,
     method_descriptor_matches,
     method_is_abstract,
@@ -100,6 +104,8 @@ FieldMatcher = _rust.FieldMatcher
 MethodMatcher = _rust.MethodMatcher
 InsnMatcher = _rust.InsnMatcher
 ClassTransform = _rust.ClassTransform
+FieldTransform = _rust.FieldTransform
+MethodTransform = _rust.MethodTransform
 CodeTransform = _rust.CodeTransform
 Pipeline = _rust.Pipeline
 CompiledPipeline = _rust.CompiledPipeline
@@ -110,14 +116,17 @@ __all__ = [
     "CodeTransform",
     "CompiledPipeline",
     "FieldMatcher",
+    "FieldTransform",
     "InsnMatcher",
     "MethodMatcher",
+    "MethodTransform",
     "Pipeline",
     "PipelineBuilder",
     "add_access_flags",
     "add_interface",
     "class_access",
     "class_access_any",
+    "class_any",
     "class_is_abstract",
     "class_is_annotation",
     "class_is_enum",
@@ -132,9 +141,11 @@ __all__ = [
     "class_version",
     "class_version_at_least",
     "class_version_below",
+    "code_transform",
     "extends",
     "field_access",
     "field_access_any",
+    "field_any",
     "field_descriptor",
     "field_descriptor_matches",
     "field_is_enum_constant",
@@ -155,6 +166,7 @@ __all__ = [
     "is_static_initializer",
     "method_access",
     "method_access_any",
+    "method_any",
     "method_descriptor",
     "method_descriptor_matches",
     "method_is_abstract",

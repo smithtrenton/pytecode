@@ -34,7 +34,7 @@ use crate::indexes::{
     BootstrapMethodIndex, ClassIndex, CpIndex, ModuleIndex, NameAndTypeIndex, PackageIndex,
     Utf8Index,
 };
-use crate::modified_utf8::decode_modified_utf8;
+use crate::modified_utf8::JavaString;
 use crate::raw::attributes::{
     AnnotationDefaultAttribute, AnnotationInfo, AttributeInfo, BootstrapMethodInfo,
     BootstrapMethodsAttribute, CodeAttribute, ConstantValueAttribute, DeprecatedAttribute,
@@ -98,9 +98,19 @@ impl<'a> ClassReader<'a> {
         let constant_pool_count = self.reader.read_u2()? as usize;
         if constant_pool_count == 0 {
             return Err(EngineError::new(
-                self.reader.offset(),
+                self.reader.offset().saturating_sub(2),
                 EngineErrorKind::InvalidAttribute {
                     reason: "constant_pool_count must be at least 1".to_owned(),
+                },
+            ));
+        }
+        let min_cp_bytes = (constant_pool_count - 1).saturating_mul(3);
+        if self.reader.remaining() < min_cp_bytes {
+            return Err(EngineError::new(
+                self.reader.offset(),
+                EngineErrorKind::UnexpectedEof {
+                    needed: min_cp_bytes,
+                    remaining: self.reader.remaining(),
                 },
             ));
         }
@@ -108,8 +118,15 @@ impl<'a> ClassReader<'a> {
 
         let mut index = 1_usize;
         while index < constant_pool_count {
+            let entry_offset = self.reader.offset();
             let entry = self.read_constant_pool_entry()?;
             let is_wide = entry.is_wide();
+            if is_wide && index + 1 >= constant_pool_count {
+                return Err(EngineError::new(
+                    entry_offset,
+                    EngineErrorKind::MissingTrailingConstantPoolGap,
+                ));
+            }
             self.constant_pool[index] = Some(entry);
             index += if is_wide { 2 } else { 1 };
         }
@@ -193,51 +210,80 @@ impl<'a> ClassReader<'a> {
         })
     }
 
+    fn read_attribute_header_and_payload<'b>(
+        reader: &mut ByteReader<'b>,
+        base_offset: usize,
+    ) -> Result<(Utf8Index, u32, usize, &'b [u8], usize)> {
+        let name_index =
+            Utf8Index::from(reader.read_u2().map_err(|err| {
+                EngineError::new(base_offset.saturating_add(err.offset), err.kind)
+            })?);
+        let attribute_length = reader
+            .read_u4()
+            .map_err(|err| EngineError::new(base_offset.saturating_add(err.offset), err.kind))?;
+        let payload_base_offset = base_offset.saturating_add(reader.offset());
+        let payload = reader
+            .read_bytes(attribute_length as usize)
+            .map_err(|err| EngineError::new(base_offset.saturating_add(err.offset), err.kind))?;
+        let error_offset = base_offset.saturating_add(reader.offset());
+        Ok((
+            name_index,
+            attribute_length,
+            payload_base_offset,
+            payload,
+            error_offset,
+        ))
+    }
+
     fn read_attribute(&mut self) -> Result<AttributeInfo> {
-        let name_index = Utf8Index::from(self.reader.read_u2()?);
-        let attribute_length = self.reader.read_u4()?;
-        let payload = self.reader.read_bytes(attribute_length as usize)?;
-        let name = self.constant_pool_utf8(name_index.value())?;
+        let (name_index, attribute_length, payload_base_offset, payload, error_offset) =
+            Self::read_attribute_header_and_payload(&mut self.reader, 0)?;
+        let name = self.constant_pool_utf8(name_index.value(), error_offset)?;
         self.parse_attribute_payload(
             name_index,
             attribute_length,
-            name.as_str(),
+            &name,
             payload,
-            self.reader.offset(),
+            payload_base_offset,
+            error_offset,
             "attribute parser did not consume the full payload",
         )
     }
 
     fn read_attribute_from_payload(
         &self,
-        payload_reader: &mut ByteReader<'_>,
+        payload_reader: &mut ByteReader<'a>,
+        base_offset: usize,
     ) -> Result<AttributeInfo> {
-        let name_index = Utf8Index::from(payload_reader.read_u2()?);
-        let attribute_length = payload_reader.read_u4()?;
-        let payload = payload_reader.read_bytes(attribute_length as usize)?;
-        let name = self.constant_pool_utf8(name_index.value())?;
+        let (name_index, attribute_length, payload_base_offset, payload, error_offset) =
+            Self::read_attribute_header_and_payload(payload_reader, base_offset)?;
+        let name = self.constant_pool_utf8(name_index.value(), error_offset)?;
         self.parse_attribute_payload(
             name_index,
             attribute_length,
-            name.as_str(),
+            &name,
             payload,
-            payload_reader.offset(),
+            payload_base_offset,
+            error_offset,
             "nested attribute parser did not consume the full payload",
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn parse_attribute_payload(
         &self,
         name_index: Utf8Index,
         attribute_length: u32,
-        name: &str,
-        payload: &[u8],
+        name: &JavaString,
+        payload: &'a [u8],
+        payload_base_offset: usize,
         error_offset: usize,
         consume_error_reason: &str,
     ) -> Result<AttributeInfo> {
         let _depth = ReadDepth::enter(&self.nesting_depth, error_offset)?;
         let mut payload_reader = ByteReader::new(payload);
-        let attribute = match name {
+        let unicode_name = name.to_unicode().ok();
+        let attribute = match unicode_name.as_deref().unwrap_or("") {
             "Synthetic" => AttributeInfo::Synthetic(SyntheticAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
@@ -374,19 +420,20 @@ impl<'a> ClassReader<'a> {
                 let max_stack = payload_reader.read_u2()?;
                 let max_locals = payload_reader.read_u2()?;
                 let code_length = payload_reader.read_u4()?;
-                if code_length >= 65536 {
+                if !(1..=65535).contains(&code_length) {
                     return Err(EngineError::new(
-                        payload_reader.offset(),
+                        payload_base_offset.saturating_add(payload_reader.offset()),
                         EngineErrorKind::InvalidAttribute {
                             reason: format!(
-                                "code_length {} exceeds JVMS maximum of 65535",
+                                "code_length {} must be between 1 and 65535",
                                 code_length
                             ),
                         },
                     ));
                 }
+                let code_base_offset = payload_base_offset.saturating_add(payload_reader.offset());
                 let code_bytes = payload_reader.read_bytes(code_length as usize)?;
-                let code = parse_instructions(code_bytes)?;
+                let code = parse_instructions_at(code_bytes, code_base_offset)?;
                 let exception_table_length = payload_reader.read_u2()? as usize;
                 let exception_table = (0..exception_table_length)
                     .map(|_| {
@@ -400,7 +447,9 @@ impl<'a> ClassReader<'a> {
                     .collect::<Result<Vec<_>>>()?;
                 let nested_attributes_count = payload_reader.read_u2()? as usize;
                 let nested_attributes = (0..nested_attributes_count)
-                    .map(|_| self.read_attribute_from_payload(&mut payload_reader))
+                    .map(|_| {
+                        self.read_attribute_from_payload(&mut payload_reader, payload_base_offset)
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 AttributeInfo::Code(CodeAttribute {
                     attribute_name_index: name_index,
@@ -611,6 +660,14 @@ impl<'a> ClassReader<'a> {
                     .map(|_| {
                         let provides_index = ClassIndex::from(payload_reader.read_u2()?);
                         let provides_with_count = payload_reader.read_u2()? as usize;
+                        if provides_with_count == 0 {
+                            return Err(EngineError::new(
+                                error_offset,
+                                EngineErrorKind::InvalidAttribute {
+                                    reason: "Module provides entry requires at least one implementation class".to_owned(),
+                                },
+                            ));
+                        }
                         let provides_with_index = (0..provides_with_count)
                             .map(|_| payload_reader.read_u2().map(ClassIndex::from))
                             .collect::<Result<Vec<_>>>()?;
@@ -660,7 +717,12 @@ impl<'a> ClassReader<'a> {
                         let descriptor_index = Utf8Index::from(payload_reader.read_u2()?);
                         let nested_count = payload_reader.read_u2()? as usize;
                         let attributes = (0..nested_count)
-                            .map(|_| self.read_attribute_from_payload(&mut payload_reader))
+                            .map(|_| {
+                                self.read_attribute_from_payload(
+                                    &mut payload_reader,
+                                    payload_base_offset,
+                                )
+                            })
                             .collect::<Result<Vec<_>>>()?;
                         Ok(RecordComponentInfo {
                             name_index,
@@ -689,7 +751,7 @@ impl<'a> ClassReader<'a> {
             _ => AttributeInfo::Unknown(UnknownAttribute {
                 attribute_name_index: name_index,
                 attribute_length,
-                name: name.to_owned(),
+                name: name.to_string_lossy(),
                 info: payload_reader.read_bytes(payload.len())?.to_vec(),
             }),
         };
@@ -705,21 +767,29 @@ impl<'a> ClassReader<'a> {
         Ok(attribute)
     }
 
-    fn read_annotation_info(
+    fn read_element_value_pairs(
         &self,
         payload_reader: &mut ByteReader<'_>,
         error_offset: usize,
-    ) -> Result<AnnotationInfo> {
-        let type_index = Utf8Index::from(payload_reader.read_u2()?);
+    ) -> Result<Vec<ElementValuePairInfo>> {
         let pair_count = payload_reader.read_u2()? as usize;
-        let element_value_pairs = (0..pair_count)
+        (0..pair_count)
             .map(|_| {
                 Ok(ElementValuePairInfo {
                     element_name_index: Utf8Index::from(payload_reader.read_u2()?),
                     element_value: self.read_element_value_info(payload_reader, error_offset)?,
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect()
+    }
+
+    fn read_annotation_info(
+        &self,
+        payload_reader: &mut ByteReader<'_>,
+        error_offset: usize,
+    ) -> Result<AnnotationInfo> {
+        let type_index = Utf8Index::from(payload_reader.read_u2()?);
+        let element_value_pairs = self.read_element_value_pairs(payload_reader, error_offset)?;
         Ok(AnnotationInfo {
             type_index,
             element_value_pairs,
@@ -755,15 +825,7 @@ impl<'a> ClassReader<'a> {
         let target_info = self.read_target_info(payload_reader, target_type, error_offset)?;
         let target_path = self.read_type_path_info(payload_reader, error_offset)?;
         let type_index = Utf8Index::from(payload_reader.read_u2()?);
-        let pair_count = payload_reader.read_u2()? as usize;
-        let element_value_pairs = (0..pair_count)
-            .map(|_| {
-                Ok(ElementValuePairInfo {
-                    element_name_index: Utf8Index::from(payload_reader.read_u2()?),
-                    element_value: self.read_element_value_info(payload_reader, error_offset)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let element_value_pairs = self.read_element_value_pairs(payload_reader, error_offset)?;
         Ok(TypeAnnotationInfo {
             target_type,
             target_info,
@@ -841,9 +903,25 @@ impl<'a> ClassReader<'a> {
                             },
                         )
                     })?;
+                let type_argument_index = payload_reader.read_u1()?;
+                if matches!(
+                    type_path_kind,
+                    TypePathKind::ArrayType | TypePathKind::NestedType | TypePathKind::WildcardType
+                ) && type_argument_index != 0
+                {
+                    return Err(EngineError::new(
+                        error_offset,
+                        EngineErrorKind::InvalidAttribute {
+                            reason: format!(
+                                "type_argument_index must be 0 for {:?}, got {}",
+                                type_path_kind, type_argument_index
+                            ),
+                        },
+                    ));
+                }
                 Ok(PathInfo {
                     type_path_kind,
-                    type_argument_index: payload_reader.read_u1()?,
+                    type_argument_index,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1079,15 +1157,48 @@ impl<'a> ClassReader<'a> {
         Ok(entry)
     }
 
-    fn constant_pool_utf8(&self, index: u16) -> Result<String> {
+    fn constant_pool_utf8(&self, index: u16, error_offset: usize) -> Result<JavaString> {
         let Some(Some(ConstantPoolEntry::Utf8(entry))) = self.constant_pool.get(index as usize)
         else {
             return Err(EngineError::new(
-                self.reader.offset(),
+                error_offset,
                 EngineErrorKind::InvalidConstantPoolIndex { index },
             ));
         };
-        decode_modified_utf8(&entry.bytes)
+        JavaString::from_modified_utf8(&entry.bytes)
+    }
+}
+
+pub(crate) fn parse_code_attribute_payload(
+    name_index: Utf8Index,
+    payload: &[u8],
+    constant_pool: &[Option<ConstantPoolEntry>],
+) -> Result<CodeAttribute> {
+    let attribute_length = u32::try_from(payload.len()).map_err(|_| {
+        EngineError::new(
+            0,
+            EngineErrorKind::InvalidAttribute {
+                reason: "Code attribute payload exceeds u32 maximum length".to_owned(),
+            },
+        )
+    })?;
+    let reader = ClassReader {
+        reader: ByteReader::new(&[]),
+        constant_pool: constant_pool.to_vec(),
+        nesting_depth: Cell::new(0),
+    };
+    let name = JavaString::from("Code");
+    match reader.parse_attribute_payload(
+        name_index,
+        attribute_length,
+        &name,
+        payload,
+        0,
+        payload.len(),
+        "prebuilt Code attribute parser did not consume the full payload",
+    )? {
+        AttributeInfo::Code(code_attr) => Ok(code_attr),
+        _ => unreachable!("Code attribute name always parses as AttributeInfo::Code"),
     }
 }
 
@@ -1100,13 +1211,39 @@ pub fn parse_class_bytes(bytes: impl AsRef<[u8]>) -> Result<ClassFile> {
 }
 
 pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
+    parse_instructions_at(bytes, 0)
+}
+
+pub(crate) fn parse_instructions_at(bytes: &[u8], base_offset: usize) -> Result<Vec<Instruction>> {
+    parse_instructions_inner(bytes)
+        .map_err(|err| EngineError::new(base_offset.saturating_add(err.offset), err.kind))
+}
+
+fn parse_instructions_inner(bytes: &[u8]) -> Result<Vec<Instruction>> {
+    if bytes.len() > u32::MAX as usize {
+        return Err(EngineError::new(
+            0,
+            EngineErrorKind::InvalidAttribute {
+                reason: format!("code byte length {} exceeds u32 maximum", bytes.len()),
+            },
+        ));
+    }
     let mut reader = ByteReader::new(bytes);
     let mut instructions = Vec::new();
 
     while reader.remaining() > 0 {
-        let offset = reader.offset() as u32;
+        let offset = u32::try_from(reader.offset()).map_err(|_| {
+            EngineError::new(
+                reader.offset(),
+                EngineErrorKind::InvalidAttribute {
+                    reason: format!("instruction offset {} exceeds u32 maximum", reader.offset()),
+                },
+            )
+        })?;
         let opcode = reader.read_u1()?;
-        let instruction = match operand_kind(opcode)? {
+        let kind =
+            operand_kind(opcode).map_err(|err| EngineError::new(offset as usize, err.kind))?;
+        let instruction = match kind {
             crate::raw::instructions::OperandKind::Simple => Instruction::Simple { opcode, offset },
             crate::raw::instructions::OperandKind::LocalIndex => Instruction::LocalIndex {
                 opcode,
@@ -1176,6 +1313,14 @@ pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 let index = CpIndex::from(reader.read_u2()?);
                 let count = reader.read_u1()?;
                 let reserved = reader.read_u1()?;
+                if count == 0 {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: "invokeinterface count byte must be non-zero".to_owned(),
+                        },
+                    ));
+                }
                 if reserved != 0 {
                     return Err(EngineError::new(
                         reader.offset(),
@@ -1199,22 +1344,34 @@ pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
                     .map_err(|kind| EngineError::new(reader.offset(), kind))?;
                 Instruction::NewArray(NewArrayInsn { offset, atype })
             }
-            crate::raw::instructions::OperandKind::MultiANewArray => Instruction::MultiANewArray {
-                offset,
-                index: ClassIndex::from(reader.read_u2()?),
-                dimensions: reader.read_u1()?,
-            },
+            crate::raw::instructions::OperandKind::MultiANewArray => {
+                let index = ClassIndex::from(reader.read_u2()?);
+                let dimensions = reader.read_u1()?;
+                if dimensions == 0 {
+                    return Err(EngineError::new(
+                        reader.offset(),
+                        EngineErrorKind::InvalidAttribute {
+                            reason: "multianewarray dimensions must be at least 1".to_owned(),
+                        },
+                    ));
+                }
+                Instruction::MultiANewArray {
+                    offset,
+                    index,
+                    dimensions,
+                }
+            }
             crate::raw::instructions::OperandKind::LookupSwitch => {
-                let padding = (4 - ((offset + 1) % 4)) % 4;
-                reader.read_bytes(padding as usize)?;
+                let padding = (3 - (offset & 3)) as usize;
+                reader.read_bytes(padding)?;
                 let default_offset = reader.read_i4()?;
-                let pair_count = reader.read_u4()?;
-                if pair_count > 65536 {
+                let pair_count = reader.read_i4()?;
+                if !(0..=65536).contains(&pair_count) {
                     return Err(EngineError::new(
                         reader.offset(),
                         EngineErrorKind::InvalidAttribute {
                             reason: format!(
-                                "lookupswitch npairs {} exceeds maximum of 65536",
+                                "lookupswitch npairs {} out of valid range 0..=65536",
                                 pair_count
                             ),
                         },
@@ -1247,8 +1404,8 @@ pub fn parse_instructions(bytes: &[u8]) -> Result<Vec<Instruction>> {
                 })
             }
             crate::raw::instructions::OperandKind::TableSwitch => {
-                let padding = (4 - ((offset + 1) % 4)) % 4;
-                reader.read_bytes(padding as usize)?;
+                let padding = (3 - (offset & 3)) as usize;
+                reader.read_bytes(padding)?;
                 let default_offset = reader.read_i4()?;
                 let low = reader.read_i4()?;
                 let high = reader.read_i4()?;

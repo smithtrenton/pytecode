@@ -1,5 +1,5 @@
 use pytecode_engine::descriptors::{
-    ArrayType, BaseType, FieldDescriptor, MethodDescriptor, ObjectType, ReturnType, VOID,
+    ArrayType, BaseType, FieldDescriptor, MethodDescriptor, ObjectType, ReturnType,
     is_valid_field_descriptor, is_valid_method_descriptor, parameter_slot_count,
     parse_field_descriptor, parse_method_descriptor, to_descriptor_field, to_descriptor_method,
 };
@@ -75,7 +75,6 @@ fn descriptor_validation_rejects_invalid_forms() {
             .to_string()
             .contains("empty class name")
     );
-    let _ = VOID;
 }
 
 #[test]

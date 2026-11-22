@@ -31,4 +31,4 @@ pub use instructions::{
     ArrayType, Branch, ConstantPoolIndexWide, Instruction, InvokeDynamicInsn, InvokeInterfaceInsn,
     LookupSwitchInsn, MatchOffsetPair, NewArrayInsn, TableSwitchInsn, WideInstruction,
 };
-pub use stub::{RawClassStub, write_raw_classes};
+pub use stub::RawClassStub;

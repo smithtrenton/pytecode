@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import inspect
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,24 +40,26 @@ def get_public_symbols(module_name: str) -> list[str]:
 
 
 def validate_docstrings() -> tuple[int, int, list[str]]:
-    """Check that every public symbol has a non-empty docstring.
+    """Check that every public module and symbol has a non-empty docstring.
 
     Returns:
-        A 3-tuple of (total symbols, documented count, list of
-        ``module.name`` strings for any undocumented symbols).
+        A 3-tuple of (total items, documented count, list of
+        ``module.name`` strings for any undocumented items).
     """
     total = 0
     documented = 0
     missing: list[str] = []
     for module_name in PUBLIC_MODULES:
         mod = importlib.import_module(module_name)
-        if not inspect.getdoc(mod):
+        total += 1
+        if inspect.getdoc(mod):
+            documented += 1
+        else:
             missing.append(f"{module_name} (module docstring)")
         for name in get_public_symbols(module_name):
             total += 1
             obj = getattr(mod, name)
-            owner = getattr(obj, "__module__", None)
-            if inspect.getdoc(obj) or (owner is not None and owner != module_name):
+            if inspect.getdoc(obj):
                 documented += 1
             else:
                 missing.append(f"{module_name}.{name}")
@@ -65,6 +68,8 @@ def validate_docstrings() -> tuple[int, int, list[str]]:
 
 def generate_html() -> None:
     """Run pdoc to produce HTML reference docs in ``docs/api/``."""
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,

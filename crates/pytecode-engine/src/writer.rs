@@ -1,13 +1,14 @@
 mod attributes;
 
 use crate::bytes::ByteWriter;
-use crate::constants::MAGIC;
+use crate::constants::{MAGIC, validate_class_version};
 use crate::error::{EngineError, EngineErrorKind, Result};
 use crate::raw::constant_pool::ConstantPoolEntry;
 use crate::raw::info::{ClassFile, FieldInfo, MethodInfo};
 use crate::raw::instructions::{
     Branch, ConstantPoolIndexWide, Instruction, InvokeDynamicInsn, InvokeInterfaceInsn,
-    LookupSwitchInsn, MatchOffsetPair, NewArrayInsn, TableSwitchInsn, WideInstruction,
+    LookupSwitchInsn, MatchOffsetPair, NewArrayInsn, OperandKind, TableSwitchInsn, WideInstruction,
+    operand_kind, validate_wide_opcode,
 };
 use attributes::write_attributes;
 
@@ -31,6 +32,7 @@ pub fn write_class(classfile: &ClassFile) -> Result<Vec<u8>> {
             },
         ));
     }
+    validate_class_version(classfile.major_version, classfile.minor_version)?;
     writer.write_u2(classfile.minor_version);
     writer.write_u2(classfile.major_version);
 
@@ -188,6 +190,12 @@ fn write_constant_pool_entry(writer: &mut ByteWriter, entry: &ConstantPoolEntry)
             writer.write_u2(info.descriptor_index.into());
         }
         ConstantPoolEntry::MethodHandle(info) => {
+            if !(1..=9).contains(&info.reference_kind) {
+                return Err(invalid_writer_state(format!(
+                    "MethodHandle reference_kind {} must be in range 1..=9",
+                    info.reference_kind
+                )));
+            }
             writer.write_u1(info.reference_kind);
             writer.write_u2(info.reference_index.into());
         }
@@ -230,85 +238,133 @@ fn invalid_writer_state(reason: impl Into<String>) -> EngineError {
     )
 }
 
-fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) -> Result<()> {
-    crate::raw::instructions::operand_kind(instruction.opcode())?;
-    match instruction {
-        Instruction::Simple { opcode, .. } => writer.write_u1(*opcode),
-        Instruction::LocalIndex { opcode, index, .. } => {
+pub(crate) fn write_instruction(
+    writer: &mut ByteWriter,
+    instruction: &Instruction,
+    pc: u32,
+) -> Result<()> {
+    let kind = operand_kind(instruction.opcode())?;
+    match (kind, instruction) {
+        (OperandKind::Simple, Instruction::Simple { opcode, .. }) => writer.write_u1(*opcode),
+        (OperandKind::LocalIndex, Instruction::LocalIndex { opcode, index, .. }) => {
             writer.write_u1(*opcode);
             writer.write_u1(*index);
         }
-        Instruction::ConstantPoolIndex1 { opcode, index, .. } => {
+        (
+            OperandKind::ConstantPoolIndex1,
+            Instruction::ConstantPoolIndex1 { opcode, index, .. },
+        ) => {
             writer.write_u1(*opcode);
             writer.write_u1(*index);
         }
-        Instruction::ConstantPoolIndexWide(ConstantPoolIndexWide { opcode, index, .. }) => {
+        (
+            OperandKind::ConstantPoolIndexWide,
+            Instruction::ConstantPoolIndexWide(ConstantPoolIndexWide { opcode, index, .. }),
+        ) => {
             writer.write_u1(*opcode);
             writer.write_u2((*index).into());
         }
-        Instruction::Byte { opcode, value, .. } => {
+        (OperandKind::Byte, Instruction::Byte { opcode, value, .. }) => {
             writer.write_u1(*opcode);
             writer.write_i1(*value);
         }
-        Instruction::Short { opcode, value, .. } => {
+        (OperandKind::Short, Instruction::Short { opcode, value, .. }) => {
             writer.write_u1(*opcode);
             writer.write_i2(*value);
         }
-        Instruction::Branch(Branch {
-            opcode,
-            branch_offset,
-            ..
-        }) => {
+        (
+            OperandKind::Branch,
+            Instruction::Branch(Branch {
+                opcode,
+                branch_offset,
+                ..
+            }),
+        ) => {
             writer.write_u1(*opcode);
             writer.write_i2(*branch_offset);
         }
-        Instruction::BranchWide {
-            opcode,
-            branch_offset,
-            ..
-        } => {
+        (
+            OperandKind::BranchWide,
+            Instruction::BranchWide {
+                opcode,
+                branch_offset,
+                ..
+            },
+        ) => {
             writer.write_u1(*opcode);
             writer.write_i4(*branch_offset);
         }
-        Instruction::IInc { index, value, .. } => {
+        (OperandKind::IInc, Instruction::IInc { index, value, .. }) => {
             writer.write_u1(0x84);
             writer.write_u1(*index);
             writer.write_i1(*value);
         }
-        Instruction::InvokeDynamic(InvokeDynamicInsn {
-            index, reserved, ..
-        }) => {
+        (
+            OperandKind::InvokeDynamic,
+            Instruction::InvokeDynamic(InvokeDynamicInsn {
+                index, reserved, ..
+            }),
+        ) => {
+            if *reserved != 0 {
+                return Err(invalid_writer_state(format!(
+                    "invokedynamic reserved bytes must be zero, got {reserved}"
+                )));
+            }
             writer.write_u1(0xBA);
             writer.write_u2((*index).into());
             writer.write_u2(*reserved);
         }
-        Instruction::InvokeInterface(InvokeInterfaceInsn {
-            index,
-            count,
-            reserved,
-            ..
-        }) => {
+        (
+            OperandKind::InvokeInterface,
+            Instruction::InvokeInterface(InvokeInterfaceInsn {
+                index,
+                count,
+                reserved,
+                ..
+            }),
+        ) => {
+            if *count == 0 {
+                return Err(invalid_writer_state(
+                    "invokeinterface count byte must be non-zero",
+                ));
+            }
+            if *reserved != 0 {
+                return Err(invalid_writer_state(format!(
+                    "invokeinterface reserved byte must be zero, got {reserved}"
+                )));
+            }
             writer.write_u1(0xB9);
             writer.write_u2((*index).into());
             writer.write_u1(*count);
             writer.write_u1(*reserved);
         }
-        Instruction::NewArray(NewArrayInsn { atype, .. }) => {
+        (OperandKind::NewArray, Instruction::NewArray(NewArrayInsn { atype, .. })) => {
             writer.write_u1(0xBC);
             writer.write_u1(*atype as u8);
         }
-        Instruction::MultiANewArray {
-            index, dimensions, ..
-        } => {
+        (
+            OperandKind::MultiANewArray,
+            Instruction::MultiANewArray {
+                index, dimensions, ..
+            },
+        ) => {
+            if *dimensions == 0 {
+                return Err(invalid_writer_state(
+                    "multianewarray dimensions must be at least 1",
+                ));
+            }
             writer.write_u1(0xC5);
             writer.write_u2((*index).into());
             writer.write_u1(*dimensions);
         }
-        Instruction::LookupSwitch(LookupSwitchInsn {
-            offset,
-            default_offset,
-            pairs,
-        }) => {
+        (
+            OperandKind::LookupSwitch,
+            Instruction::LookupSwitch(LookupSwitchInsn {
+                default_offset,
+                pairs,
+                ..
+            }),
+        ) => {
             if pairs
                 .windows(2)
                 .any(|pair| pair[0].match_value >= pair[1].match_value)
@@ -318,7 +374,7 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) -> Resu
                 ));
             }
             writer.write_u1(0xAB);
-            write_switch_padding(writer, *offset)?;
+            write_switch_padding(writer, pc);
             writer.write_i4(*default_offset);
             writer.write_u4(checked_count::<u32>(pairs.len(), "pairs")?);
             for MatchOffsetPair {
@@ -330,20 +386,23 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) -> Resu
                 writer.write_i4(*offset);
             }
         }
-        Instruction::TableSwitch(TableSwitchInsn {
-            offset,
-            default_offset,
-            low,
-            high,
-            offsets,
-        }) => {
+        (
+            OperandKind::TableSwitch,
+            Instruction::TableSwitch(TableSwitchInsn {
+                default_offset,
+                low,
+                high,
+                offsets,
+                ..
+            }),
+        ) => {
             if high < low || i64::from(*high) - i64::from(*low) + 1 != offsets.len() as i64 {
                 return Err(invalid_writer_state(
                     "tableswitch range must match its offsets",
                 ));
             }
             writer.write_u1(0xAA);
-            write_switch_padding(writer, *offset)?;
+            write_switch_padding(writer, pc);
             writer.write_i4(*default_offset);
             writer.write_i4(*low);
             writer.write_i4(*high);
@@ -351,12 +410,21 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) -> Resu
                 writer.write_i4(*branch);
             }
         }
-        Instruction::Wide(WideInstruction {
-            opcode,
-            index,
-            value,
-            ..
-        }) => {
+        (
+            OperandKind::Wide,
+            Instruction::Wide(WideInstruction {
+                opcode,
+                index,
+                value,
+                ..
+            }),
+        ) => {
+            validate_wide_opcode(*opcode, 0)?;
+            if (*opcode == 0x84) != value.is_some() {
+                return Err(invalid_writer_state(format!(
+                    "wide opcode 0x{opcode:02x} value presence mismatch"
+                )));
+            }
             writer.write_u1(0xC4);
             writer.write_u1(*opcode);
             writer.write_u2(*index);
@@ -364,18 +432,22 @@ fn write_instruction(writer: &mut ByteWriter, instruction: &Instruction) -> Resu
                 writer.write_i2(*value);
             }
         }
+        _ => {
+            return Err(invalid_writer_state(format!(
+                "instruction variant does not match opcode 0x{:02x}",
+                instruction.opcode()
+            )));
+        }
     }
 
     Ok(())
 }
 
-fn write_switch_padding(writer: &mut ByteWriter, offset: u32) -> Result<()> {
-    let padding = (4 - ((offset + 1) % 4)) % 4;
+fn write_switch_padding(writer: &mut ByteWriter, offset: u32) {
+    let padding = 3 - (offset & 3);
     for _ in 0..padding {
         writer.write_u1(0);
     }
-
-    Ok(())
 }
 
 fn checked_count<T: TryFrom<usize>>(length: usize, field: &str) -> Result<T> {

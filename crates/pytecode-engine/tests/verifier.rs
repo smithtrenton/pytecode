@@ -622,7 +622,7 @@ fn verify_classmodel_reports_invalid_descriptors_and_bad_cfg() {
         .methods
         .iter_mut()
         .find(|method| method.name == "branch")
-        .and_then(|method| method.code.as_mut())
+        .and_then(|method| method.code_mut())
         .expect("branch method should have code");
     let branch = code
         .instructions

@@ -181,15 +181,11 @@ fn rewrite_can_add_and_remove_entries() -> TestResult<()> {
             .iter()
             .any(|entry| entry.filename == "HelloWorld.class")
     );
-    let extra_name = PathBuf::from("extra")
-        .join("info.txt")
-        .to_string_lossy()
-        .into_owned();
     assert!(
         rewritten
             .entries
             .iter()
-            .any(|entry| entry.filename == extra_name)
+            .any(|entry| entry.filename == "extra/info.txt")
     );
     assert!(
         !rewritten
@@ -197,6 +193,40 @@ fn rewrite_can_add_and_remove_entries() -> TestResult<()> {
             .iter()
             .any(|entry| entry.filename == "README.txt")
     );
+    Ok(())
+}
+
+#[test]
+fn posix_normalization_and_from_entries_rewrite_work() -> TestResult<()> {
+    let temp_dir = fresh_temp_dir("archive-a3-posix");
+    let out_path = temp_dir.join("from-entries.jar");
+    let mut jar = JarFile::from_entries(&out_path, Vec::new());
+    assert!(jar.add_file("dir/bad/", b"x".to_vec()).is_err());
+    assert!(jar.add_file("dir/bad\0.txt", b"x".to_vec()).is_err());
+    assert!(jar.add_file("./C:/evil.txt", b"x".to_vec()).is_err());
+
+    jar.add_directory(r"sub\nested")?;
+    jar.add_file(r"sub\nested\hello.txt", b"world".to_vec())?;
+    assert_eq!(jar.entries[0].filename, "sub/nested/");
+    assert_eq!(jar.entries[1].filename, "sub/nested/hello.txt");
+
+    jar.comment = b"jar-comment".to_vec();
+    let prepared = jar.prepare_rewrite(None, None, RewriteOptions::default())?;
+    assert_eq!(prepared.entries().len(), 2);
+    prepared.commit(&mut jar)?;
+
+    let reopened = JarFile::open(&out_path)?;
+    assert_eq!(reopened.comment, b"jar-comment");
+    assert!(
+        reopened
+            .entries
+            .iter()
+            .any(|e| e.filename == "sub/nested/hello.txt")
+    );
+
+    let mut mutable = reopened;
+    mutable.remove_file(r"sub\nested\")?;
+    assert_eq!(mutable.entries.len(), 1);
     Ok(())
 }
 

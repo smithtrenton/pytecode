@@ -36,72 +36,58 @@ impl ConstantPoolBuilder {
     }
 
     pub fn from_pool(pool: &[Option<ConstantPoolEntry>]) -> Self {
+        let mut entries = pool.to_vec();
+        if entries.is_empty() {
+            entries.push(None);
+        }
         let mut builder = Self {
-            entries: pool.to_vec(),
+            entries,
             key_to_index: FxHashMap::default(),
         };
-        // First pass: seed key_to_index with the raw (as-stored) keys. or_insert means the first
-        // occurrence of a duplicate entry wins (i.e. the lower index is canonical).
-        for (index, entry) in builder.entries.iter().enumerate().skip(1) {
-            let Some(entry) = entry else {
-                continue;
-            };
-            builder
-                .key_to_index
-                .entry(PoolKey::from_entry(entry))
-                .or_insert(index as u16);
-        }
 
-        // Build a raw-index → canonical-index lookup table.  For every entry at position `i`, the
-        // canonical index is whatever `key_to_index` mapped to for that entry's raw key.  For
-        // duplicate entries the first (lower) index is the canonical one; later duplicates map back
-        // to that same slot.
-        let index_map: Vec<u16> = builder
+        let raw_keys: Vec<Option<PoolKey>> = builder
             .entries
             .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                if i == 0 {
-                    return 0;
-                }
-                match entry {
-                    None => 0,
-                    Some(e) => *builder
-                        .key_to_index
-                        .get(&PoolKey::from_entry(e))
-                        .unwrap_or(&(i as u16)),
-                }
-            })
+            .map(|entry| entry.as_ref().map(PoolKey::from_entry))
             .collect();
+        let mut index_map = vec![0_u16; builder.entries.len()];
 
-        // Second pass: add canonical aliases for compound entries.
-        //
-        // Problem this solves: if the original class file has two Class entries both pointing to
-        // the same Utf8 (e.g. Class@3 and Class@45 → Utf8@21), `or_insert` above maps
-        // Class(21) → 3.  But a Methodref in the original CP might use class_index=45, giving it
-        // the raw key MethodRef(45, 46).  When `add_method_ref()` is called later it resolves the
-        // class name through `add_class()`, which returns index 3 (the canonical class), and then
-        // tries to look up MethodRef(3, 46) — which is NOT in the map — and adds a new duplicate.
-        //
-        // By inserting the canonical key into the map here (pointing to the same output index as
-        // the original entry), the later lookup finds the existing entry and no duplicate is added.
-        for (index, entry) in builder.entries.iter().enumerate().skip(1) {
-            let Some(entry) = entry else {
-                continue;
-            };
-            let canonical_key = PoolKey::canonical_from_entry(entry, &index_map);
-            let raw_key = PoolKey::from_entry(entry);
-            if canonical_key != raw_key {
-                builder
+        // Canonicalize in strict JVMS dependency order (leaf -> 1-hop -> 2-hop -> 3-hop)
+        // so transitive chains (Utf8 -> NameAndType/Class -> MethodRef -> MethodHandle)
+        // collapse to canonical indices in a single build.
+        for tier in 1_u8..=4_u8 {
+            for (index, entry) in builder.entries.iter().enumerate().skip(1) {
+                let Some(entry) = entry else {
+                    continue;
+                };
+                if entry_dependency_tier(entry) != tier {
+                    continue;
+                }
+                let canonical_key = if tier == 1 {
+                    raw_keys[index]
+                        .as_ref()
+                        .expect("non-empty slot should have raw key")
+                        .clone()
+                } else {
+                    PoolKey::canonical_from_entry(entry, &index_map)
+                };
+                let canonical_index = *builder
                     .key_to_index
-                    .entry(canonical_key)
+                    .entry(canonical_key.clone())
                     .or_insert(index as u16);
+                index_map[index] = canonical_index;
+
+                if let Some(raw_key) = raw_keys[index].as_ref()
+                    && *raw_key != canonical_key
+                {
+                    builder
+                        .key_to_index
+                        .entry(raw_key.clone())
+                        .or_insert(canonical_index);
+                }
             }
         }
 
-        if builder.entries.is_empty() {
-            builder.entries.push(None);
-        }
         builder
     }
 
@@ -118,7 +104,7 @@ impl ConstantPoolBuilder {
     }
 
     pub fn count(&self) -> u16 {
-        self.entries.len() as u16
+        self.entries.len().min(u16::MAX as usize) as u16
     }
 
     pub fn len(&self) -> usize {
@@ -130,7 +116,7 @@ impl ConstantPoolBuilder {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.entries.len() <= 1
     }
 
     pub fn peek(&self, index: u16) -> Option<&ConstantPoolEntry> {
@@ -299,7 +285,52 @@ impl ConstantPoolBuilder {
         }
     }
 
+    pub fn resolve_java_string_constant(&self, index: CpIndex) -> Result<JavaString> {
+        let entry = self.entry(index.value())?;
+        match entry {
+            ConstantPoolEntry::String(info) => self.resolve_java_string(info.string_index),
+            _ => Err(EngineError::new(
+                0,
+                EngineErrorKind::InvalidModelState {
+                    reason: format!("constant-pool entry {} is not String", index),
+                },
+            )),
+        }
+    }
+
+    fn atomic<T>(&mut self, build: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let saved_len = self.entries.len();
+        let result = build(self);
+        if result.is_err() {
+            self.truncate(saved_len);
+        }
+        result
+    }
+
     pub fn add_entry(&mut self, entry: ConstantPoolEntry) -> Result<u16> {
+        match &entry {
+            ConstantPoolEntry::Utf8(info) if info.bytes.len() > UTF8_MAX_BYTES => {
+                return Err(EngineError::new(
+                    0,
+                    EngineErrorKind::InvalidModelState {
+                        reason: format!("UTF-8 payload exceeds {UTF8_MAX_BYTES} bytes"),
+                    },
+                ));
+            }
+            ConstantPoolEntry::MethodHandle(info) if !(1..=9).contains(&info.reference_kind) => {
+                return Err(EngineError::new(
+                    0,
+                    EngineErrorKind::InvalidModelState {
+                        reason: format!(
+                            "invalid method handle reference kind: {}",
+                            info.reference_kind
+                        ),
+                    },
+                ));
+            }
+            _ => {}
+        }
+
         let key = PoolKey::from_entry(&entry);
         if let Some(&index) = self.key_to_index.get(&key) {
             return Ok(index);
@@ -388,51 +419,63 @@ impl ConstantPoolBuilder {
     }
 
     pub fn add_class(&mut self, class_name: &str) -> Result<ClassIndex> {
-        let name_index = self.add_utf8(class_name)?;
-        self.add_entry(ConstantPoolEntry::Class(ClassInfo { name_index }))
-            .map(ClassIndex::from)
+        self.atomic(|this| {
+            let name_index = this.add_utf8(class_name)?;
+            this.add_entry(ConstantPoolEntry::Class(ClassInfo { name_index }))
+                .map(ClassIndex::from)
+        })
     }
 
     pub fn add_string(&mut self, value: &str) -> Result<CpIndex> {
-        let string_index = self.add_utf8(value)?;
-        self.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
-            .map(CpIndex::from)
+        self.atomic(|this| {
+            let string_index = this.add_utf8(value)?;
+            this.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
+                .map(CpIndex::from)
+        })
     }
 
     pub fn add_java_string(&mut self, value: &JavaString) -> Result<CpIndex> {
-        let string_index = self.add_utf16(value)?;
-        self.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
-            .map(CpIndex::from)
+        self.atomic(|this| {
+            let string_index = this.add_utf16(value)?;
+            this.add_entry(ConstantPoolEntry::String(StringInfo { string_index }))
+                .map(CpIndex::from)
+        })
     }
 
     pub fn add_name_and_type(&mut self, name: &str, descriptor: &str) -> Result<NameAndTypeIndex> {
-        let name_index = self.add_utf8(name)?;
-        let descriptor_index = self.add_utf8(descriptor)?;
-        self.add_entry(ConstantPoolEntry::NameAndType(NameAndTypeInfo {
-            name_index,
-            descriptor_index,
-        }))
-        .map(NameAndTypeIndex::from)
+        self.atomic(|this| {
+            let name_index = this.add_utf8(name)?;
+            let descriptor_index = this.add_utf8(descriptor)?;
+            this.add_entry(ConstantPoolEntry::NameAndType(NameAndTypeInfo {
+                name_index,
+                descriptor_index,
+            }))
+            .map(NameAndTypeIndex::from)
+        })
     }
 
     pub fn add_field_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<CpIndex> {
-        let class_index = self.add_class(owner)?;
-        let name_and_type_index = self.add_name_and_type(name, descriptor)?;
-        self.add_entry(ConstantPoolEntry::FieldRef(FieldRefInfo {
-            class_index,
-            name_and_type_index,
-        }))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let class_index = this.add_class(owner)?;
+            let name_and_type_index = this.add_name_and_type(name, descriptor)?;
+            this.add_entry(ConstantPoolEntry::FieldRef(FieldRefInfo {
+                class_index,
+                name_and_type_index,
+            }))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> Result<CpIndex> {
-        let class_index = self.add_class(owner)?;
-        let name_and_type_index = self.add_name_and_type(name, descriptor)?;
-        self.add_entry(ConstantPoolEntry::MethodRef(MethodRefInfo {
-            class_index,
-            name_and_type_index,
-        }))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let class_index = this.add_class(owner)?;
+            let name_and_type_index = this.add_name_and_type(name, descriptor)?;
+            this.add_entry(ConstantPoolEntry::MethodRef(MethodRefInfo {
+                class_index,
+                name_and_type_index,
+            }))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_interface_method_ref(
@@ -441,23 +484,27 @@ impl ConstantPoolBuilder {
         name: &str,
         descriptor: &str,
     ) -> Result<CpIndex> {
-        let class_index = self.add_class(owner)?;
-        let name_and_type_index = self.add_name_and_type(name, descriptor)?;
-        self.add_entry(ConstantPoolEntry::InterfaceMethodRef(
-            InterfaceMethodRefInfo {
-                class_index,
-                name_and_type_index,
-            },
-        ))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let class_index = this.add_class(owner)?;
+            let name_and_type_index = this.add_name_and_type(name, descriptor)?;
+            this.add_entry(ConstantPoolEntry::InterfaceMethodRef(
+                InterfaceMethodRefInfo {
+                    class_index,
+                    name_and_type_index,
+                },
+            ))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_method_type(&mut self, descriptor: &str) -> Result<CpIndex> {
-        let descriptor_index = self.add_utf8(descriptor)?;
-        self.add_entry(ConstantPoolEntry::MethodType(MethodTypeInfo {
-            descriptor_index,
-        }))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let descriptor_index = this.add_utf8(descriptor)?;
+            this.add_entry(ConstantPoolEntry::MethodType(MethodTypeInfo {
+                descriptor_index,
+            }))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_method_handle(
@@ -478,12 +525,14 @@ impl ConstantPoolBuilder {
         name: &str,
         descriptor: &str,
     ) -> Result<CpIndex> {
-        let name_and_type_index = self.add_name_and_type(name, descriptor)?;
-        self.add_entry(ConstantPoolEntry::Dynamic(DynamicInfo {
-            bootstrap_method_attr_index,
-            name_and_type_index,
-        }))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let name_and_type_index = this.add_name_and_type(name, descriptor)?;
+            this.add_entry(ConstantPoolEntry::Dynamic(DynamicInfo {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            }))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_invoke_dynamic(
@@ -492,35 +541,103 @@ impl ConstantPoolBuilder {
         name: &str,
         descriptor: &str,
     ) -> Result<CpIndex> {
-        let name_and_type_index = self.add_name_and_type(name, descriptor)?;
-        self.add_entry(ConstantPoolEntry::InvokeDynamic(InvokeDynamicInfo {
-            bootstrap_method_attr_index,
-            name_and_type_index,
-        }))
-        .map(CpIndex::from)
+        self.atomic(|this| {
+            let name_and_type_index = this.add_name_and_type(name, descriptor)?;
+            this.add_entry(ConstantPoolEntry::InvokeDynamic(InvokeDynamicInfo {
+                bootstrap_method_attr_index,
+                name_and_type_index,
+            }))
+            .map(CpIndex::from)
+        })
     }
 
     pub fn add_module(&mut self, name: &str) -> Result<ModuleIndex> {
-        let name_index = self.add_utf8(name)?;
-        self.add_entry(ConstantPoolEntry::Module(ModuleInfo { name_index }))
-            .map(ModuleIndex::from)
+        self.atomic(|this| {
+            let name_index = this.add_utf8(name)?;
+            this.add_entry(ConstantPoolEntry::Module(ModuleInfo { name_index }))
+                .map(ModuleIndex::from)
+        })
     }
 
     pub fn add_package(&mut self, name: &str) -> Result<PackageIndex> {
-        let name_index = self.add_utf8(name)?;
-        self.add_entry(ConstantPoolEntry::Package(PackageInfo { name_index }))
-            .map(PackageIndex::from)
+        self.atomic(|this| {
+            let name_index = this.add_utf8(name)?;
+            this.add_entry(ConstantPoolEntry::Package(PackageInfo { name_index }))
+                .map(PackageIndex::from)
+        })
     }
 
-    pub fn truncate(&mut self, len: usize) {
+    pub fn try_truncate(&mut self, len: usize) -> Result<()> {
+        if len == 0 {
+            return Err(EngineError::new(
+                0,
+                EngineErrorKind::InvalidModelState {
+                    reason: "cannot truncate constant pool below slot 1".to_owned(),
+                },
+            ));
+        }
+        if len > self.entries.len() {
+            return Err(EngineError::new(
+                0,
+                EngineErrorKind::InvalidModelState {
+                    reason: format!(
+                        "truncate length {} exceeds constant pool size {}",
+                        len,
+                        self.entries.len()
+                    ),
+                },
+            ));
+        }
+        if len < self.entries.len()
+            && len >= 2
+            && self.entries[len - 1]
+                .as_ref()
+                .is_some_and(ConstantPoolEntry::is_wide)
+        {
+            return Err(EngineError::new(
+                0,
+                EngineErrorKind::InvalidModelState {
+                    reason: format!(
+                        "truncate length {} would split wide constant-pool entry at slot {}",
+                        len,
+                        len - 1
+                    ),
+                },
+            ));
+        }
         if len < self.entries.len() {
             self.entries.truncate(len);
             self.key_to_index.retain(|_, v| (*v as usize) < len);
+        }
+        Ok(())
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        let mut target = len.max(1).min(self.entries.len());
+        if target < self.entries.len()
+            && target >= 2
+            && self.entries[target - 1]
+                .as_ref()
+                .is_some_and(ConstantPoolEntry::is_wide)
+        {
+            target -= 1;
+        }
+        if target < self.entries.len() {
+            self.entries.truncate(target);
+            self.key_to_index.retain(|_, v| (*v as usize) < target);
         }
     }
 
     pub fn find_utf8(&self, value: &str) -> Option<Utf8Index> {
         let bytes = encode_modified_utf8(value);
+        self.key_to_index
+            .get(&PoolKey::Utf8(bytes.into_boxed_slice()))
+            .copied()
+            .map(Utf8Index::from)
+    }
+
+    pub fn find_utf16(&self, value: &JavaString) -> Option<Utf8Index> {
+        let bytes = value.to_modified_utf8();
         self.key_to_index
             .get(&PoolKey::Utf8(bytes.into_boxed_slice()))
             .copied()
@@ -568,6 +685,14 @@ impl ConstantPoolBuilder {
 
     pub fn find_string(&self, value: &str) -> Option<CpIndex> {
         let string_index = self.find_utf8(value)?;
+        self.key_to_index
+            .get(&PoolKey::String(string_index.value()))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_java_string(&self, value: &JavaString) -> Option<CpIndex> {
+        let string_index = self.find_utf16(value)?;
         self.key_to_index
             .get(&PoolKey::String(string_index.value()))
             .copied()
@@ -657,6 +782,60 @@ impl ConstantPoolBuilder {
             ))
             .copied()
             .map(CpIndex::from)
+    }
+
+    pub fn find_invoke_dynamic(
+        &self,
+        bootstrap_method_attr_index: BootstrapMethodIndex,
+        name: &str,
+        descriptor: &str,
+    ) -> Option<CpIndex> {
+        let nat_index = self.find_name_and_type(name, descriptor)?;
+        self.key_to_index
+            .get(&PoolKey::InvokeDynamic(
+                bootstrap_method_attr_index.value(),
+                nat_index.value(),
+            ))
+            .copied()
+            .map(CpIndex::from)
+    }
+
+    pub fn find_module(&self, name: &str) -> Option<ModuleIndex> {
+        let name_index = self.find_utf8(name)?;
+        self.key_to_index
+            .get(&PoolKey::Module(name_index.value()))
+            .copied()
+            .map(ModuleIndex::from)
+    }
+
+    pub fn find_package(&self, name: &str) -> Option<PackageIndex> {
+        let name_index = self.find_utf8(name)?;
+        self.key_to_index
+            .get(&PoolKey::Package(name_index.value()))
+            .copied()
+            .map(PackageIndex::from)
+    }
+}
+
+fn entry_dependency_tier(entry: &ConstantPoolEntry) -> u8 {
+    match entry {
+        ConstantPoolEntry::Utf8(_)
+        | ConstantPoolEntry::Integer(_)
+        | ConstantPoolEntry::Float(_)
+        | ConstantPoolEntry::Long(_)
+        | ConstantPoolEntry::Double(_) => 1,
+        ConstantPoolEntry::Class(_)
+        | ConstantPoolEntry::String(_)
+        | ConstantPoolEntry::MethodType(_)
+        | ConstantPoolEntry::NameAndType(_)
+        | ConstantPoolEntry::Module(_)
+        | ConstantPoolEntry::Package(_) => 2,
+        ConstantPoolEntry::FieldRef(_)
+        | ConstantPoolEntry::MethodRef(_)
+        | ConstantPoolEntry::InterfaceMethodRef(_)
+        | ConstantPoolEntry::Dynamic(_)
+        | ConstantPoolEntry::InvokeDynamic(_) => 3,
+        ConstantPoolEntry::MethodHandle(_) => 4,
     }
 }
 

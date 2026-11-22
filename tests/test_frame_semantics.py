@@ -4,13 +4,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers import _jdk_tool, compile_java_sources
+from helpers import TEST_RESOURCES, _jdk_tool, compile_java_sources
 
 from pytecode.analysis import MappingClassResolver, verify_classfile
 from pytecode.archive import FrameComputationMode
 from pytecode.model import ClassModel, MethodModel
 
-BASE_CLASS = Path("crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class")
+BASE_CLASS = Path(__file__).resolve().parents[1] / "crates/pytecode-engine/fixtures/classes/HelloWorld/HelloWorld.class"
 
 
 @pytest.mark.parametrize(
@@ -48,10 +48,7 @@ def test_recompute_rejects_dup_on_long() -> None:
 def test_recomputed_javac_methods_execute_with_jvm_verification(tmp_path: Path, with_resolver: bool) -> None:
     classes = compile_java_sources(
         tmp_path,
-        [
-            Path("crates/pytecode-engine/fixtures/java") / name
-            for name in ("FrameRegression.java", "RuntimeClasses.java")
-        ],
+        [TEST_RESOURCES / name for name in ("FrameRegression.java", "RuntimeClasses.java")],
     )
     originals = {path: path.read_bytes() for path in classes.glob("Frame*.class")}
     resolver = None

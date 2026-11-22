@@ -109,6 +109,8 @@ pub enum ArchiveError {
     AbsolutePath(String),
     #[error("archive entry filename must not contain parent directory references: {0}")]
     ParentTraversal(String),
+    #[error("invalid archive entry filename: {0}")]
+    InvalidFilename(String),
     #[error("archive entry timestamp is out of ZIP range for entry: {0}")]
     InvalidTimestamp(String),
     #[error("archive entry comment must be valid UTF-8 to rewrite natively: {0}")]
@@ -145,6 +147,7 @@ pub struct PreparedRewrite {
     temporary: NamedTempFile,
     destination: PathBuf,
     entries: Vec<JarInfo>,
+    comment: Vec<u8>,
 }
 
 impl PreparedRewrite {
@@ -152,12 +155,26 @@ impl PreparedRewrite {
         self.temporary.path()
     }
 
+    pub fn entries(&self) -> &[JarInfo] {
+        &self.entries
+    }
+
     pub fn commit(self, jar: &mut JarFile) -> Result<PathBuf> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = match fs::metadata(&self.destination) {
+                Ok(meta) => meta.permissions(),
+                Err(_) => fs::Permissions::from_mode(0o644),
+            };
+            fs::set_permissions(self.temporary.path(), permissions)?;
+        }
         self.temporary
             .persist(&self.destination)
             .map_err(|error| error.error)?;
         jar.filename = self.destination;
         jar.entries = self.entries;
+        jar.comment = self.comment;
         Ok(jar.filename.clone())
     }
 }
@@ -166,6 +183,7 @@ impl PreparedRewrite {
 pub struct JarFile {
     pub filename: PathBuf,
     pub entries: Vec<JarInfo>,
+    pub comment: Vec<u8>,
     pub read_limits: ArchiveReadLimits,
 }
 
@@ -174,6 +192,7 @@ impl JarFile {
         Self {
             filename: path.into(),
             entries,
+            comment: Vec::new(),
             read_limits: ArchiveReadLimits::default(),
         }
     }
@@ -184,16 +203,19 @@ impl JarFile {
 
     pub fn open_with_limits(path: impl Into<PathBuf>, limits: ArchiveReadLimits) -> Result<Self> {
         let filename = path.into();
-        let entries = read_archive_entries(&filename, limits)?;
+        let (entries, comment) = read_archive_entries(&filename, limits)?;
         Ok(Self {
             filename,
             entries,
+            comment,
             read_limits: limits,
         })
     }
 
     pub fn read(&mut self) -> Result<()> {
-        self.entries = read_archive_entries(&self.filename, self.read_limits)?;
+        let (entries, comment) = read_archive_entries(&self.filename, self.read_limits)?;
+        self.entries = entries;
+        self.comment = comment;
         Ok(())
     }
 
@@ -202,7 +224,11 @@ impl JarFile {
         filename: impl AsRef<str>,
         data: impl Into<Vec<u8>>,
     ) -> Result<&JarInfo> {
-        let filename = normalize_filename(filename.as_ref(), false)?;
+        let raw_name = filename.as_ref();
+        if raw_name.ends_with('/') || raw_name.ends_with('\\') {
+            return Err(ArchiveError::InvalidFilename(raw_name.to_owned()));
+        }
+        let filename = normalize_filename(raw_name, false)?;
         let bytes = data.into();
         if let Some(index) = self
             .entries
@@ -265,7 +291,9 @@ impl JarFile {
     }
 
     pub fn remove_file(&mut self, filename: impl AsRef<str>) -> Result<JarInfo> {
-        let filename = normalize_filename(filename.as_ref(), false)?;
+        let raw_name = filename.as_ref();
+        let is_dir = raw_name.ends_with('/') || raw_name.ends_with('\\');
+        let filename = normalize_filename(raw_name, is_dir)?;
         let Some(index) = self
             .entries
             .iter()
@@ -323,14 +351,15 @@ impl JarFile {
             .unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
         let temporary = NamedTempFile::new_in(parent)?;
-        let mut source = ZipArchive::new(File::open(&self.filename)?)?;
         let no_transform = transform.is_none();
+        let mut source: Option<ZipArchive<File>> = None;
+        let mut source_missing = false;
         let mut names = HashSet::new();
 
         {
             let file = temporary.reopen()?;
             let mut writer = ZipWriter::new(file);
-            writer.set_raw_comment(source.comment().to_vec().into_boxed_slice())?;
+            writer.set_raw_comment(self.comment.clone().into_boxed_slice())?;
             for entry in &self.entries {
                 let normalized = normalize_filename(&entry.filename, entry.metadata.is_dir)?;
                 if !names.insert(normalized.clone()) {
@@ -338,36 +367,55 @@ impl JarFile {
                 }
                 if let Some(index) = entry.original_index
                     && should_raw_copy_entry(entry, no_transform, options)
-                    && source_entry_matches(&mut source, index, entry)?
                 {
-                    let source_entry = source.by_index(index)?;
-                    let archive_name = archive_name(&entry.filename);
-                    if source_entry
-                        .name()
-                        .map(|name| name.as_ref() == archive_name)
-                        .unwrap_or(false)
-                    {
-                        writer.raw_copy_file(source_entry)?;
-                    } else {
-                        writer.raw_copy_file_rename(source_entry, archive_name)?;
+                    if source.is_none() && !source_missing {
+                        match File::open(&self.filename) {
+                            Ok(file) => source = Some(ZipArchive::new(file)?),
+                            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                                source_missing = true;
+                            }
+                            Err(err) => return Err(err.into()),
+                        }
                     }
-                    continue;
+                    if let Some(source_archive) = source.as_mut()
+                        && source_entry_matches(source_archive, index, entry)?
+                    {
+                        let source_entry = source_archive.by_index(index)?;
+                        let target_name = archive_name(&normalized);
+                        if source_entry
+                            .name()
+                            .map(|name| name.as_ref() == target_name)
+                            .unwrap_or(false)
+                        {
+                            writer.raw_copy_file(source_entry)?;
+                        } else {
+                            writer.raw_copy_file_rename(source_entry, target_name)?;
+                        }
+                        continue;
+                    }
                 }
                 if let Some(transform_ref) = transform.as_deref_mut() {
-                    write_entry(&mut writer, entry, Some(transform_ref), options)?;
+                    write_entry(
+                        &mut writer,
+                        entry,
+                        &normalized,
+                        Some(transform_ref),
+                        options,
+                    )?;
                 } else {
-                    write_entry(&mut writer, entry, None, options)?;
+                    write_entry(&mut writer, entry, &normalized, None, options)?;
                 }
             }
             writer.finish()?;
         }
 
         drop(source);
-        let entries = read_archive_entries(temporary.path(), self.read_limits)?;
+        let (entries, comment) = read_archive_entries(temporary.path(), self.read_limits)?;
         Ok(PreparedRewrite {
             temporary,
             destination,
             entries,
+            comment,
         })
     }
 }
@@ -417,9 +465,10 @@ pub const fn phase0_support() -> ArchiveSupport {
     phase5_support()
 }
 
-fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<Vec<JarInfo>> {
+fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<(Vec<JarInfo>, Vec<u8>)> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
+    let archive_comment = archive.comment().to_vec();
     let mut entries = Vec::new();
     if archive.len() > limits.max_entries {
         return Err(ArchiveError::ReadLimit("entry count"));
@@ -463,7 +512,7 @@ fn read_archive_entries(path: &Path, limits: ArchiveReadLimits) -> Result<Vec<Ja
             original_index: Some(index),
         });
     }
-    Ok(entries)
+    Ok((entries, archive_comment))
 }
 
 // zip stores entries in a name-keyed map and can discard exact duplicates before
@@ -495,13 +544,14 @@ fn check_central_directory_count(path: &Path, start: u64, expected: usize) -> Re
 }
 
 fn should_raw_copy_entry(entry: &JarInfo, no_transform: bool, options: RewriteOptions<'_>) -> bool {
-    no_transform
-        && options.frame_mode == FrameComputationMode::Preserve
-        && options.debug_info == DebugInfoPolicy::Preserve
-        && options.resolver.is_none()
-        && entry.original_index.is_some()
+    entry.original_index.is_some()
         // zip's raw-copy API does not retain arbitrary extra fields.
         && entry.metadata.extra_data.is_empty()
+        && (!entry.is_class()
+            || (no_transform
+                && options.frame_mode == FrameComputationMode::Preserve
+                && options.debug_info == DebugInfoPolicy::Preserve
+                && options.resolver.is_none()))
 }
 
 fn source_entry_matches(
@@ -542,11 +592,12 @@ fn source_entry_matches(
 fn write_entry(
     writer: &mut ZipWriter<File>,
     entry: &JarInfo,
+    entry_name: &str,
     transform: Option<&mut dyn ApplyClassTransform>,
     options: RewriteOptions<'_>,
 ) -> Result<()> {
     if entry.metadata.is_dir {
-        writer.add_directory(archive_name(&entry.filename), file_options(entry)?)?;
+        writer.add_directory(archive_name(entry_name), file_options(entry, 0)?)?;
         return Ok(());
     }
 
@@ -557,6 +608,7 @@ fn write_entry(
             || options.resolver.is_some();
         if should_relower {
             let mut model = pytecode_engine::model::ClassModel::from_bytes(&entry.bytes)?;
+            model.entry_name = entry_name.to_owned();
             if let Some(transform) = transform {
                 transform.apply(&mut model)?;
             }
@@ -573,17 +625,18 @@ fn write_entry(
         Cow::Borrowed(&entry.bytes)
     };
 
-    let file_options = file_options(entry)?;
-    writer.start_file(archive_name(&entry.filename), file_options)?;
+    let file_options = file_options(entry, bytes.len())?;
+    writer.start_file(archive_name(entry_name), file_options)?;
     writer.write_all(&bytes)?;
     Ok(())
 }
 
-fn file_options(entry: &JarInfo) -> Result<FullFileOptions<'static, 'static>> {
+fn file_options(entry: &JarInfo, byte_len: usize) -> Result<FullFileOptions<'static, 'static>> {
     let mut options = FullFileOptions::default()
         .compression_method(entry.metadata.compression_method)
         .last_modified_time(entry.metadata.last_modified)
-        .system(entry.metadata.system);
+        .system(entry.metadata.system)
+        .large_file(byte_len > u32::MAX as usize);
     if let Some(unix_mode) = entry.metadata.unix_mode {
         options = options.unix_permissions(unix_mode);
     }
@@ -621,6 +674,11 @@ fn copy_extra_data(
                 "archive entry extra data is truncated",
             )));
         }
+        if header_id == 0x0001 {
+            // ZIP64 extended information extra field is regenerated by ZipWriter.
+            offset = value_end;
+            continue;
+        }
         options
             .add_extra_field(header_id, &extra_data[value_start..value_end], false)
             .map_err(ArchiveError::Zip)?;
@@ -633,10 +691,13 @@ fn normalize_filename(filename: &str, force_dir: bool) -> Result<String> {
     if filename.is_empty() {
         return Err(ArchiveError::EmptyFilename);
     }
-    if Path::new(filename).is_absolute()
-        || filename.starts_with('/')
+    if filename.contains('\0') {
+        return Err(ArchiveError::InvalidFilename(filename.to_owned()));
+    }
+    if filename.starts_with('/')
         || filename.starts_with('\\')
-        || filename.as_bytes().get(1) == Some(&b':')
+        || (filename.as_bytes().get(1) == Some(&b':')
+            && filename.as_bytes()[0].is_ascii_alphabetic())
     {
         return Err(ArchiveError::AbsolutePath(filename.to_owned()));
     }
@@ -654,20 +715,16 @@ fn normalize_filename(filename: &str, force_dir: bool) -> Result<String> {
     if parts.is_empty() {
         return Err(ArchiveError::EmptyFilename);
     }
-    let mut normalized = parts.join(std::path::MAIN_SEPARATOR_STR);
+    if parts[0].as_bytes().get(1) == Some(&b':') && parts[0].as_bytes()[0].is_ascii_alphabetic() {
+        return Err(ArchiveError::AbsolutePath(filename.to_owned()));
+    }
+    let mut normalized = parts.join("/");
     if force_dir || filename.ends_with('/') || filename.ends_with('\\') {
-        normalized.push(std::path::MAIN_SEPARATOR);
+        normalized.push('/');
     }
     Ok(normalized)
 }
 
 fn archive_name(filename: &str) -> String {
-    let is_dir = filename.ends_with(std::path::MAIN_SEPARATOR);
-    let stripped = filename.trim_end_matches(std::path::MAIN_SEPARATOR);
-    let archive_name = stripped.replace('\\', "/");
-    if is_dir {
-        format!("{archive_name}/")
-    } else {
-        archive_name
-    }
+    filename.replace('\\', "/")
 }

@@ -62,8 +62,12 @@ class CompiledRule:
 def patch_jar(jar_path: str | Path, output_path: str | Path, rules_path: str | Path) -> dict[str, object]:
     plan = _load_patch_plan(rules_path)
     jar = JarFile(jar_path)
-    class_entries = sum(1 for jar_info in jar.files.values() if jar_info.filename.endswith(".class"))
-    resource_entries = sum(1 for jar_info in jar.files.values() if not jar_info.filename.endswith(".class"))
+    class_entries = sum(
+        1 for jar_info in jar.files.values() if not jar_info.is_dir and jar_info.filename.endswith(".class")
+    )
+    resource_entries = sum(
+        1 for jar_info in jar.files.values() if not jar_info.is_dir and not jar_info.filename.endswith(".class")
+    )
 
     compiled_rules = [_compile_rule(index, rule) for index, rule in enumerate(plan["rules"])]
     rule_reports = [
@@ -82,7 +86,7 @@ def patch_jar(jar_path: str | Path, output_path: str | Path, rules_path: str | P
     debug_info = plan["options"].debug_info
 
     for jar_info in list(jar.files.values()):
-        if not jar_info.filename.endswith(".class"):
+        if jar_info.is_dir or not jar_info.filename.endswith(".class"):
             continue
 
         model = ClassModel.from_bytes(jar_info.bytes)
@@ -383,7 +387,7 @@ def _build_replacement_items(items: list[object]) -> list[object]:
                     _lookup_label(labels, _require_str(item, "target")),
                 )
             )
-        elif item_type == "lookupswitch":
+        elif item_type in {"lookup-switch", "lookupswitch"}:
             pairs = []
             for raw_pair in _require_list(item.get("pairs"), "lookupswitch pairs"):
                 pair = _require_object(raw_pair, "lookupswitch pair")
@@ -394,7 +398,7 @@ def _build_replacement_items(items: list[object]) -> list[object]:
                     pairs,
                 )
             )
-        elif item_type == "tableswitch":
+        elif item_type in {"table-switch", "tableswitch"}:
             low = _require_int(item, "low")
             high = _require_int(item, "high")
             targets = [
@@ -601,10 +605,9 @@ def _apply_code_action(
     matcher: dict[str, object],
     action: CompiledCodeAction,
 ) -> tuple[int, int]:
-    matched = 0
-    changed = 0
+    targets: list[tuple[str, str, int]] = []
 
-    for method in list(model.methods):
+    for method in model.methods:
         if not _method_matches(method, matcher):
             continue
         code = method.code
@@ -617,13 +620,17 @@ def _apply_code_action(
             assert action.pattern is not None
             target_matches = len(code.find_sequences(action.pattern))
 
-        if target_matches == 0:
-            continue
+        if target_matches > 0:
+            targets.append((method.name, method.descriptor, target_matches))
 
+    matched = 0
+    changed = 0
+    owner_matcher = class_named(model.name)
+    for method_name, method_descriptor, target_matches in targets:
         PipelineBuilder().on_code(
-            MethodMatcher.named(method.name) & MethodMatcher.descriptor(method.descriptor),
+            MethodMatcher.named(method_name) & MethodMatcher.descriptor(method_descriptor),
             action.transform,
-            owner_matcher=class_named(model.name),
+            owner_matcher=owner_matcher,
         ).apply(model)
         matched += target_matches
         changed += target_matches

@@ -29,6 +29,17 @@ impl JavaString {
     pub fn to_unicode(&self) -> std::result::Result<String, std::string::FromUtf16Error> {
         String::from_utf16(&self.0)
     }
+
+    /// Convert to a Rust `String`, replacing unpaired UTF-16 surrogates with U+FFFD.
+    pub fn to_string_lossy(&self) -> String {
+        String::from_utf16_lossy(&self.0)
+    }
+}
+
+impl std::fmt::Display for JavaString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_string_lossy())
+    }
 }
 
 impl From<&str> for JavaString {
@@ -49,6 +60,12 @@ impl PartialEq<str> for JavaString {
     }
 }
 
+impl PartialEq<&str> for JavaString {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
 impl PartialEq<String> for JavaString {
     fn eq(&self, other: &String) -> bool {
         self == other.as_str()
@@ -64,10 +81,28 @@ pub fn encode_modified_utf8(value: &str) -> Vec<u8> {
 }
 
 pub fn decode_modified_utf8(data: &[u8]) -> Result<String> {
-    let utf16_units = decode_modified_utf8_units(data)?;
+    let (utf16_units, offsets) = decode_modified_utf8_units_with_offsets(data)?;
     String::from_utf16(&utf16_units).map_err(|err| {
+        let mut bad_offset = data.len();
+        for (idx, &unit) in utf16_units.iter().enumerate() {
+            if (0xD800..=0xDBFF).contains(&unit) {
+                let next_is_low = utf16_units
+                    .get(idx + 1)
+                    .is_some_and(|next| (0xDC00..=0xDFFF).contains(next));
+                if !next_is_low {
+                    bad_offset = offsets[idx];
+                    break;
+                }
+            } else if (0xDC00..=0xDFFF).contains(&unit) {
+                let prev_is_high = idx > 0 && (0xD800..=0xDBFF).contains(&utf16_units[idx - 1]);
+                if !prev_is_high {
+                    bad_offset = offsets[idx];
+                    break;
+                }
+            }
+        }
         EngineError::new(
-            data.len(),
+            bad_offset,
             EngineErrorKind::InvalidModifiedUtf8 {
                 reason: format!("invalid UTF-16 surrogate sequence: {err}"),
             },
@@ -76,10 +111,16 @@ pub fn decode_modified_utf8(data: &[u8]) -> Result<String> {
 }
 
 fn decode_modified_utf8_units(data: &[u8]) -> Result<Vec<u16>> {
+    Ok(decode_modified_utf8_units_with_offsets(data)?.0)
+}
+
+fn decode_modified_utf8_units_with_offsets(data: &[u8]) -> Result<(Vec<u16>, Vec<usize>)> {
     let mut utf16_units = Vec::with_capacity(data.len());
+    let mut unit_offsets = Vec::with_capacity(data.len());
     let mut index = 0_usize;
 
     while index < data.len() {
+        let unit_offset = index;
         let first = data[index];
         let code_unit = if first == 0 {
             return Err(EngineError::new(
@@ -131,9 +172,17 @@ fn decode_modified_utf8_units(data: &[u8]) -> Result<Vec<u16>> {
             }
             let second = data[index + 1];
             let third = data[index + 2];
-            if second & 0xC0 != 0x80 || third & 0xC0 != 0x80 {
+            if second & 0xC0 != 0x80 {
                 return Err(EngineError::new(
-                    index,
+                    index + 1,
+                    EngineErrorKind::InvalidModifiedUtf8 {
+                        reason: "invalid continuation byte".to_owned(),
+                    },
+                ));
+            }
+            if third & 0xC0 != 0x80 {
+                return Err(EngineError::new(
+                    index + 2,
                     EngineErrorKind::InvalidModifiedUtf8 {
                         reason: "invalid continuation byte".to_owned(),
                     },
@@ -152,19 +201,34 @@ fn decode_modified_utf8_units(data: &[u8]) -> Result<Vec<u16>> {
             }
             index += 3;
             code_unit
-        } else {
+        } else if (0x80..=0xBF).contains(&first) {
+            return Err(EngineError::new(
+                index,
+                EngineErrorKind::InvalidModifiedUtf8 {
+                    reason: format!("unexpected continuation byte 0x{first:02x}"),
+                },
+            ));
+        } else if (0xF0..=0xF7).contains(&first) {
             return Err(EngineError::new(
                 index,
                 EngineErrorKind::InvalidModifiedUtf8 {
                     reason: "modified UTF-8 does not permit four-byte sequences".to_owned(),
                 },
             ));
+        } else {
+            return Err(EngineError::new(
+                index,
+                EngineErrorKind::InvalidModifiedUtf8 {
+                    reason: format!("invalid modified UTF-8 lead byte 0x{first:02x}"),
+                },
+            ));
         };
 
         utf16_units.push(code_unit);
+        unit_offsets.push(unit_offset);
     }
 
-    Ok(utf16_units)
+    Ok((utf16_units, unit_offsets))
 }
 
 fn encode_code_unit(code_unit: u16, out: &mut Vec<u8>) {
