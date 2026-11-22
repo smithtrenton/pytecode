@@ -48,6 +48,33 @@ the modified-UTF-8 **encoded byte** limit of 65,535. Code bodies must contain
 limited to 128 parser levels. Array signatures are read iteratively up to 255
 dimensions. These are library resource limits, distinct from JVM type verification.
 
+## Exception-handler tables
+
+`CodeModel.exception_handlers` (Rust: `CodeModel::exception_handlers`) is the
+method's exception table in symbolic form: each `ExceptionHandler` covers the
+instructions from its `start` label up to (not including) its `end` label and
+jumps to its `handler` label, for exceptions assignable to `catch_type` (an internal
+class name, or `None` for a catch-all, as `finally` blocks compile to).
+
+Entries are immutable values, so edit the table by assigning a new list, the same
+pattern as `ClassModel.bootstrap_methods`:
+
+```python
+code.exception_handlers = [
+    ExceptionHandler(entry.start, entry.end, entry.handler, rename(entry.catch_type))
+    for entry in code.exception_handlers
+    if keep(entry)
+]
+```
+
+Rebuilt entries reuse the existing label objects, which must still occur in the
+instruction list (lowering rejects a handler anchored to a missing label). Order
+matters: the JVM uses the first entry whose range and type match. Deleting an entry
+can leave its handler code unreachable; with `FrameComputationMode.RECOMPUTE`
+(needed whenever the table changes in a method with StackMapTable frames) the
+unreachable code is normalized. Reassigning an unchanged table round-trips
+byte-for-byte.
+
 ## Constant-pool layout
 
 Lowering keeps a class's original constant pool by default

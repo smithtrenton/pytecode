@@ -265,7 +265,11 @@ impl PyLabel {
 // PyModelExceptionHandler & debug entries
 // ---------------------------------------------------------------------------
 
-/// Symbolic exception handler range in a ``CodeModel``.
+/// One exception-table entry: ``[start, end)`` jumps to ``handler`` for ``catch_type``.
+///
+/// ``catch_type`` is an internal class name, or ``None`` for a catch-all.
+/// Entries are immutable; edit a table by assigning a new list to
+/// ``CodeModel.exception_handlers``.
 #[pyclass(from_py_object, name = "ExceptionHandler", module = "pytecode._rust")]
 #[derive(Clone)]
 pub struct PyModelExceptionHandler {
@@ -3107,7 +3111,12 @@ impl PyCodeModel {
         })
     }
 
-    /// Live view of symbolic exception handlers.
+    /// Live view of the exception table, in JVM lookup order.
+    ///
+    /// Assign a list of ``ExceptionHandler`` entries to edit it: rebuild
+    /// entries from the existing labels to change a catch type (``None`` for
+    /// a catch-all), and filter the list to delete entries. Labels must occur
+    /// in ``instructions``.
     #[getter]
     fn exception_handlers(&self) -> PyCodeListView {
         PyCodeListView {

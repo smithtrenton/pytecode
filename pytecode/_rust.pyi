@@ -738,6 +738,13 @@ class Label:
     def __hash__(self) -> int: ...
 
 class ExceptionHandler:
+    """One exception-table entry: ``[start, end)`` jumps to ``handler`` for ``catch_type``.
+
+    ``catch_type`` is an internal class name, or ``None`` for a catch-all.
+    Entries are immutable; edit a table by assigning a new list to
+    ``CodeModel.exception_handlers``.
+    """
+
     def __init__(self, start: Label, end: Label, handler: Label, catch_type: str | None = None) -> None: ...
     @property
     def start(self) -> Label: ...
@@ -1149,7 +1156,14 @@ class CodeModel:
     @instructions.setter
     def instructions(self, items: Iterable[CodeItem | LegacyCodeItem]) -> None: ...
     @property
-    def exception_handlers(self) -> CodeListView: ...
+    def exception_handlers(self) -> CodeListView:
+        """Live view of the exception table, in JVM lookup order.
+
+        Assign a list of ``ExceptionHandler`` entries to edit it: rebuild
+        entries from the existing labels to change a catch type (``None`` for
+        a catch-all), and filter the list to delete entries. Labels must occur
+        in ``instructions``.
+        """
     @exception_handlers.setter
     def exception_handlers(self, items: Iterable[ExceptionHandler]) -> None: ...
     @property
