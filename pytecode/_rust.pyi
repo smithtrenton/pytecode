@@ -830,6 +830,8 @@ class BootstrapArgument:
     def dynamic(bootstrap_method_attr_index: int, name: str, descriptor: str) -> BootstrapArgument: ...
     @staticmethod
     def from_method_handle(value: MethodHandleValue) -> BootstrapArgument: ...
+    @staticmethod
+    def from_dynamic(value: DynamicValue) -> BootstrapArgument: ...
     @property
     def value_type(self) -> str:
         """Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.)."""
@@ -863,7 +865,15 @@ class DynamicValue:
     @property
     def name(self) -> str: ...
     @property
-    def descriptor(self) -> str: ...
+    def descriptor(self) -> str:
+        """Field descriptor of the resolved dynamic constant.
+
+        Writable: assigning edits this detached value (``ValueError`` unless it
+        is a field descriptor); write it back with ``LdcInsn.from_dynamic`` or
+        ``BootstrapArgument.from_dynamic``.
+        """
+    @descriptor.setter
+    def descriptor(self, value: str) -> None: ...
 
 class RawInsn:
     def __init__(self, opcode: int) -> None: ...
@@ -995,6 +1005,8 @@ class LdcInsn:
     ) -> LdcInsn: ...
     @staticmethod
     def dynamic(bootstrap_method_attr_index: int, name: str, descriptor: str) -> LdcInsn: ...
+    @staticmethod
+    def from_dynamic(value: DynamicValue) -> LdcInsn: ...
     @property
     def kind(self) -> str: ...
     @property
@@ -1011,7 +1023,18 @@ class InvokeDynamicInsn:
     @property
     def name(self) -> str: ...
     @property
-    def descriptor(self) -> str: ...
+    def descriptor(self) -> str:
+        """Call-site method descriptor.
+
+        Writable: assigning edits this detached instruction (``ValueError``
+        unless it is a method descriptor), which takes effect once it is
+        written back (``code.instructions = items`` or a transform
+        replacement). Lowering re-encodes the call site under the same
+        bootstrap method, reusing the existing constant-pool entries when the
+        descriptor is unchanged.
+        """
+    @descriptor.setter
+    def descriptor(self, value: str) -> None: ...
 
 class MultiANewArrayInsn:
     def __init__(self, descriptor: str, dimensions: int) -> None: ...

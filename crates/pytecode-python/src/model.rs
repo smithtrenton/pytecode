@@ -8,6 +8,7 @@ use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PySlice, PyString};
 use pyo3::wrap_pyfunction;
 use pytecode_engine::analysis::{MappingClassResolver, ResolvedClass};
 use pytecode_engine::constants::ClassAccessFlags;
+use pytecode_engine::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
 use pytecode_engine::indexes::BootstrapMethodIndex;
 use pytecode_engine::model::{
     BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
@@ -586,9 +587,23 @@ impl PyDynamicValue {
     }
 
     /// Field descriptor of the resolved dynamic constant.
+    ///
+    /// Writable: assigning edits this detached value; write it back with
+    /// ``LdcInsn.from_dynamic`` or ``BootstrapArgument.from_dynamic``.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
+    }
+
+    #[setter]
+    fn set_descriptor(&mut self, value: String) -> PyResult<()> {
+        if !is_valid_field_descriptor(&value) {
+            return Err(PyValueError::new_err(format!(
+                "invalid dynamic constant descriptor {value:?}: expected a field descriptor"
+            )));
+        }
+        self.inner.descriptor = value;
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
@@ -1293,6 +1308,16 @@ impl PyLdcInsn {
         }
     }
 
+    /// Construct an ``ldc`` / ``ldc2_w`` loading an existing ``DynamicValue``.
+    #[staticmethod]
+    fn from_dynamic(value: &PyDynamicValue) -> Self {
+        Self {
+            inner: LdcInsn {
+                value: LdcValue::Dynamic(value.inner.clone()),
+            },
+        }
+    }
+
     /// Item discriminator tag (``"ldc"``).
     #[getter]
     fn kind(&self) -> &'static str {
@@ -1458,6 +1483,14 @@ impl PyBootstrapArgument {
         }
     }
 
+    /// Wrap an existing ``DynamicValue``.
+    #[staticmethod]
+    fn from_dynamic(value: &PyDynamicValue) -> Self {
+        Self {
+            inner: LdcValue::Dynamic(value.inner.clone()),
+        }
+    }
+
     /// Constant variant name (``"int"``, ``"float"``, ``"string"``, etc.).
     #[getter]
     fn value_type(&self) -> &'static str {
@@ -1602,9 +1635,28 @@ impl PyInvokeDynamicInsn {
     }
 
     /// Call-site method descriptor.
+    ///
+    /// Writable: assigning edits this detached instruction, which takes
+    /// effect once it is written back (``code.instructions = items`` or a
+    /// transform replacement). Lowering re-encodes the call site under the
+    /// same bootstrap method, reusing the existing constant-pool entries when
+    /// the descriptor is unchanged. Keep it in step with the methods the
+    /// bootstrap links to: a stale call-site descriptor is only detected when
+    /// the call site first links.
     #[getter]
     fn descriptor(&self) -> String {
         self.inner.descriptor.clone()
+    }
+
+    #[setter]
+    fn set_descriptor(&mut self, value: String) -> PyResult<()> {
+        if !is_valid_method_descriptor(&value) {
+            return Err(PyValueError::new_err(format!(
+                "invalid invokedynamic call-site descriptor {value:?}: expected a method descriptor"
+            )));
+        }
+        self.inner.descriptor = value;
+        Ok(())
     }
 
     fn __repr__(&self) -> String {

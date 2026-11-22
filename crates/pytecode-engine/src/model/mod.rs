@@ -3318,7 +3318,7 @@ fn ensure_preserve_mode_valid(
             "{attr_name} is present without lifted layout; use FrameComputationMode::Recompute to recompute frames"
         )));
     };
-    if code.instructions != original.instructions
+    if !same_code_items(&code.instructions, &original.instructions)
         || code.exception_handlers != original.exception_handlers
         || layout.item_offsets != original.item_offsets
         || layout.code_length != original.code_length
@@ -3331,6 +3331,21 @@ fn ensure_preserve_mode_valid(
         )));
     }
     Ok(())
+}
+
+/// Compare instruction sequences the way lowering sees them.
+///
+/// A raw instruction's recorded offset is ignored: lowering re-bases every raw
+/// instruction to its laid-out position, and instructions rebuilt outside the
+/// engine (for example, written back from Python) carry offset 0.
+fn same_code_items(left: &[CodeItem], right: &[CodeItem]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|pair| match pair {
+            (CodeItem::Raw(left), CodeItem::Raw(right)) => {
+                rebase_instruction(left, 0) == rebase_instruction(right, 0)
+            }
+            (left, right) => left == right,
+        })
 }
 
 fn first_frame_sensitive_attr_name(attributes: &[AttributeInfo]) -> Option<&str> {

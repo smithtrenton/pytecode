@@ -122,6 +122,35 @@ round-trip is byte-for-byte identical. `invokedynamic` instructions and dynamic
 constants address entries by position, so keep existing entries at their index.
 An empty list removes the attribute.
 
+### Call-site and dynamic-constant descriptors
+
+An `invokedynamic` call site's descriptor lives in its `CONSTANT_InvokeDynamic`
+entry, not in any method, and the JVM only resolves it when the call site first
+links. A rename that rewrites method descriptors therefore has to rewrite the
+call sites too, or the class loads and verifies but fails with a linkage error at
+the call site's first execution.
+
+`InvokeDynamicInsn.descriptor` is writable (Rust: the public `descriptor` field).
+Python instructions are detached values, so assign the descriptor on the items of
+`code.instructions.to_list()` and write the list back (`code.instructions =
+items`), or build a replacement with `InvokeDynamicInsn(index, name, descriptor)`.
+The setter rejects anything that is not a method descriptor. Lowering re-encodes
+the call site as a `NameAndType` under the same bootstrap method index, reusing
+existing constant-pool entries, so a call site whose descriptor is unchanged lowers
+to the same bytes. The default constant-pool layout keeps the old descriptor as an
+unreferenced entry; nothing refers to it.
+
+Dynamic constants (`CONSTANT_Dynamic`) are symmetric: `DynamicValue.descriptor` is
+writable (it must be a field descriptor), and `LdcInsn.from_dynamic` /
+`BootstrapArgument.from_dynamic` wrap an edited value back into an `ldc` or a
+bootstrap argument.
+
+Writing back an instruction list never counts as a code change by itself: in
+`FrameComputationMode.PRESERVE`, preserved StackMapTable frames stay valid as long
+as the instructions are equal, even though rebuilt raw instructions no longer carry
+their original offsets. A real change to an instruction in a method with frames
+still needs `RECOMPUTE`, as it does for any operand edit.
+
 ## Archive mutation and transactions
 
 Python `JarFile.files` and its `JarInfo` values are authoritative. Changes to bytes,

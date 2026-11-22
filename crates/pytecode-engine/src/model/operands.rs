@@ -50,6 +50,14 @@ pub struct MultiANewArrayInsn {
     pub dimensions: u8,
 }
 
+/// A symbolic `invokedynamic` call site.
+///
+/// Every field is editable. Lowering re-encodes the call site as a
+/// `CONSTANT_InvokeDynamic` over a `NameAndType` of `name` and `descriptor`,
+/// reusing existing constant-pool entries, so an unchanged call site lowers to
+/// the same pool index. The call-site `descriptor` is resolved when the call
+/// site first links, so keep it in step with the methods the bootstrap targets:
+/// a stale one is a linkage error at the first execution, not a load error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvokeDynamicInsn {
     pub bootstrap_method_attr_index: BootstrapMethodIndex,
@@ -83,6 +91,10 @@ pub struct MethodHandleValue {
     pub is_interface: bool,
 }
 
+/// A symbolic dynamic constant (`CONSTANT_Dynamic`).
+///
+/// Like [`InvokeDynamicInsn`], every field is editable and re-encoded through
+/// the constant pool on lowering; `descriptor` is a field descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicValue {
     pub bootstrap_method_attr_index: BootstrapMethodIndex,
