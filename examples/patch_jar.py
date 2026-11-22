@@ -311,6 +311,8 @@ def _build_insn_matcher(config: dict[str, object]) -> InsnMatcher:
         matchers.append(InsnMatcher.type_descriptor(_require_str(config, "type_descriptor")))
     if "ldc_string" in config:
         matchers.append(InsnMatcher.ldc_string(_require_str(config, "ldc_string")))
+    if "ldc_class" in config:
+        matchers.append(InsnMatcher.ldc_class(_require_str(config, "ldc_class")))
     if "var_slot" in config:
         matchers.append(InsnMatcher.var_slot(_require_int(config, "var_slot")))
     if "field_owner_matches" in config:
@@ -347,6 +349,8 @@ def _build_replacement_items(items: list[object]) -> list[object]:
             typed_items.append(labels[_require_str(item, "name")])
         elif item_type == "ldc-string":
             typed_items.append(LdcInsn.string(_require_str(item, "value")))
+        elif item_type == "ldc-class":
+            typed_items.append(LdcInsn.class_value(_require_str(item, "value")))
         elif item_type == "field":
             typed_items.append(
                 FieldInsn(

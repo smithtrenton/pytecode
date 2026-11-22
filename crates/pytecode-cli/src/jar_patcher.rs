@@ -335,6 +335,8 @@ struct CodeInsnMatcher {
     #[serde(default)]
     ldc_string: Option<String>,
     #[serde(default)]
+    ldc_class: Option<String>,
+    #[serde(default)]
     var_slot: Option<u16>,
     #[serde(default)]
     field_owner_matches: Option<String>,
@@ -354,6 +356,9 @@ enum CodeReplacementItem {
         name: String,
     },
     LdcString {
+        value: String,
+    },
+    LdcClass {
         value: String,
     },
     Field {
@@ -826,6 +831,9 @@ fn build_code_insn_matcher(config: &CodeInsnMatcher) -> CliResult<InsnMatcherSpe
     if let Some(value) = &config.ldc_string {
         matchers.push(InsnMatcherSpec::LdcString(value.clone()));
     }
+    if let Some(value) = &config.ldc_class {
+        matchers.push(InsnMatcherSpec::LdcClass(value.clone()));
+    }
     if let Some(slot) = config.var_slot {
         matchers.push(InsnMatcherSpec::VarSlot(slot));
     }
@@ -886,6 +894,9 @@ fn build_code_replacement_item(
         }
         CodeReplacementItem::LdcString { value } => CodeItem::Ldc(LdcInsn {
             value: LdcValue::String(value.clone().into()),
+        }),
+        CodeReplacementItem::LdcClass { value } => CodeItem::Ldc(LdcInsn {
+            value: LdcValue::Class(value.clone()),
         }),
         CodeReplacementItem::Field {
             opcode,

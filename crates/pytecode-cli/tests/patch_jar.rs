@@ -605,3 +605,82 @@ fn patch_jar_rejects_missing_replacement_labels() -> TestResult<()> {
     );
     Ok(())
 }
+
+#[test]
+fn patch_jar_rewrites_ldc_class_from_json() -> TestResult<()> {
+    let temp_dir = fresh_temp_dir("patch-jar-ldc-class");
+    let jar_path = temp_dir.join("input.jar");
+    let out_path = temp_dir.join("output.jar");
+    let rules_path = temp_dir.join("rules.json");
+    let class_bytes = fixture_bytes("ClassLiteral.java", "ClassLiteral.class");
+    make_jar(&jar_path, &[("ClassLiteral.class", &class_bytes)])?;
+
+    fs::write(
+        &rules_path,
+        serde_json::to_vec_pretty(&json!({
+            "rules": [
+                {
+                    "name": "rewrite-class-literal",
+                    "kind": "method",
+                    "owner": {
+                        "name": "ClassLiteral"
+                    },
+                    "matcher": {
+                        "name": "token",
+                        "has_code": true
+                    },
+                    "code_actions": [
+                        {
+                            "type": "replace-sequence",
+                            "pattern": [
+                                {
+                                    "ldc_class": "ClassLiteral"
+                                }
+                            ],
+                            "replacement": [
+                                {
+                                    "type": "ldc-class",
+                                    "value": "PatchedTarget"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }))?,
+    )?;
+
+    let report = patch_jar(&jar_path, &out_path, &rules_path)?;
+    assert_eq!(report.rules.len(), 1);
+    assert_eq!(report.rules[0].matched_classes, 1);
+    assert_eq!(report.rules[0].changed_classes, 1);
+    assert_eq!(report.rules[0].matched_targets, 1);
+    assert_eq!(report.rules[0].changed_targets, 1);
+
+    let rewritten = JarFile::open(&out_path)?;
+    let class_entry = rewritten
+        .entries
+        .iter()
+        .find(|entry| entry.filename == "ClassLiteral.class")
+        .expect("rewritten class should exist");
+    let model = ClassModel::from_bytes(&class_entry.bytes)?;
+    let token = model
+        .methods
+        .iter()
+        .find(|method| method.name == "token")
+        .expect("token method should exist");
+    let code = token.code.as_ref().expect("token should have code");
+    assert!(code.instructions.iter().any(|item| {
+        matches!(
+            item,
+            CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == "PatchedTarget")
+        )
+    }));
+    assert!(!code.instructions.iter().any(|item| {
+        matches!(
+            item,
+            CodeItem::Ldc(insn) if matches!(&insn.value, LdcValue::Class(value) if value == "ClassLiteral")
+        )
+    }));
+    Ok(())
+}

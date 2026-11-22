@@ -9,6 +9,7 @@ import pytecode.analysis as analysis
 import pytecode.classfile as classfile_api
 import pytecode.classfile.attributes as attr_api
 import pytecode.model as model_api
+import pytecode.transforms as transforms_api
 from pytecode.analysis.hierarchy import (
     MappingClassResolver as HierarchyMappingClassResolver,
 )
@@ -520,3 +521,21 @@ def test_constant_pool_integer_and_long_helpers_are_signed() -> None:
 
     long_index = builder.add_long(-(2**40))
     assert builder.find_long(-(2**40)) == long_index
+
+
+def test_ldc_class_matcher_finds_class_literal(tmp_path: Path) -> None:
+    """InsnMatcher.ldc_class matches ldc class constants by internal name."""
+    class_paths = compile_java_resource_classes(tmp_path, "ClassLiteral.java")
+    model = pytecode.ClassModel.from_bytes(class_paths[0].read_bytes())
+    code = next(m.code for m in model.methods if m.name == "token")
+    assert code is not None
+
+    hits = code.find_insns(transforms_api.InsnMatcher.ldc_class("ClassLiteral"))
+    assert len(hits) == 1
+    item = code.instructions.to_list()[hits[0]]
+    assert isinstance(item, model_api.LdcInsn)
+    assert item.value_type == "class"
+    assert item.value == "ClassLiteral"
+
+    assert code.find_insns(transforms_api.InsnMatcher.ldc_class("Other")) == []
+    assert code.count_insns(transforms_api.InsnMatcher.is_ldc()) == 1

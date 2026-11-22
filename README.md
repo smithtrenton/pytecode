@@ -247,7 +247,7 @@ Example sequence rewrite inside `code_actions`:
 }
 ```
 
-Sequence patterns use matcher objects (`opcode`, `opcode_any`, `method_owner`, `method_name`, `method_descriptor`, `field_owner`, `field_name`, `field_descriptor`, `ldc_string`, `var_slot`, `type_descriptor`, and the `is_*` category flags). Replacement items support symbolic instructions like `raw`, `ldc-string`, `field`, `method`, `type`, `var`, and `iinc`, plus label-based control-flow items.
+Sequence patterns use matcher objects (`opcode`, `opcode_any`, `method_owner`, `method_name`, `method_descriptor`, `field_owner`, `field_name`, `field_descriptor`, `ldc_string`, `ldc_class`, `var_slot`, `type_descriptor`, and the `is_*` category flags). Replacement items support symbolic instructions like `raw`, `ldc-string`, `ldc-class`, `field`, `method`, `type`, `var`, and `iinc`, plus label-based control-flow items.
 
 Replacement items can also express symbolic control flow with `label`, `branch`, `lookup-switch`, and `table-switch`. Branch and switch targets must reference labels declared inside the same replacement block, so malformed control-flow edits fail fast during plan loading instead of producing broken classfiles.
 
