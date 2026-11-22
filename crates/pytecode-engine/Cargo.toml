@@ -1,6 +1,6 @@
 [package]
 name = "pytecode-engine"
-version = "0.2.1"
+version = "0.2.2"
 description = "Rust engine for parsing, editing, analyzing, and emitting JVM classfiles"
 edition.workspace = true
 rust-version.workspace = true
