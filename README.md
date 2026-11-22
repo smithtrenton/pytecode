@@ -371,7 +371,14 @@ attached.
 Release procedure:
 
 ```powershell
-# 1) bump project.version in pyproject.toml
+# 1) bump project.version in pyproject.toml and every crates/*/Cargo.toml,
+#    then refresh all three lockfiles (root Cargo.lock, uv.lock, and
+#    fuzz/Cargo.lock) — the CI, release, and fuzz workflows all verify
+#    them with --locked
+cargo update --workspace
+uv lock
+cargo metadata --manifest-path fuzz/Cargo.toml --format-version 1 > $null
+
 uv run ruff check .
 uv run ruff format --check .
 uv run basedpyright
@@ -383,7 +390,7 @@ cargo test --workspace
 
 git commit -am "Bump version to X.Y.Z"
 git push origin master
-git tag vX.Y.Z
+git tag -a vX.Y.Z -m "pytecode X.Y.Z"
 git push origin vX.Y.Z
 ```
 
