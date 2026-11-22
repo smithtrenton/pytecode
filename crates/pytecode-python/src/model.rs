@@ -11,11 +11,12 @@ use pytecode_engine::constants::ClassAccessFlags;
 use pytecode_engine::descriptors::{is_valid_field_descriptor, is_valid_method_descriptor};
 use pytecode_engine::indexes::BootstrapMethodIndex;
 use pytecode_engine::model::{
-    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, DebugInfoPolicy,
-    DebugInfoState, DynamicValue, ExceptionHandler, FieldInsn, FieldModel, FrameComputationMode,
-    IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn, Label, LdcInsn, LdcValue, LineNumberEntry,
-    LocalVariableEntry, LocalVariableTypeEntry, LookupSwitchInsn, MethodHandleValue, MethodInsn,
-    MethodModel, MultiANewArrayInsn, TableSwitchInsn, TypeInsn, VarInsn,
+    BranchInsn, ClassModel, CodeItem, CodeModel, ConstantPoolBuilder, ConstantPoolPolicy,
+    DebugInfoPolicy, DebugInfoState, DynamicValue, ExceptionHandler, FieldInsn, FieldModel,
+    FrameComputationMode, IIncInsn, InterfaceMethodInsn, InvokeDynamicInsn, Label, LdcInsn,
+    LdcValue, LineNumberEntry, LocalVariableEntry, LocalVariableTypeEntry, LookupSwitchInsn,
+    MethodHandleValue, MethodInsn, MethodModel, MultiANewArrayInsn, TableSwitchInsn, TypeInsn,
+    VarInsn,
 };
 use pytecode_engine::parse_class;
 use pytecode_engine::raw::{ArrayType, ClassFile, Instruction, NewArrayInsn};
@@ -4075,6 +4076,33 @@ pub(crate) fn parse_frame_computation_mode(
     }
 }
 
+pub(crate) fn parse_constant_pool_policy(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<ConstantPoolPolicy> {
+    static POLICY_ENUM: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let Some(obj) = value else {
+        return Ok(ConstantPoolPolicy::Preserve);
+    };
+    let s = if let Ok(raw) = obj.extract::<String>() {
+        raw
+    } else {
+        let enum_cls = cached_archive_policy_type(&POLICY_ENUM, obj.py(), "ConstantPoolPolicy")?;
+        if !obj.is_instance(enum_cls.bind(obj.py()))? {
+            return Err(PyTypeError::new_err(
+                "constant_pool must be a pytecode.archive.ConstantPoolPolicy or 'preserve'/'canonical'",
+            ));
+        }
+        obj.getattr("value")?.extract::<String>()?
+    };
+    match s.as_str() {
+        "preserve" => Ok(ConstantPoolPolicy::Preserve),
+        "canonical" => Ok(ConstantPoolPolicy::Canonical),
+        _ => Err(PyValueError::new_err(format!(
+            "invalid constant pool policy: {s:?}, expected \"preserve\" or \"canonical\""
+        ))),
+    }
+}
+
 /// Emit one ``pytecode.model.FrameComputationWarning`` per method whose
 /// recomputed frames are likely to fail JVM verification.
 pub(crate) fn emit_frame_warnings(
@@ -4101,10 +4129,12 @@ fn lower_class_model_bytes(
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn pytecode_engine::analysis::ClassResolver>,
+    pool: ConstantPoolPolicy,
 ) -> PyResult<Vec<u8>> {
     if debug_info == DebugInfoPolicy::Preserve
         && frame_mode == FrameComputationMode::Preserve
         && resolver.is_none()
+        && pool == ConstantPoolPolicy::Preserve
     {
         return with_live_model(&model.state, |model_state| {
             model_state
@@ -4117,7 +4147,7 @@ fn lower_class_model_bytes(
     }
 
     write_class(&lower_class_model(
-        py, model, debug_info, frame_mode, resolver,
+        py, model, debug_info, frame_mode, resolver, pool,
     )?)
     .map_err(crate::engine_error_to_py)
 }
@@ -4128,13 +4158,14 @@ fn lower_class_model(
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     resolver: Option<&dyn pytecode_engine::analysis::ClassResolver>,
+    pool: ConstantPoolPolicy,
 ) -> PyResult<ClassFile> {
     let (classfile, warnings) = with_live_model(&model.state, |model_state| {
         model_state
             .inner
             .as_ref()
             .unwrap()
-            .to_classfile_with_report(debug_info, frame_mode, resolver)
+            .to_classfile_with_pool_policy(debug_info, frame_mode, resolver, pool)
             .map_err(crate::engine_error_to_py)
     })?;
     emit_frame_warnings(py, &warnings)?;
@@ -4143,15 +4174,17 @@ fn lower_class_model(
 
 /// Lower an iterable of ``ClassModel`` objects into raw ``ClassFile`` structures.
 #[pyfunction]
-#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None, constant_pool = None))]
 fn rust_lower_classmodels(
     py: Python<'_>,
     models: &Bound<'_, PyAny>,
     frame_mode: Option<&Bound<'_, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: Option<&Bound<'_, PyAny>>,
+    constant_pool: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyClassFile>> {
     let policy = parse_debug_info_policy(debug_info)?;
+    let pool = parse_constant_pool_policy(constant_pool)?;
     let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
@@ -4160,7 +4193,9 @@ fn rust_lower_classmodels(
     for item in models.try_iter()? {
         let model: PyRef<'_, PyClassModel> = item?.extract()?;
         out.push(PyClassFile {
-            inner: Arc::new(lower_class_model(py, &model, policy, frame_mode, resolver)?),
+            inner: Arc::new(lower_class_model(
+                py, &model, policy, frame_mode, resolver, pool,
+            )?),
         });
     }
     Ok(out)
@@ -4168,15 +4203,17 @@ fn rust_lower_classmodels(
 
 /// Lower an iterable of ``ClassModel`` objects directly into serialized classfile ``bytes``.
 #[pyfunction]
-#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None))]
+#[pyo3(signature = (models, frame_mode = None, resolver = None, debug_info = None, constant_pool = None))]
 fn rust_lower_classmodels_to_bytes<'py>(
     py: Python<'py>,
     models: &Bound<'py, PyAny>,
     frame_mode: Option<&Bound<'py, PyAny>>,
     resolver: Option<&PyMappingClassResolver>,
     debug_info: Option<&Bound<'py, PyAny>>,
+    constant_pool: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Vec<Py<PyBytes>>> {
     let policy = parse_debug_info_policy(debug_info)?;
+    let pool = parse_constant_pool_policy(constant_pool)?;
     let frame_mode = parse_frame_computation_mode(frame_mode)?;
     let resolver =
         resolver.map(|value| &value.inner as &dyn pytecode_engine::analysis::ClassResolver);
@@ -4184,7 +4221,7 @@ fn rust_lower_classmodels_to_bytes<'py>(
     let mut out = Vec::new();
     for item in models.try_iter()? {
         let model: PyRef<'_, PyClassModel> = item?.extract()?;
-        let bytes = lower_class_model_bytes(py, &model, policy, frame_mode, resolver)?;
+        let bytes = lower_class_model_bytes(py, &model, policy, frame_mode, resolver, pool)?;
         out.push(PyBytes::new(py, &bytes).unbind());
     }
     Ok(out)
@@ -4344,6 +4381,7 @@ impl PyClassModel {
             DebugInfoPolicy::Preserve,
             FrameComputationMode::Preserve,
             None,
+            ConstantPoolPolicy::Preserve,
         )?;
         Ok(PyBytes::new(py, &bytes).unbind())
     }
@@ -4357,42 +4395,48 @@ impl PyClassModel {
                 DebugInfoPolicy::Preserve,
                 FrameComputationMode::Preserve,
                 None,
+                ConstantPoolPolicy::Preserve,
             )?),
         })
     }
 
-    /// Lower the model to bytes with explicit frame and debug-info options.
-    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None))]
+    /// Lower the model to bytes with explicit frame, debug-info, and constant-pool options.
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None, constant_pool = None))]
     fn to_bytes_with_options<'py>(
         &self,
         py: Python<'py>,
         frame_mode: Option<&Bound<'py, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
         debug_info: Option<&Bound<'py, PyAny>>,
+        constant_pool: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Py<PyBytes>> {
         let policy = parse_debug_info_policy(debug_info)?;
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
+        let pool = parse_constant_pool_policy(constant_pool)?;
         let bytes = lower_class_model_bytes(
             py,
             self,
             policy,
             frame_mode,
             resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+            pool,
         )?;
         Ok(PyBytes::new(py, &bytes).unbind())
     }
 
     /// Lower the model to a raw ``ClassFile`` object with explicit lowering options.
-    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None))]
+    #[pyo3(signature = (frame_mode = None, resolver = None, debug_info = None, constant_pool = None))]
     fn to_classfile_with_options(
         &self,
         py: Python<'_>,
         frame_mode: Option<&Bound<'_, PyAny>>,
         resolver: Option<&PyMappingClassResolver>,
         debug_info: Option<&Bound<'_, PyAny>>,
+        constant_pool: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyClassFile> {
         let policy = parse_debug_info_policy(debug_info)?;
         let frame_mode = parse_frame_computation_mode(frame_mode)?;
+        let pool = parse_constant_pool_policy(constant_pool)?;
         Ok(PyClassFile {
             inner: Arc::new(lower_class_model(
                 py,
@@ -4400,6 +4444,7 @@ impl PyClassModel {
                 policy,
                 frame_mode,
                 resolver.map(|r| &r.inner as &dyn pytecode_engine::analysis::ClassResolver),
+                pool,
             )?),
         })
     }

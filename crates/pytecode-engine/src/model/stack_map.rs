@@ -226,7 +226,7 @@ fn verification_type_size(vtype: &VerificationTypeInfo) -> u32 {
     }
 }
 
-fn stack_map_table_length(entries: &[StackMapFrameInfo]) -> u32 {
+pub(super) fn stack_map_table_length(entries: &[StackMapFrameInfo]) -> u32 {
     let mut len = 2_u32;
     for entry in entries {
         len = len.saturating_add(match entry {

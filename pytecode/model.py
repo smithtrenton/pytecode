@@ -26,6 +26,27 @@ class FrameComputationMode(Enum):
     RECOMPUTE = "recompute"
 
 
+class ConstantPoolPolicy(Enum):
+    """Policy controlling how lowering lays out the constant pool.
+
+    ``PRESERVE`` (the default) keeps the class's original pool and appends what
+    edits need, so unchanged classes round-trip byte-for-byte.
+
+    ``CANONICAL`` rebuilds the pool from the entries the class references,
+    deduplicated and ordered by content, so classes with identical content
+    lower to identical bytes however their pools were built (different edit
+    orders, or an obfuscator shuffling the pool per build). It also settles
+    what the pool layout decides: ``ldc`` versus ``ldc_w``, and the offsets of
+    preserved stack map frames, which are relocated and written in their most
+    compact form. The order of fields, methods, attributes, and instructions
+    is content and out of scope. Classes with attributes pytecode does not
+    parse are rejected, since their payloads may hold pool indices.
+    """
+
+    PRESERVE = "preserve"
+    CANONICAL = "canonical"
+
+
 class FrameComputationWarning(UserWarning):
     """Recomputed stack map frames are likely to fail JVM verification.
 
@@ -94,6 +115,7 @@ __all__ = [
     "CodeListView",
     "CodeModel",
     "ConstantPoolBuilder",
+    "ConstantPoolPolicy",
     "DebugInfoPolicy",
     "DynamicValue",
     "ExceptionHandler",

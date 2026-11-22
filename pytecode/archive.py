@@ -14,6 +14,7 @@ from . import _rust
 from .classfile import ClassReader
 from .model import (
     ClassModel,
+    ConstantPoolPolicy,
     DebugInfoPolicy,
     FrameComputationMode,
     FrameComputationWarning,
@@ -21,6 +22,7 @@ from .model import (
 )
 
 __all__ = [
+    "ConstantPoolPolicy",
     "DebugInfoPolicy",
     "FrameComputationMode",
     "FrameComputationWarning",

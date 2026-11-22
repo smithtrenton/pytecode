@@ -48,6 +48,45 @@ the modified-UTF-8 **encoded byte** limit of 65,535. Code bodies must contain
 limited to 128 parser levels. Array signatures are read iteratively up to 255
 dimensions. These are library resource limits, distinct from JVM type verification.
 
+## Constant-pool layout
+
+Lowering keeps a class's original constant pool by default
+(`ConstantPoolPolicy.PRESERVE`) and appends whatever an edit needs. That is what
+makes an unchanged class round-trip byte-for-byte, but it also makes the pool a
+record of the class's history: unreferenced entries left by earlier edits stay, and
+two classes with identical content but differently built pools (edits applied in a
+different order, or an obfuscator that shuffles the pool on every build) lower to
+different bytes.
+
+`constant_pool=ConstantPoolPolicy.CANONICAL` (on `to_bytes_with_options`,
+`to_classfile_with_options`, and the `rust_lower_classmodels*` functions; Rust:
+`ClassModel::to_bytes_with_pool_policy` / `to_classfile_with_pool_policy`, or
+`canonicalize_constant_pool` on a `ClassFile`) emits a pool that depends only on
+the class's content:
+
+- Only entries the class references are kept, transitively (a `Class` keeps its
+  `Utf8`, a member reference its `NameAndType`, a method handle its member
+  reference), and equal constants are merged.
+- Entries are ordered by resolved content, never by index: constants loaded by
+  `ldc`/`ldc_w` first, so they get the indices a narrow `ldc` can address, then
+  everything else; within each group by entry kind, then by value.
+- What the layout decides is settled the same way: every `ldc` whose constant
+  fits a one-byte index is narrow, and preserved StackMapTable frames are moved to
+  the resulting instruction offsets and written in their most compact form.
+
+Ordering of fields, methods, attributes, interfaces, and instructions is out of
+scope: it is part of the class's content and is emitted as-is. Two classes that
+differ only in member order still lower to different bytes.
+
+Canonical lowering runs the normal lowering first (frames, debug-info policy, and
+warnings apply as usual), then re-lifts that result and lowers it again against the
+canonical pool, so it costs roughly two extra lift/lower passes per class. It
+refuses classes carrying an attribute pytecode does not parse (for example the
+CLDC `StackMap` attribute), since their payloads may hold constant-pool indices it
+cannot remap; strip such attributes first or keep the default. Code that the
+default policy cannot lower with preserved frames fails the same way in canonical
+mode.
+
 ## Frame recomputation
 
 Frame recomputation tracks constructor initialization independently of local

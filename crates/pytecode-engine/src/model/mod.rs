@@ -1,6 +1,7 @@
 mod stack_map;
 use stack_map::lower_stack_map_table;
 
+mod canonical_pool;
 mod constant_pool_builder;
 mod debug_info;
 mod labels;
@@ -10,6 +11,7 @@ use crate::analysis::{
     ClassResolver, FrameComputationResult, FrameWarning, StackMapFrameState, VType,
     initial_method_locals, recompute_and_normalize_code,
 };
+pub use canonical_pool::{ConstantPoolPolicy, canonicalize_constant_pool};
 pub use constant_pool_builder::ConstantPoolBuilder;
 pub use debug_info::{DebugInfoPolicy, DebugInfoState};
 pub use labels::{
@@ -843,6 +845,44 @@ impl ClassModel {
     ) -> Result<(Vec<u8>, Vec<FrameWarning>)> {
         let (classfile, warnings) =
             self.to_classfile_with_report(debug_info, frame_mode, resolver)?;
+        Ok((write_class(&classfile)?, warnings))
+    }
+
+    /// Lower like [`Self::to_classfile_with_report`] with an explicit
+    /// constant-pool layout.
+    ///
+    /// [`ConstantPoolPolicy::Preserve`] is exactly
+    /// [`Self::to_classfile_with_report`]. [`ConstantPoolPolicy::Canonical`]
+    /// lowers the same way, then rebuilds the pool in canonical order (see
+    /// [`canonicalize_constant_pool`]), so classes with identical content
+    /// lower to identical bytes however their pools were built.
+    pub fn to_classfile_with_pool_policy(
+        &self,
+        debug_info: DebugInfoPolicy,
+        frame_mode: FrameComputationMode,
+        resolver: Option<&dyn ClassResolver>,
+        pool: ConstantPoolPolicy,
+    ) -> Result<(ClassFile, Vec<FrameWarning>)> {
+        let (classfile, warnings) =
+            self.to_classfile_with_report(debug_info, frame_mode, resolver)?;
+        match pool {
+            ConstantPoolPolicy::Preserve => Ok((classfile, warnings)),
+            ConstantPoolPolicy::Canonical => {
+                Ok((canonicalize_constant_pool(&classfile)?, warnings))
+            }
+        }
+    }
+
+    /// Serialize like [`Self::to_classfile_with_pool_policy`].
+    pub fn to_bytes_with_pool_policy(
+        &self,
+        debug_info: DebugInfoPolicy,
+        frame_mode: FrameComputationMode,
+        resolver: Option<&dyn ClassResolver>,
+        pool: ConstantPoolPolicy,
+    ) -> Result<(Vec<u8>, Vec<FrameWarning>)> {
+        let (classfile, warnings) =
+            self.to_classfile_with_pool_policy(debug_info, frame_mode, resolver, pool)?;
         Ok((write_class(&classfile)?, warnings))
     }
 

@@ -9,9 +9,9 @@ use pytecode_engine::analysis::{Severity, verify_classfile};
 use pytecode_engine::constants::{ClassAccessFlags, MethodAccessFlags};
 use pytecode_engine::fixtures::compiled_fixture_paths_for;
 use pytecode_engine::model::{
-    BootstrapMethodModel, ClassModel, CodeItem, CodeModel, DebugInfoPolicy, DebugInfoState,
-    DynamicValue, FrameComputationMode, InvokeDynamicInsn, LdcInsn, LdcValue, MethodHandleValue,
-    MethodModel,
+    BootstrapMethodModel, ClassModel, CodeItem, CodeModel, ConstantPoolPolicy, DebugInfoPolicy,
+    DebugInfoState, DynamicValue, FrameComputationMode, InvokeDynamicInsn, LdcInsn, LdcValue,
+    MethodHandleValue, MethodModel,
 };
 use pytecode_engine::parse_class;
 use pytecode_engine::raw::{AttributeInfo, ConstantPoolEntry, Instruction};
@@ -247,6 +247,27 @@ fn a_class_named_only_by_a_call_site_descriptor_can_be_renamed() {
     );
     assert!(
         utf8_entries(&bytes)
+            .iter()
+            .any(|value| value.contains("t/Old"))
+    );
+
+    // The canonical layout keeps referenced entries only: the old name is
+    // gone from the class entirely.
+    let (canonical, _) = model
+        .to_bytes_with_pool_policy(
+            DebugInfoPolicy::Preserve,
+            FrameComputationMode::Recompute,
+            None,
+            ConstantPoolPolicy::Canonical,
+        )
+        .unwrap();
+    assert_structurally_clean(&canonical);
+    assert_eq!(
+        linked_call_site_descriptors(&canonical),
+        ["(Lt/New;)Ljava/lang/Runnable;"]
+    );
+    assert!(
+        !utf8_entries(&canonical)
             .iter()
             .any(|value| value.contains("t/Old"))
     );

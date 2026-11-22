@@ -62,6 +62,7 @@ Public options that matter:
 | `frame_mode=FrameComputationMode.RECOMPUTE` | lower phase | recompute `max_stack`, `max_locals`, and `StackMapTable` |
 | `resolver=...` | lower phase | supply hierarchy information for frame computation |
 | `debug_info="preserve"` / `"strip"` | lower phase | preserve or strip debug metadata during emission |
+| `constant_pool=ConstantPoolPolicy.CANONICAL` | lower phase | emit a content-ordered constant pool, so identical classes lower to identical bytes |
 
 ## Transform system
 

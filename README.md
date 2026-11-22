@@ -73,6 +73,8 @@ Path("HelloWorld-updated.class").write_bytes(updated_bytes)
 
 Import `FrameComputationMode` and `DebugInfoPolicy` from `pytecode.model` (or re-exported in `pytecode.archive`), and use `to_bytes_with_options(frame_mode=FrameComputationMode.RECOMPUTE)` when an edit changes control flow or stack/local layout.
 
+Lowering keeps the original constant pool by default, so unchanged classes round-trip byte-for-byte. Pass `constant_pool=ConstantPoolPolicy.CANONICAL` to emit a pool ordered by content instead: classes with identical content then lower to identical bytes, however their pools were built. See [constant-pool layout](docs/project/compatibility-and-limits.md#constant-pool-layout).
+
 Recomputation merges reference types at control-flow joins. Pass `resolver=MappingClassResolver.from_bytes(...)` (from `pytecode.analysis`) with the classes you have for the most precise frames; a partial resolver, or none, still works: missing classes never abort, and merges are inferred from how the code uses the merged values. Anything that stays imprecise enough to fail JVM verification emits a `FrameComputationWarning` naming the method and the classes to add. See [frame recomputation](docs/project/compatibility-and-limits.md#hierarchy-at-join-points).
 
 `ClassModel.bootstrap_methods` reads and rewrites the `BootstrapMethods` attribute (bootstrap method handles and their static arguments), which renames must update along with the instructions. `invokedynamic` call-site descriptors are writable too (`InvokeDynamicInsn.descriptor`, and `DynamicValue.descriptor` for dynamic constants); see [call-site descriptors](docs/project/compatibility-and-limits.md#call-site-and-dynamic-constant-descriptors).

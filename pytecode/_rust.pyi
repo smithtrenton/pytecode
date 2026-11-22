@@ -20,7 +20,7 @@ from .classfile.constants import (
     TypePathKind,
     VerificationType,
 )
-from .model import DebugInfoPolicy, FrameComputationMode
+from .model import ConstantPoolPolicy, DebugInfoPolicy, FrameComputationMode
 
 class _RustResolvedMethodData(TypedDict):
     name: str
@@ -1441,14 +1441,21 @@ class ClassModel:
         frame_mode: FrameComputationMode | str | None = None,
         resolver: MappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str | None = None,
+        constant_pool: ConstantPoolPolicy | str | None = None,
     ) -> bytes:
-        """Lower the model to bytes with explicit frame and debug-info options."""
+        """Lower the model to bytes with explicit frame, debug-info, and constant-pool options.
+
+        ``constant_pool=ConstantPoolPolicy.CANONICAL`` emits a pool that depends
+        only on the class's content; the default ``PRESERVE`` keeps the original
+        pool and its byte-for-byte round trip. See ``ConstantPoolPolicy``.
+        """
         ...
     def to_classfile_with_options(
         self,
         frame_mode: FrameComputationMode | str | None = None,
         resolver: MappingClassResolver | None = None,
         debug_info: DebugInfoPolicy | str | None = None,
+        constant_pool: ConstantPoolPolicy | str | None = None,
     ) -> ClassFile:
         """Lower the model to a raw classfile object with explicit lowering options."""
         ...
@@ -1920,12 +1927,14 @@ def rust_lower_classmodels(
     frame_mode: FrameComputationMode | str | None = None,
     resolver: MappingClassResolver | None = None,
     debug_info: DebugInfoPolicy | str | None = None,
+    constant_pool: ConstantPoolPolicy | str | None = None,
 ) -> list[ClassFile]: ...
 def rust_lower_classmodels_to_bytes(
     models: Iterable[ClassModel],
     frame_mode: FrameComputationMode | str | None = None,
     resolver: MappingClassResolver | None = None,
     debug_info: DebugInfoPolicy | str | None = None,
+    constant_pool: ConstantPoolPolicy | str | None = None,
 ) -> list[bytes]: ...
 def rust_verify_classmodel(
     model: ClassModel,
