@@ -3421,7 +3421,8 @@ impl PyCodeModel {
     }
 
     /// Return an independent, detached copy of this code model.
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn __deepcopy__(&self, memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let _ = memo;
         self.__copy__()
     }
 
@@ -3602,7 +3603,8 @@ impl PyFieldModel {
     }
 
     /// Return an independent, detached copy of this field model.
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn __deepcopy__(&self, memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let _ = memo;
         self.__copy__()
     }
 
@@ -3889,7 +3891,8 @@ impl PyMethodModel {
     }
 
     /// Return an independent, detached copy of this method model.
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn __deepcopy__(&self, memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let _ = memo;
         self.__copy__()
     }
 
@@ -4728,7 +4731,8 @@ impl PyClassModel {
     }
 
     /// Return an independent copy of this class model.
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn __deepcopy__(&self, memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let _ = memo;
         self.__copy__()
     }
 

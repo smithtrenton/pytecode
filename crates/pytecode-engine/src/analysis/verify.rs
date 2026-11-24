@@ -1737,7 +1737,7 @@ fn verify_code_model(
         }
     }
 
-    if model.version.0 >= 50
+    if model.version.0 >= 51
         && let Some(layout) = code.preserved_code_layout(model, method)
     {
         let stack_map_table = code.attributes.iter().find_map(|attr| match attr {
@@ -3123,7 +3123,7 @@ fn verify_raw_code_stack_map_table(
     location: &Location,
     dc: &mut DiagnosticCollector,
 ) -> Result<(), ()> {
-    if major_version < 50 {
+    if major_version < 51 {
         return Ok(());
     }
     let stack_map_table = code.attributes.iter().find_map(|attr| match attr {
@@ -3203,7 +3203,10 @@ fn verify_stack_map_table_frames(
     location: &Location,
     dc: &mut DiagnosticCollector,
 ) -> Result<(), ()> {
-    if major_version < 50 {
+    // Version 50 classes are verified by type checking only when their
+    // StackMapTable is valid; HotSpot otherwise falls back to the type-inference
+    // verifier, so frame/handler mismatches are only fatal from version 51 on.
+    if major_version < 51 {
         return Ok(());
     }
     let Some(mut collapsed_locals) = initial_collapsed_locals(
@@ -3220,23 +3223,21 @@ fn verify_stack_map_table_frames(
     };
 
     let Some(smt) = stack_map_table else {
-        if major_version >= 51 {
-            if !exception_ranges.is_empty() {
-                dc.push(Diagnostic::error(
-                    Category::Code,
-                    "Method with exception handlers requires a StackMapTable in class file version 51.0 or newer",
-                    location.clone(),
-                ))?;
-            }
-            if let Some(&next_pc) = unconditional_next_offsets.first() {
-                dc.push(Diagnostic::error(
-                    Category::Code,
-                    format!(
-                        "Missing StackMapTable frame at offset {next_pc} after unconditional control transfer"
-                    ),
-                    location.clone(),
-                ))?;
-            }
+        if !exception_ranges.is_empty() {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                "Method with exception handlers requires a StackMapTable in class file version 51.0 or newer",
+                location.clone(),
+            ))?;
+        }
+        if let Some(&next_pc) = unconditional_next_offsets.first() {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "Missing StackMapTable frame at offset {next_pc} after unconditional control transfer"
+                ),
+                location.clone(),
+            ))?;
         }
         return Ok(());
     };

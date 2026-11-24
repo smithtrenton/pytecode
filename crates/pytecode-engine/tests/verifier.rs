@@ -878,4 +878,32 @@ fn verify_classfile_and_classmodel_reject_incompatible_frame_in_exception_range(
         }),
         "verify_classmodel should reject major 52 prebuilt method with exception handler and no StackMapTable, got {prebuilt_errors:?}"
     );
+
+    // HotSpot falls back to the type-inference verifier for version 50 classes
+    // whose StackMapTable is inconsistent, so the same class must not be
+    // reported as a StackMapTable error at version 50.
+    let mut v50_cf = build_broken_classfile(false);
+    v50_cf.major_version = 50;
+    let is_smt_error = |d: &pytecode_engine::analysis::Diagnostic| {
+        d.severity == Severity::Error
+            && (d.message.contains("StackMapTable") || d.message.contains("exception handler"))
+    };
+    let v50_cf_errors: Vec<_> = verify_classfile(&v50_cf)
+        .into_iter()
+        .filter(|d| is_smt_error(d))
+        .collect();
+    assert!(
+        v50_cf_errors.is_empty(),
+        "verify_classfile should defer to failover for major 50, got {v50_cf_errors:?}"
+    );
+    let v50_bytes = pytecode_engine::write_class(&v50_cf).expect("should write");
+    let v50_model = ClassModel::from_bytes(&v50_bytes).expect("should lift");
+    let v50_cm_errors: Vec<_> = verify_classmodel(&v50_model, None)
+        .into_iter()
+        .filter(|d| is_smt_error(d))
+        .collect();
+    assert!(
+        v50_cm_errors.is_empty(),
+        "verify_classmodel should defer to failover for major 50, got {v50_cm_errors:?}"
+    );
 }

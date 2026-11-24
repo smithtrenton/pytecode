@@ -147,9 +147,14 @@ normalized (`nop...athrow` with synthetic frames) and excluded from exception-ta
 ranges (wholly dead handlers are dropped and partially covered handlers are trimmed
 or split around unreachable gaps, preserving handler priority and remapping `Catch`
 type annotations); pre-Java-7 (`major < 51`) `jsr`/`ret` subroutines are analyzed
-polymorphically. `verify_classfile` and `verify_classmodel` (on prebuilt or
-unchanged lifted code carrying a `StackMapTable`) also decode `StackMapTable`
-frames and check exception-handler frame compatibility against protected ranges.
+polymorphically. For class file version 51.0 and newer, `verify_classfile` and
+`verify_classmodel` (on raw, prebuilt, or unchanged lifted code) also decode
+`StackMapTable` frames, require a frame after every unconditional control transfer
+(`goto`, return, `athrow`, switch) and at every handler, and check exception-handler
+frame compatibility against protected ranges. Such code with exception handlers or
+unconditional transfers but no `StackMapTable` is reported as an error. Version 50.0
+classes are exempt because HotSpot falls back to the type-inference verifier when
+their `StackMapTable` is missing or inconsistent.
 
 Model-based recomputation checks the actual direct superclass and declared fields:
 before initialization, `putfield` must reference a field declared by the current
