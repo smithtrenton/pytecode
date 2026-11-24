@@ -1,4 +1,6 @@
-use super::{AnalysisError, ClassResolver, build_cfg, recompute_frames_for_class};
+use super::{
+    AnalysisError, ClassResolver, JAVA_LANG_OBJECT, VType, build_cfg, recompute_frames_for_class,
+};
 use crate::constants::{
     ClassAccessFlags, FieldAccessFlags, MAGIC, MethodAccessFlags, class_version_supported,
 };
@@ -441,6 +443,27 @@ fn collect_classfile_diagnostics(
                 }
             }
             verify_stack_map_table_offsets(code, &location, diagnostics)?;
+            if code.code_length > 0
+                && code.code_length < 65536
+                && let (Some(cls_name), Some(m_name), Some(m_desc)) = (
+                    class_name.as_deref(),
+                    name.as_deref(),
+                    descriptor.as_deref(),
+                )
+            {
+                verify_raw_code_stack_map_table(
+                    classfile.major_version,
+                    &classfile.constant_pool,
+                    cls_name,
+                    m_name,
+                    m_desc,
+                    method.access_flags,
+                    code,
+                    None,
+                    &location,
+                    diagnostics,
+                )?;
+            }
         }
     }
     Ok(())
@@ -1086,7 +1109,7 @@ fn verify_model_method(
             verify_code_model(code, model, method, resolver, dc)?;
         }
         Some(MethodBody::Prebuilt(bytes)) => {
-            verify_prebuilt_code_body(bytes, model, method, &loc, dc)?;
+            verify_prebuilt_code_body(bytes, model, method, resolver, &loc, dc)?;
         }
         None => {}
     }
@@ -1098,6 +1121,7 @@ fn verify_prebuilt_code_body(
     bytes: &[u8],
     model: &ClassModel,
     method: &MethodModel,
+    resolver: Option<&dyn ClassResolver>,
     location: &Location,
     dc: &mut DiagnosticCollector,
 ) -> Result<(), ()> {
@@ -1144,6 +1168,20 @@ fn verify_prebuilt_code_body(
                 location.clone(),
             ))?;
         }
+    }
+    if code_attr.code_length > 0 && code_attr.code_length < 65536 {
+        verify_raw_code_stack_map_table(
+            model.version.0,
+            model.constant_pool.entries(),
+            &model.name,
+            &method.name,
+            &method.descriptor,
+            method.access_flags,
+            &code_attr,
+            resolver,
+            location,
+            dc,
+        )?;
     }
     Ok(())
 }
@@ -1659,7 +1697,7 @@ fn verify_code_model(
             dc.push(Diagnostic::error(
                 Category::Code,
                 analysis_error_message(&error),
-                location,
+                location.clone(),
             ))?;
         }
         Ok(result) => {
@@ -1693,9 +1731,39 @@ fn verify_code_model(
                         "max_locals {} is smaller than required {}",
                         code.max_locals, result.max_locals
                     ),
-                    location,
+                    location.clone(),
                 ))?;
             }
+        }
+    }
+
+    if model.version.0 >= 50
+        && let Some(layout) = code.preserved_code_layout(model, method)
+    {
+        let stack_map_table = code.attributes.iter().find_map(|attr| match attr {
+            AttributeInfo::StackMapTable(smt) => Some(smt),
+            _ => None,
+        });
+        let has_unknown_stack_map = code.attributes.iter().any(|attr| {
+            matches!(attr, AttributeInfo::Unknown(unknown) if unknown.name == "StackMapTable")
+        });
+        if !has_unknown_stack_map {
+            verify_stack_map_table_frames(
+                model.version.0,
+                model.constant_pool.entries(),
+                &model.name,
+                &method.name,
+                &method.descriptor,
+                method.access_flags,
+                layout.code_length,
+                &layout.instructions,
+                &layout.unconditional_next_offsets,
+                &layout.exception_ranges,
+                stack_map_table,
+                resolver,
+                &location,
+                dc,
+            )?;
         }
     }
 
@@ -2800,6 +2868,572 @@ fn verify_stack_map_table_offsets(
             }
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DecodedVType {
+    Top,
+    Integer,
+    Float,
+    Long,
+    Double,
+    Null,
+    UninitializedThis,
+    Object(String),
+    Uninitialized(u16),
+}
+
+struct DecodedFrame {
+    locals: Vec<DecodedVType>,
+    stack: Vec<DecodedVType>,
+}
+
+fn is_unconditional_raw_transfer(insn: &crate::raw::Instruction) -> bool {
+    matches!(
+        insn,
+        crate::raw::Instruction::Branch(crate::raw::Branch { opcode: 0xA7, .. })
+            | crate::raw::Instruction::BranchWide { opcode: 0xC8, .. }
+            | crate::raw::Instruction::LookupSwitch(_)
+            | crate::raw::Instruction::TableSwitch(_)
+            | crate::raw::Instruction::Simple {
+                opcode: 0xAC..=0xB1 | 0xBF,
+                ..
+            }
+    )
+}
+
+fn cp_utf8_from_slice(pool: &[Option<ConstantPoolEntry>], index: Utf8Index) -> Result<String, ()> {
+    let entry = pool
+        .get(index.value() as usize)
+        .and_then(Option::as_ref)
+        .ok_or(())?;
+    match entry {
+        ConstantPoolEntry::Utf8(info) => {
+            crate::modified_utf8::decode_modified_utf8(&info.bytes).map_err(|_| ())
+        }
+        _ => Err(()),
+    }
+}
+
+fn cp_class_name_from_slice(
+    pool: &[Option<ConstantPoolEntry>],
+    index: ClassIndex,
+) -> Result<String, ()> {
+    let entry = pool
+        .get(index.value() as usize)
+        .and_then(Option::as_ref)
+        .ok_or(())?;
+    match entry {
+        ConstantPoolEntry::Class(info) => cp_utf8_from_slice(pool, info.name_index),
+        _ => Err(()),
+    }
+}
+
+fn decode_verification_type(
+    vt: &VerificationTypeInfo,
+    pool: &[Option<ConstantPoolEntry>],
+) -> Result<DecodedVType, ()> {
+    Ok(match vt {
+        VerificationTypeInfo::Top => DecodedVType::Top,
+        VerificationTypeInfo::Integer => DecodedVType::Integer,
+        VerificationTypeInfo::Float => DecodedVType::Float,
+        VerificationTypeInfo::Double => DecodedVType::Double,
+        VerificationTypeInfo::Long => DecodedVType::Long,
+        VerificationTypeInfo::Null => DecodedVType::Null,
+        VerificationTypeInfo::UninitializedThis => DecodedVType::UninitializedThis,
+        VerificationTypeInfo::Object { cpool_index } => {
+            DecodedVType::Object(cp_class_name_from_slice(pool, *cpool_index)?)
+        }
+        VerificationTypeInfo::Uninitialized { offset } => DecodedVType::Uninitialized(*offset),
+    })
+}
+
+fn initial_collapsed_locals(
+    class_name: &str,
+    method_name: &str,
+    descriptor: &str,
+    access_flags: MethodAccessFlags,
+) -> Option<Vec<DecodedVType>> {
+    let parsed = parse_method_descriptor(descriptor).ok()?;
+    let mut locals = Vec::new();
+    if !access_flags.contains(MethodAccessFlags::STATIC) {
+        if method_name == "<init>" && class_name != JAVA_LANG_OBJECT {
+            locals.push(DecodedVType::UninitializedThis);
+        } else {
+            locals.push(DecodedVType::Object(class_name.to_owned()));
+        }
+    }
+    for param in &parsed.parameter_types {
+        locals.push(match super::vtype_from_descriptor(param) {
+            VType::Integer => DecodedVType::Integer,
+            VType::Float => DecodedVType::Float,
+            VType::Long => DecodedVType::Long,
+            VType::Double => DecodedVType::Double,
+            VType::Object(name) => DecodedVType::Object(name),
+            _ => DecodedVType::Top,
+        });
+    }
+    Some(locals)
+}
+
+fn expand_slots(collapsed: &[DecodedVType]) -> Vec<DecodedVType> {
+    let mut slots = Vec::with_capacity(collapsed.len());
+    for vt in collapsed {
+        slots.push(vt.clone());
+        if matches!(vt, DecodedVType::Long | DecodedVType::Double) {
+            slots.push(DecodedVType::Top);
+        }
+    }
+    slots
+}
+
+fn array_types_compatible(
+    actual: &str,
+    expected: &str,
+    resolver: Option<&dyn ClassResolver>,
+) -> bool {
+    let (Some(a_comp), Some(e_comp)) = (actual.strip_prefix('['), expected.strip_prefix('['))
+    else {
+        return false;
+    };
+    if a_comp == e_comp {
+        return true;
+    }
+    let a_ref = a_comp.strip_prefix('L').and_then(|s| s.strip_suffix(';'));
+    let e_ref = e_comp.strip_prefix('L').and_then(|s| s.strip_suffix(';'));
+    match (a_ref, e_ref) {
+        (Some(a_cls), Some(e_cls)) => decoded_vtype_assignable(
+            &DecodedVType::Object(a_cls.to_owned()),
+            &DecodedVType::Object(e_cls.to_owned()),
+            resolver,
+        ),
+        (None, Some(e_cls)) if a_comp.starts_with('[') => decoded_vtype_assignable(
+            &DecodedVType::Object(a_comp.to_owned()),
+            &DecodedVType::Object(e_cls.to_owned()),
+            resolver,
+        ),
+        (None, None) if a_comp.starts_with('[') && e_comp.starts_with('[') => {
+            array_types_compatible(a_comp, e_comp, resolver)
+        }
+        _ => false,
+    }
+}
+
+fn decoded_vtype_assignable(
+    actual: &DecodedVType,
+    expected: &DecodedVType,
+    resolver: Option<&dyn ClassResolver>,
+) -> bool {
+    if *expected == DecodedVType::Top || actual == expected {
+        return true;
+    }
+    match (actual, expected) {
+        (DecodedVType::Null, DecodedVType::Object(_)) => true,
+        (DecodedVType::Object(actual_name), DecodedVType::Object(expected_name)) => {
+            if expected_name == JAVA_LANG_OBJECT {
+                return true;
+            }
+            if actual_name.starts_with('[') {
+                if expected_name.starts_with('[') {
+                    return array_types_compatible(actual_name, expected_name, resolver);
+                }
+                return matches!(
+                    expected_name.as_str(),
+                    "java/lang/Cloneable" | "java/io/Serializable"
+                );
+            }
+            if expected_name.starts_with('[') {
+                return false;
+            }
+            let Some(resolver) = resolver else {
+                return true;
+            };
+            if resolver
+                .resolve_class(expected_name)
+                .is_some_and(|resolved| resolved.is_interface())
+            {
+                return true;
+            }
+            match super::is_subtype(resolver, actual_name, expected_name) {
+                Ok(true) | Err(AnalysisError::UnresolvedClass { .. }) => true,
+                Ok(false) => !resolver
+                    .resolve_class(expected_name)
+                    .is_some_and(|resolved| !resolved.is_interface()),
+                Err(_) => true,
+            }
+        }
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_frame_assignable_to_handler(
+    pc: u32,
+    frame: &DecodedFrame,
+    handler_pc: u32,
+    handler_frame: &DecodedFrame,
+    resolver: Option<&dyn ClassResolver>,
+    location: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if frame.locals.contains(&DecodedVType::UninitializedThis)
+        && !handler_frame
+            .locals
+            .contains(&DecodedVType::UninitializedThis)
+    {
+        dc.push(Diagnostic::error(
+            Category::Code,
+            format!(
+                "StackMapTable frame at offset {pc} does not match exception handler at offset {handler_pc}: uninitialized this is not preserved by handler frame"
+            ),
+            location.clone(),
+        ))?;
+        return Ok(());
+    }
+    for (slot, expected) in handler_frame.locals.iter().enumerate() {
+        if *expected == DecodedVType::Top {
+            continue;
+        }
+        let actual = frame.locals.get(slot).unwrap_or(&DecodedVType::Top);
+        if !decoded_vtype_assignable(actual, expected, resolver) {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "StackMapTable frame at offset {pc} does not match exception handler at offset {handler_pc}: local {slot} is {actual:?}, expected {expected:?}"
+                ),
+                location.clone(),
+            ))?;
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_raw_code_stack_map_table(
+    major_version: u16,
+    constant_pool: &[Option<ConstantPoolEntry>],
+    class_name: &str,
+    method_name: &str,
+    method_descriptor: &str,
+    method_access_flags: MethodAccessFlags,
+    code: &crate::raw::CodeAttribute,
+    resolver: Option<&dyn ClassResolver>,
+    location: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if major_version < 50 {
+        return Ok(());
+    }
+    let stack_map_table = code.attributes.iter().find_map(|attr| match attr {
+        AttributeInfo::StackMapTable(smt) => Some(smt),
+        _ => None,
+    });
+    let has_unknown_stack_map = code.attributes.iter().any(
+        |attr| matches!(attr, AttributeInfo::Unknown(unknown) if unknown.name == "StackMapTable"),
+    );
+    if has_unknown_stack_map {
+        return Ok(());
+    }
+
+    let instructions: Vec<(u32, u8)> = code
+        .code
+        .iter()
+        .map(|insn| (insn.offset(), insn.opcode()))
+        .collect();
+    let mut unconditional_next_offsets = Vec::new();
+    for pair in code.code.windows(2) {
+        if is_unconditional_raw_transfer(&pair[0]) {
+            unconditional_next_offsets.push(pair[1].offset());
+        }
+    }
+
+    let mut exception_ranges = Vec::with_capacity(code.exception_table.len());
+    for handler in &code.exception_table {
+        let start = u32::from(handler.start_pc);
+        let end = u32::from(handler.end_pc);
+        let handler_pc = u32::from(handler.handler_pc);
+        if start >= end || end > code.code_length || handler_pc >= code.code_length {
+            continue;
+        }
+        let catch_type = if handler.catch_type.value() == 0 {
+            None
+        } else {
+            match cp_class_name_from_slice(constant_pool, handler.catch_type) {
+                Ok(name) => Some(name),
+                Err(()) => continue,
+            }
+        };
+        exception_ranges.push((start, end, handler_pc, catch_type));
+    }
+
+    verify_stack_map_table_frames(
+        major_version,
+        constant_pool,
+        class_name,
+        method_name,
+        method_descriptor,
+        method_access_flags,
+        code.code_length,
+        &instructions,
+        &unconditional_next_offsets,
+        &exception_ranges,
+        stack_map_table,
+        resolver,
+        location,
+        dc,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_stack_map_table_frames(
+    major_version: u16,
+    constant_pool: &[Option<ConstantPoolEntry>],
+    class_name: &str,
+    method_name: &str,
+    method_descriptor: &str,
+    method_access_flags: MethodAccessFlags,
+    code_length: u32,
+    instructions: &[(u32, u8)],
+    unconditional_next_offsets: &[u32],
+    exception_ranges: &[(u32, u32, u32, Option<String>)],
+    stack_map_table: Option<&crate::raw::StackMapTableAttribute>,
+    resolver: Option<&dyn ClassResolver>,
+    location: &Location,
+    dc: &mut DiagnosticCollector,
+) -> Result<(), ()> {
+    if major_version < 50 {
+        return Ok(());
+    }
+    let Some(mut collapsed_locals) = initial_collapsed_locals(
+        class_name,
+        method_name,
+        method_descriptor,
+        method_access_flags,
+    ) else {
+        return Ok(());
+    };
+    let initial_frame = DecodedFrame {
+        locals: expand_slots(&collapsed_locals),
+        stack: Vec::new(),
+    };
+
+    let Some(smt) = stack_map_table else {
+        if major_version >= 51 {
+            if !exception_ranges.is_empty() {
+                dc.push(Diagnostic::error(
+                    Category::Code,
+                    "Method with exception handlers requires a StackMapTable in class file version 51.0 or newer",
+                    location.clone(),
+                ))?;
+            }
+            if let Some(&next_pc) = unconditional_next_offsets.first() {
+                dc.push(Diagnostic::error(
+                    Category::Code,
+                    format!(
+                        "Missing StackMapTable frame at offset {next_pc} after unconditional control transfer"
+                    ),
+                    location.clone(),
+                ))?;
+            }
+        }
+        return Ok(());
+    };
+
+    let mut frames: BTreeMap<u32, DecodedFrame> = BTreeMap::new();
+    let mut prev_pc = 0_u32;
+    for (idx, entry) in smt.entries.iter().enumerate() {
+        let offset_delta = match entry {
+            StackMapFrameInfo::Same { frame_type } => u32::from(*frame_type),
+            StackMapFrameInfo::SameLocals1StackItem { frame_type, .. } => {
+                u32::from(frame_type.saturating_sub(64))
+            }
+            StackMapFrameInfo::SameLocals1StackItemExtended { offset_delta, .. }
+            | StackMapFrameInfo::Chop { offset_delta, .. }
+            | StackMapFrameInfo::SameExtended { offset_delta, .. }
+            | StackMapFrameInfo::Append { offset_delta, .. }
+            | StackMapFrameInfo::Full { offset_delta, .. } => u32::from(*offset_delta),
+        };
+        let pc = if idx == 0 {
+            offset_delta
+        } else {
+            prev_pc.saturating_add(1).saturating_add(offset_delta)
+        };
+        if pc >= code_length {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!("StackMapTable frame offset {pc} exceeds code_length {code_length}"),
+                location.clone(),
+            ))?;
+            return Ok(());
+        }
+        if !instructions.is_empty()
+            && instructions
+                .binary_search_by_key(&pc, |&(offset, _)| offset)
+                .is_err()
+        {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "StackMapTable frame offset {pc} does not align with an instruction boundary"
+                ),
+                location.clone(),
+            ))?;
+        }
+        let curr_stack = match entry {
+            StackMapFrameInfo::Same { .. } | StackMapFrameInfo::SameExtended { .. } => Vec::new(),
+            StackMapFrameInfo::SameLocals1StackItem { stack, .. }
+            | StackMapFrameInfo::SameLocals1StackItemExtended { stack, .. } => {
+                let Ok(vt) = decode_verification_type(stack, constant_pool) else {
+                    return Ok(());
+                };
+                vec![vt]
+            }
+            StackMapFrameInfo::Chop { frame_type, .. } => {
+                let chop_count = usize::from(251_u8.saturating_sub(*frame_type));
+                if chop_count > collapsed_locals.len() {
+                    dc.push(Diagnostic::error(
+                        Category::Code,
+                        format!(
+                            "StackMapTable chop frame at offset {pc} removes {chop_count} locals but only {} are present",
+                            collapsed_locals.len()
+                        ),
+                        location.clone(),
+                    ))?;
+                    return Ok(());
+                }
+                collapsed_locals.truncate(collapsed_locals.len() - chop_count);
+                Vec::new()
+            }
+            StackMapFrameInfo::Append { locals, .. } => {
+                for vt in locals {
+                    let Ok(decoded) = decode_verification_type(vt, constant_pool) else {
+                        return Ok(());
+                    };
+                    collapsed_locals.push(decoded);
+                }
+                Vec::new()
+            }
+            StackMapFrameInfo::Full { locals, stack, .. } => {
+                let mut next_locals = Vec::with_capacity(locals.len());
+                for vt in locals {
+                    let Ok(decoded) = decode_verification_type(vt, constant_pool) else {
+                        return Ok(());
+                    };
+                    next_locals.push(decoded);
+                }
+                let mut next_stack = Vec::with_capacity(stack.len());
+                for vt in stack {
+                    let Ok(decoded) = decode_verification_type(vt, constant_pool) else {
+                        return Ok(());
+                    };
+                    next_stack.push(decoded);
+                }
+                collapsed_locals = next_locals;
+                next_stack
+            }
+        };
+        frames.insert(
+            pc,
+            DecodedFrame {
+                locals: expand_slots(&collapsed_locals),
+                stack: expand_slots(&curr_stack),
+            },
+        );
+        prev_pc = pc;
+    }
+
+    for &next_pc in unconditional_next_offsets {
+        if !frames.contains_key(&next_pc) {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "StackMapTable is missing a frame at offset {next_pc} after unconditional control transfer"
+                ),
+                location.clone(),
+            ))?;
+        }
+    }
+
+    for (start_pc, end_pc, handler_pc, catch_type) in exception_ranges {
+        let Some(handler_frame) = frames.get(handler_pc) else {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "StackMapTable is missing a frame at exception handler offset {handler_pc}"
+                ),
+                location.clone(),
+            ))?;
+            continue;
+        };
+        let caught_vtype = DecodedVType::Object(
+            catch_type
+                .as_deref()
+                .unwrap_or("java/lang/Throwable")
+                .to_owned(),
+        );
+        if handler_frame.stack.len() != 1
+            || !decoded_vtype_assignable(&caught_vtype, &handler_frame.stack[0], resolver)
+        {
+            dc.push(Diagnostic::error(
+                Category::Code,
+                format!(
+                    "StackMapTable frame at exception handler offset {handler_pc} has incompatible stack {:?}",
+                    handler_frame.stack
+                ),
+                location.clone(),
+            ))?;
+        }
+        if !frames.contains_key(start_pc) {
+            if *start_pc == 0 {
+                check_frame_assignable_to_handler(
+                    0,
+                    &initial_frame,
+                    *handler_pc,
+                    handler_frame,
+                    resolver,
+                    location,
+                    dc,
+                )?;
+            } else if !instructions.is_empty() {
+                let (prior_pc, prior_frame) = frames
+                    .range(..*start_pc)
+                    .next_back()
+                    .map(|(&pc, frame)| (pc, frame))
+                    .unwrap_or((0, &initial_frame));
+                let first_idx = instructions.partition_point(|&(off, _)| off < prior_pc);
+                let stop_idx = instructions.partition_point(|&(off, _)| off < *start_pc);
+                if first_idx < stop_idx
+                    && instructions[first_idx..stop_idx]
+                        .iter()
+                        .all(|&(_, opcode)| opcode == 0x00)
+                {
+                    check_frame_assignable_to_handler(
+                        *start_pc,
+                        prior_frame,
+                        *handler_pc,
+                        handler_frame,
+                        resolver,
+                        location,
+                        dc,
+                    )?;
+                }
+            }
+        }
+        for (&pc, frame) in frames.range(*start_pc..*end_pc) {
+            check_frame_assignable_to_handler(
+                pc,
+                frame,
+                *handler_pc,
+                handler_frame,
+                resolver,
+                location,
+                dc,
+            )?;
+        }
+    }
+
     Ok(())
 }
 

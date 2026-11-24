@@ -649,3 +649,233 @@ fn verify_classmodel_reports_invalid_descriptors_and_bad_cfg() {
             .any(|diag| diag.category == Category::Code)
     );
 }
+
+#[test]
+fn verify_classfile_and_classmodel_reject_incompatible_frame_in_exception_range() {
+    use pytecode_engine::analysis::Severity;
+    use pytecode_engine::model::{DebugInfoPolicy, MethodModel};
+    use pytecode_engine::raw::{
+        ExceptionHandler as RawExceptionHandler, Instruction, StackMapFrameInfo,
+        StackMapTableAttribute, VerificationTypeInfo,
+    };
+
+    let build_broken_classfile = |straddling_nop: bool| -> ClassFile {
+        let mut classfile = base_classfile();
+        let method_name = push_utf8(&mut classfile, "run");
+        let method_desc = push_utf8(&mut classfile, "()V");
+        let code_name = push_utf8(&mut classfile, "Code");
+        let smt_name = push_utf8(&mut classfile, "StackMapTable");
+        let throwable_cls = push_class(&mut classfile, "java/lang/Throwable");
+
+        let (code_insns, code_length, exception_table, smt_entries) = if !straddling_nop {
+            (
+                vec![
+                    Instruction::Simple {
+                        opcode: 0x01,
+                        offset: 0,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xBF,
+                        offset: 1,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xBF,
+                        offset: 2,
+                    },
+                    Instruction::Simple {
+                        opcode: 0x57,
+                        offset: 3,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xB1,
+                        offset: 4,
+                    },
+                ],
+                5,
+                vec![RawExceptionHandler {
+                    start_pc: 0,
+                    end_pc: 3,
+                    handler_pc: 3,
+                    catch_type: 0.into(),
+                }],
+                vec![
+                    StackMapFrameInfo::Full {
+                        frame_type: 255,
+                        offset_delta: 2,
+                        locals: Vec::new(),
+                        stack: vec![VerificationTypeInfo::Object {
+                            cpool_index: throwable_cls.into(),
+                        }],
+                    },
+                    StackMapFrameInfo::Full {
+                        frame_type: 255,
+                        offset_delta: 0,
+                        locals: vec![VerificationTypeInfo::Object {
+                            cpool_index: 2.into(),
+                        }],
+                        stack: vec![VerificationTypeInfo::Object {
+                            cpool_index: throwable_cls.into(),
+                        }],
+                    },
+                ],
+            )
+        } else {
+            (
+                vec![
+                    Instruction::Simple {
+                        opcode: 0x01,
+                        offset: 0,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xBF,
+                        offset: 1,
+                    },
+                    Instruction::Simple {
+                        opcode: 0x00,
+                        offset: 2,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xBF,
+                        offset: 3,
+                    },
+                    Instruction::Simple {
+                        opcode: 0x57,
+                        offset: 4,
+                    },
+                    Instruction::Simple {
+                        opcode: 0xB1,
+                        offset: 5,
+                    },
+                ],
+                6,
+                vec![RawExceptionHandler {
+                    start_pc: 3,
+                    end_pc: 4,
+                    handler_pc: 4,
+                    catch_type: 0.into(),
+                }],
+                vec![
+                    StackMapFrameInfo::Full {
+                        frame_type: 255,
+                        offset_delta: 2,
+                        locals: Vec::new(),
+                        stack: vec![VerificationTypeInfo::Object {
+                            cpool_index: throwable_cls.into(),
+                        }],
+                    },
+                    StackMapFrameInfo::Full {
+                        frame_type: 255,
+                        offset_delta: 1,
+                        locals: vec![VerificationTypeInfo::Object {
+                            cpool_index: 2.into(),
+                        }],
+                        stack: vec![VerificationTypeInfo::Object {
+                            cpool_index: throwable_cls.into(),
+                        }],
+                    },
+                ],
+            )
+        };
+
+        classfile.methods.push(MethodInfo {
+            access_flags: MethodAccessFlags::PUBLIC,
+            name_index: method_name.into(),
+            descriptor_index: method_desc.into(),
+            attributes: vec![AttributeInfo::Code(CodeAttribute {
+                attribute_name_index: code_name.into(),
+                attribute_length: 0,
+                max_stack: 1,
+                max_locals: 1,
+                code_length,
+                code: code_insns,
+                exception_table,
+                attributes: vec![AttributeInfo::StackMapTable(StackMapTableAttribute {
+                    attribute_name_index: smt_name.into(),
+                    attribute_length: 0,
+                    entries: smt_entries,
+                })],
+            })],
+        });
+        classfile
+    };
+
+    for straddling_nop in [false, true] {
+        let broken_cf = build_broken_classfile(straddling_nop);
+        let cf_errors: Vec<_> = verify_classfile(&broken_cf)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(
+            cf_errors.iter().any(|d| {
+                d.category == Category::Code
+                    && d.message.contains("does not match exception handler")
+            }),
+            "verify_classfile should reject incompatible frame (straddling={straddling_nop}), got {cf_errors:?}"
+        );
+
+        let broken_bytes = pytecode_engine::write_class(&broken_cf).expect("should write");
+        let model = ClassModel::from_bytes(&broken_bytes).expect("should lift");
+        let cm_errors: Vec<_> = verify_classmodel(&model, None)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(
+            cm_errors.iter().any(|d| {
+                d.category == Category::Code
+                    && d.message.contains("does not match exception handler")
+            }),
+            "verify_classmodel should reject lifted broken class (straddling={straddling_nop}), got {cm_errors:?}"
+        );
+
+        // Re-lowering with RECOMPUTE repairs the class so both verifiers accept it.
+        let repaired = model
+            .to_bytes_with_recomputed_frames(DebugInfoPolicy::Preserve, None)
+            .expect("recompute should repair");
+        let repaired_cf = pytecode_engine::parse_class(&repaired).expect("should parse");
+        assert!(
+            verify_classfile(&repaired_cf)
+                .iter()
+                .all(|d| d.severity != Severity::Error)
+        );
+        let repaired_model = ClassModel::from_bytes(&repaired).expect("should lift");
+        assert!(
+            verify_classmodel(&repaired_model, None)
+                .iter()
+                .all(|d| d.severity != Severity::Error)
+        );
+    }
+
+    // Prebuilt Code bodies also validate StackMapTable presence/compatibility.
+    let broken_cf = build_broken_classfile(false);
+    let mut prebuilt_model = ClassModel::from_classfile(&broken_cf).expect("should lift");
+    let mut prebuilt_method = MethodModel::new(
+        MethodAccessFlags::PUBLIC,
+        "prebuilt".to_owned(),
+        "()V".to_owned(),
+        None,
+        Vec::new(),
+    );
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1_u16.to_be_bytes()); // max_stack
+    payload.extend_from_slice(&1_u16.to_be_bytes()); // max_locals
+    payload.extend_from_slice(&5_u32.to_be_bytes()); // code_length
+    payload.extend_from_slice(&[0x01, 0xBF, 0xBF, 0x57, 0xB1]);
+    payload.extend_from_slice(&1_u16.to_be_bytes()); // exception_table_length
+    payload.extend_from_slice(&0_u16.to_be_bytes()); // start_pc
+    payload.extend_from_slice(&3_u16.to_be_bytes()); // end_pc
+    payload.extend_from_slice(&3_u16.to_be_bytes()); // handler_pc
+    payload.extend_from_slice(&0_u16.to_be_bytes()); // catch_type
+    payload.extend_from_slice(&0_u16.to_be_bytes()); // attributes_count = 0
+    prebuilt_method.set_prebuilt_code_bytes(payload);
+    prebuilt_model.methods = vec![prebuilt_method];
+    let prebuilt_errors: Vec<_> = verify_classmodel(&prebuilt_model, None)
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        prebuilt_errors.iter().any(|d| {
+            d.category == Category::Code && d.message.contains("requires a StackMapTable")
+        }),
+        "verify_classmodel should reject major 52 prebuilt method with exception handler and no StackMapTable, got {prebuilt_errors:?}"
+    );
+}
