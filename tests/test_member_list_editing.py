@@ -140,6 +140,9 @@ def test_copy_and_deepcopy_produce_independent_detached_models(tmp_path: Path):
     field_copy = copy.deepcopy(greeting)
     code_copy = copy.deepcopy(greet_code)
     class_copy = copy.deepcopy(model)
+    for handle in (greet, greeting, greet_code, model):
+        # The runtime keyword name matches the stubs and the copy protocol.
+        assert handle.__deepcopy__(memo={}) is not handle
 
     # Mutating detached copies does not mutate the original model.
     method_deep.name = "greetCopy"
