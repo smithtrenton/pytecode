@@ -1,6 +1,6 @@
 [package]
 name = "pytecode-archive"
-version = "0.3.2"
+version = "0.3.3"
 description = "Rust JAR archive helpers for pytecode classfile rewrite workflows"
 edition.workspace = true
 rust-version.workspace = true
