@@ -614,15 +614,32 @@ pub(crate) fn recompute_frames_for_class(
     )
 }
 
-/// Normalized code, its frames, the exception-handler remap, and the
-/// optional frames for conditional-branch fall-throughs (see
-/// [`frames_from_simulation`]).
+/// Normalized code, its frames, the exception-handler remap (mapping each
+/// original handler index to the zero, one, or more emitted handler indices
+/// after pruning/splitting around unreachable code), and the optional frames
+/// for conditional-branch fall-throughs (see [`frames_from_simulation`]).
 type NormalizedCodeResult<'a> = (
     Cow<'a, CodeModel>,
     FrameComputationResult,
-    Option<Vec<Option<usize>>>,
+    Option<Vec<Vec<usize>>>,
     Vec<StackMapFrameState>,
 );
+
+fn remap_vtype_code_index(value: &mut VType, old_to_new: &[usize]) {
+    if let VType::Uninitialized { code_index, .. } = value {
+        *code_index = old_to_new[*code_index];
+    }
+}
+
+fn remap_frame_code_indices(frame: &mut StackMapFrameState, old_to_new: &[usize]) {
+    frame.code_index = old_to_new[frame.code_index];
+    for local in &mut frame.locals {
+        remap_vtype_code_index(local, old_to_new);
+    }
+    for slot in &mut frame.stack {
+        remap_vtype_code_index(slot, old_to_new);
+    }
+}
 
 pub(crate) fn recompute_and_normalize_code<'a>(
     code: &'a CodeModel,
@@ -642,7 +659,7 @@ pub(crate) fn recompute_and_normalize_code<'a>(
         method.access_flags,
         resolver,
     )?;
-    let (mut frames_result, fallthrough_frames) =
+    let (mut frames_result, mut fallthrough_frames) =
         frames_from_simulation(code, &simulation, &flags, Some(class))?;
     frames_result.warnings.extend(warning);
 
@@ -657,29 +674,86 @@ pub(crate) fn recompute_and_normalize_code<'a>(
 
     let mut normalized = code.clone();
     let mut label_positions = HashMap::new();
+    let mut existing_boundary_labels: HashMap<usize, crate::model::Label> = HashMap::new();
     for (idx, item) in code.instructions.iter().enumerate() {
         if let CodeItem::Label(label) = item {
             label_positions.insert(label.clone(), idx);
+            if let Some(Some(node_index)) = simulation.cfg.label_targets.get(label) {
+                existing_boundary_labels
+                    .entry(*node_index)
+                    .or_insert_with(|| label.clone());
+            }
         }
     }
+
+    // Remove unreachable subranges from every exception-table entry, dropping
+    // wholly dead entries and trimming or splitting partially dead entries.
+    // Leaving a dead block (which gets a synthetic `{}` locals frame) inside a
+    // protected range causes HotSpot to reject the class because `{}` is not
+    // assignable to the handler's locals.
+    let mut inserted_labels: std::collections::BTreeMap<usize, crate::model::Label> =
+        std::collections::BTreeMap::new();
+    let mut boundary_label = |node_index: usize| -> crate::model::Label {
+        if let Some(label) = existing_boundary_labels.get(&node_index) {
+            return label.clone();
+        }
+        let code_index = simulation.cfg.nodes[node_index].code_index;
+        inserted_labels.entry(code_index).or_default().clone()
+    };
 
     let mut kept_handlers = Vec::with_capacity(code.exception_handlers.len());
     let mut catch_remap = Vec::with_capacity(code.exception_handlers.len());
     for handler in &code.exception_handlers {
         let start_pos = label_positions[&handler.start];
         let end_pos = label_positions[&handler.end];
-        let covers_reachable_node = simulation.cfg.nodes.iter().any(|node| {
-            node.code_index >= start_pos
-                && node.code_index < end_pos
-                && !dead_nodes[node.node_index]
-        });
-        if covers_reachable_node {
+        let first_node = simulation
+            .cfg
+            .nodes
+            .partition_point(|node| node.code_index < start_pos);
+        let stop_node = simulation
+            .cfg
+            .nodes
+            .partition_point(|node| node.code_index < end_pos);
+
+        if !dead_nodes[first_node..stop_node].iter().any(|&dead| dead) {
             let new_idx = kept_handlers.len();
             kept_handlers.push(handler.clone());
-            catch_remap.push(Some(new_idx));
-        } else {
-            catch_remap.push(None);
+            catch_remap.push(vec![new_idx]);
+            continue;
         }
+
+        let mut mapped = Vec::new();
+        let mut cursor = first_node;
+        while cursor < stop_node {
+            if dead_nodes[cursor] {
+                cursor += 1;
+                continue;
+            }
+            let live_start = cursor;
+            while cursor < stop_node && !dead_nodes[cursor] {
+                cursor += 1;
+            }
+            let live_end = cursor;
+            let start = if live_start == first_node {
+                handler.start.clone()
+            } else {
+                boundary_label(live_start)
+            };
+            let end = if live_end == stop_node {
+                handler.end.clone()
+            } else {
+                boundary_label(live_end)
+            };
+            let new_idx = kept_handlers.len();
+            kept_handlers.push(crate::model::ExceptionHandler {
+                start,
+                end,
+                handler: handler.handler.clone(),
+                catch_type: handler.catch_type.clone(),
+            });
+            mapped.push(new_idx);
+        }
+        catch_remap.push(mapped);
     }
     normalized.exception_handlers = kept_handlers;
 
@@ -712,6 +786,26 @@ pub(crate) fn recompute_and_normalize_code<'a>(
             stack: vec![VType::Object("java/lang/Throwable".to_owned())],
         });
         node_index = run_end + 1;
+    }
+
+    if !inserted_labels.is_empty() {
+        let old_len = normalized.instructions.len();
+        let mut new_instructions = Vec::with_capacity(old_len + inserted_labels.len());
+        let mut old_to_new = vec![0_usize; old_len];
+        for (old_idx, item) in normalized.instructions.into_iter().enumerate() {
+            if let Some(label) = inserted_labels.remove(&old_idx) {
+                new_instructions.push(CodeItem::Label(label));
+            }
+            old_to_new[old_idx] = new_instructions.len();
+            new_instructions.push(item);
+        }
+        normalized.instructions = new_instructions;
+        for frame in &mut frames_result.frames {
+            remap_frame_code_indices(frame, &old_to_new);
+        }
+        for frame in &mut fallthrough_frames {
+            remap_frame_code_indices(frame, &old_to_new);
+        }
     }
 
     frames_result.frames.sort_by_key(|frame| frame.code_index);

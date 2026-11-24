@@ -143,9 +143,13 @@ initialize a receiver replace all its aliases on the normal path and invalidate
 saved aliases on the exception path. A pending constructor flag that cannot be
 represented in a modern StackMapTable produces an explicit error. During
 `FrameComputationMode.RECOMPUTE` lowering, unreachable bytecode regions are
-normalized (`nop...athrow` with synthetic frames) and dead exception handlers
-are pruned; pre-Java-7 (`major < 51`) `jsr`/`ret` subroutines are analyzed
-polymorphically.
+normalized (`nop...athrow` with synthetic frames) and excluded from exception-table
+ranges (wholly dead handlers are dropped and partially covered handlers are trimmed
+or split around unreachable gaps, preserving handler priority and remapping `Catch`
+type annotations); pre-Java-7 (`major < 51`) `jsr`/`ret` subroutines are analyzed
+polymorphically. `verify_classfile` and `verify_classmodel` (on prebuilt or
+unchanged lifted code carrying a `StackMapTable`) also decode `StackMapTable`
+frames and check exception-handler frame compatibility against protected ranges.
 
 Model-based recomputation checks the actual direct superclass and declared fields:
 before initialization, `putfield` must reference a field declared by the current

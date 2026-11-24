@@ -2320,7 +2320,7 @@ fn lower_nested_attributes(
     debug_info: DebugInfoPolicy,
     frame_mode: FrameComputationMode,
     stack_map_table: Option<AttributeInfo>,
-    catch_remap: Option<&[Option<usize>]>,
+    catch_remap: Option<&[Vec<usize>]>,
 ) -> Result<Vec<AttributeInfo>> {
     let strip_debug_info = debug_info.should_strip() || debug_info_state == DebugInfoState::Stale;
     let line_number_attr = if strip_debug_info || code.line_numbers.is_empty() {
@@ -2609,7 +2609,7 @@ fn lower_code_type_annotations(
     label_offsets: &FxHashMap<Label, u32>,
     code_length: u32,
     exception_table_len: usize,
-    catch_remap: Option<&[Option<usize>]>,
+    catch_remap: Option<&[Vec<usize>]>,
 ) -> Result<Option<AttributeInfo>> {
     if entries.is_empty() {
         return Ok(None);
@@ -2660,30 +2660,43 @@ fn lower_code_type_annotations(
             CodeTypeAnnotationTarget::Catch {
                 exception_table_index,
             } => {
-                let mapped_index = match catch_remap {
-                    Some(remap) => {
-                        let Some(&mapped) = remap.get(*exception_table_index) else {
+                if let Some(remap) = catch_remap {
+                    let Some(mapped_indices) = remap.get(*exception_table_index) else {
+                        return Err(model_error(format!(
+                            "type-annotation catch index {} exceeds exception table length {}",
+                            exception_table_index,
+                            remap.len()
+                        )));
+                    };
+                    for &mapped_index in mapped_indices {
+                        if mapped_index >= exception_table_len {
                             return Err(model_error(format!(
                                 "type-annotation catch index {} exceeds exception table length {}",
-                                exception_table_index,
-                                remap.len()
+                                mapped_index, exception_table_len
                             )));
-                        };
-                        match mapped {
-                            Some(idx) => idx,
-                            None => continue,
                         }
+                        annotations.push(TypeAnnotationInfo {
+                            target_type: entry.target_type,
+                            target_info: TargetInfo::Catch {
+                                exception_table_index: u16::try_from(mapped_index).map_err(
+                                    |_| model_error("type-annotation catch index exceeds u16"),
+                                )?,
+                            },
+                            target_path: entry.target_path.clone(),
+                            type_index: entry.type_index,
+                            element_value_pairs: entry.element_value_pairs.clone(),
+                        });
                     }
-                    None => *exception_table_index,
-                };
-                if mapped_index >= exception_table_len {
+                    continue;
+                }
+                if *exception_table_index >= exception_table_len {
                     return Err(model_error(format!(
                         "type-annotation catch index {} exceeds exception table length {}",
-                        mapped_index, exception_table_len
+                        exception_table_index, exception_table_len
                     )));
                 }
                 TargetInfo::Catch {
-                    exception_table_index: u16::try_from(mapped_index)
+                    exception_table_index: u16::try_from(*exception_table_index)
                         .map_err(|_| model_error("type-annotation catch index exceeds u16"))?,
                 }
             }
@@ -3342,6 +3355,110 @@ fn invert_conditional_branch_opcode(opcode: u8) -> Result<u8> {
             "opcode 0x{opcode:02x} does not support conditional widening"
         ))),
     }
+}
+
+pub(crate) struct PreservedCodeLayout {
+    pub(crate) code_length: u32,
+    pub(crate) instructions: Vec<(u32, u8)>,
+    pub(crate) unconditional_next_offsets: Vec<u32>,
+    pub(crate) exception_ranges: Vec<(u32, u32, u32, Option<String>)>,
+}
+
+fn code_item_opcode(item: &CodeItem) -> u8 {
+    match item {
+        CodeItem::Raw(insn) => insn.opcode(),
+        CodeItem::Field(insn) => insn.opcode,
+        CodeItem::Method(insn) => insn.opcode,
+        CodeItem::InterfaceMethod(_) => 0xB9,
+        CodeItem::Type(insn) => insn.opcode,
+        CodeItem::Var(insn) => insn.opcode,
+        CodeItem::IInc(_) => 0x84,
+        CodeItem::Ldc(_) => 0x12,
+        CodeItem::InvokeDynamic(_) => 0xBA,
+        CodeItem::MultiANewArray(_) => 0xC5,
+        CodeItem::Branch(insn) => insn.opcode,
+        CodeItem::LookupSwitch(_) => 0xAB,
+        CodeItem::TableSwitch(_) => 0xAA,
+        CodeItem::Label(_) => 0xFF,
+    }
+}
+
+impl CodeModel {
+    pub(crate) fn preserved_code_layout(
+        &self,
+        class: &ClassModel,
+        method: &MethodModel,
+    ) -> Option<PreservedCodeLayout> {
+        let original = self.original_code_shape.as_ref()?;
+        if !same_code_items(&self.instructions, &original.instructions)
+            || self.exception_handlers != original.exception_handlers
+            || class.name != original.owner_class_name
+            || method.descriptor != original.method_descriptor
+            || method.access_flags != original.method_access_flags
+        {
+            return None;
+        }
+        let mut label_offsets: FxHashMap<&Label, u32> = FxHashMap::default();
+        let mut instructions = Vec::new();
+        let mut pending_labels: Vec<&Label> = Vec::new();
+        let mut executable_items: Vec<(u32, &CodeItem)> = Vec::new();
+        for (item, maybe_offset) in self.instructions.iter().zip(&original.item_offsets) {
+            match (item, maybe_offset) {
+                (CodeItem::Label(label), None) => pending_labels.push(label),
+                (_, Some(offset)) => {
+                    for label in pending_labels.drain(..) {
+                        label_offsets.insert(label, *offset);
+                    }
+                    instructions.push((*offset, code_item_opcode(item)));
+                    executable_items.push((*offset, item));
+                }
+                _ => return None,
+            }
+        }
+        for label in pending_labels {
+            label_offsets.insert(label, original.code_length);
+        }
+        let mut unconditional_next_offsets = Vec::new();
+        for pair in executable_items.windows(2) {
+            let (_, item) = pair[0];
+            let (next_offset, _) = pair[1];
+            if is_unconditional_model_transfer(item) {
+                unconditional_next_offsets.push(next_offset);
+            }
+        }
+        let mut exception_ranges = Vec::with_capacity(self.exception_handlers.len());
+        for handler in &self.exception_handlers {
+            let start_pc = *label_offsets.get(&handler.start)?;
+            let end_pc = *label_offsets.get(&handler.end)?;
+            let handler_pc = *label_offsets.get(&handler.handler)?;
+            if start_pc < end_pc
+                && end_pc <= original.code_length
+                && handler_pc < original.code_length
+            {
+                exception_ranges.push((start_pc, end_pc, handler_pc, handler.catch_type.clone()));
+            }
+        }
+        Some(PreservedCodeLayout {
+            code_length: original.code_length,
+            instructions,
+            unconditional_next_offsets,
+            exception_ranges,
+        })
+    }
+}
+
+fn is_unconditional_model_transfer(item: &CodeItem) -> bool {
+    matches!(
+        item,
+        CodeItem::Branch(branch) if matches!(branch.opcode, 0xA7 | 0xC8)
+    ) || matches!(item, CodeItem::LookupSwitch(_) | CodeItem::TableSwitch(_))
+        || matches!(
+            item,
+            CodeItem::Raw(Instruction::Simple {
+                opcode: 0xAC..=0xB1 | 0xBF,
+                ..
+            })
+        )
 }
 
 fn ensure_preserve_mode_valid(
