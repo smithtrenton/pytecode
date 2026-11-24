@@ -296,8 +296,10 @@ instructions, exception handlers, debug tables, and type annotations, while
 `pytecode.classfile.attributes` re-exports Rust-backed raw attribute and
 annotation classes. Structural mutations to a class or code model bump generation
 counters on child views so stale handles fail loudly rather than observing stale
-state; retain the owner when working with its views, and create separate models
-for independent edits.
+state; retain the owner when working with its views, or use `copy.copy` /
+`copy.deepcopy` on `ClassModel`, `FieldModel`, `MethodModel`, or `CodeModel`
+to obtain an independent detached copy (pickle serialization is not supported;
+use `ClassModel.to_bytes()` / `ClassModel.from_bytes()` for serialization).
 
 These views use `Rc<RefCell<...>>` and PyO3's unsendable classes. Use them only on
 their creating thread. The module explicitly requires the GIL (`gil_used = true`);
