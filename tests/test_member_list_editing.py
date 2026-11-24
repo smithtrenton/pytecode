@@ -7,6 +7,7 @@ with recomputed frames and runs on the JVM with ``-Xverify:all``.
 
 from __future__ import annotations
 
+import copy
 import subprocess
 from pathlib import Path
 
@@ -121,3 +122,51 @@ def test_views_do_not_delete_and_earlier_handles_go_stale(tmp_path: Path):
     with pytest.raises(RuntimeError, match="stale"):
         _ = before.name
     assert model.methods[0].name == "<init>"
+
+
+def test_copy_and_deepcopy_produce_independent_detached_models(tmp_path: Path):
+    classes = _compile(tmp_path)
+    original_bytes = (classes / "Members.class").read_bytes()
+    model = ClassModel.from_bytes(original_bytes)
+
+    # Detached copies of borrowed method, field, and code handles survive member-list edits.
+    greet = next(m for m in model.methods if m.name == "greet")
+    greeting = next(f for f in model.fields if f.name == "greeting")
+    greet_code = greet.code
+    assert greet_code is not None
+
+    method_shallow = copy.copy(greet)
+    method_deep = copy.deepcopy(greet)
+    field_copy = copy.deepcopy(greeting)
+    code_copy = copy.deepcopy(greet_code)
+    class_copy = copy.deepcopy(model)
+
+    # Mutating detached copies does not mutate the original model.
+    method_deep.name = "greetCopy"
+    field_copy.name = "greetingCopy"
+    code_copy.max_stack = 99
+    class_copy.name = "MembersCopy"
+    assert greet.name == "greet"
+    assert greeting.name == "greeting"
+    assert greet_code.max_stack != 99
+    assert model.name == "Members"
+
+    # Reassigning member lists invalidates borrowed handles, but detached copies stay usable.
+    model.methods = [*list(model.methods), method_deep]
+    model.fields = [*list(model.fields), field_copy]
+    with pytest.raises(RuntimeError, match="stale"):
+        copy.deepcopy(greet)
+    assert method_shallow.name == "greet"
+    assert method_deep.name == "greetCopy"
+    assert code_copy.max_stack == 99
+
+    # Deepcopy inside containers preserves memo identity.
+    nested = {"a": method_deep, "b": method_deep}
+    nested_copy = copy.deepcopy(nested)
+    assert nested_copy["a"] is nested_copy["b"]
+    assert nested_copy["a"] is not method_deep
+
+    # Class containing the duplicated renamed method lowers and runs cleanly on the JVM.
+    _lower_and_run(classes, model)
+    assert "greetCopy" in _method_names(ClassModel.from_bytes(model.to_bytes()))
+    assert "greetingCopy" in _field_names(ClassModel.from_bytes(model.to_bytes()))

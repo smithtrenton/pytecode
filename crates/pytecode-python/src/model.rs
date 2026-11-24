@@ -3415,6 +3415,16 @@ impl PyCodeModel {
         self.with_code_mut(|code| Ok(code.remove_sequences(&compiled)))
     }
 
+    /// Return an independent, detached copy of this code model.
+    fn __copy__(&self) -> PyResult<Self> {
+        Ok(Self::from_owned(self.clone_inner()?))
+    }
+
+    /// Return an independent, detached copy of this code model.
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.__copy__()
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         self.with_code(|code| {
             Ok(format!(
@@ -3582,6 +3592,18 @@ impl PyFieldModel {
             FieldAccess::Owned(field) => AttributeOwner::OwnedField(field.clone()),
         };
         PyAttributeListView { owner }
+    }
+
+    /// Return an independent, detached copy of this field model.
+    fn __copy__(&self) -> PyResult<Self> {
+        Ok(Self {
+            access: FieldAccess::Owned(Rc::new(RefCell::new(self.clone_inner()?))),
+        })
+    }
+
+    /// Return an independent, detached copy of this field model.
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.__copy__()
     }
 
     fn __repr__(&self) -> PyResult<String> {
@@ -3857,6 +3879,18 @@ impl PyMethodModel {
             MethodAccess::Owned(method) => AttributeOwner::OwnedMethod(method.clone()),
         };
         PyAttributeListView { owner }
+    }
+
+    /// Return an independent, detached copy of this method model.
+    fn __copy__(&self) -> PyResult<Self> {
+        Ok(Self {
+            access: MethodAccess::Owned(Rc::new(RefCell::new(self.clone_inner()?))),
+        })
+    }
+
+    /// Return an independent, detached copy of this method model.
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.__copy__()
     }
 
     fn __repr__(&self) -> PyResult<String> {
@@ -4686,6 +4720,16 @@ impl PyClassModel {
             model_state.methods_generation += 1;
             Ok(())
         })
+    }
+
+    /// Return an independent copy of this class model.
+    fn __copy__(&self) -> PyResult<Self> {
+        self.with_class_model(|inner| Ok(Self::from_model(inner.clone())))
+    }
+
+    /// Return an independent copy of this class model.
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.__copy__()
     }
 
     fn __repr__(&self) -> PyResult<String> {
